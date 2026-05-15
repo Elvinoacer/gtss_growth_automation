@@ -171,7 +171,7 @@ router.patch('/api/automation/queue/:messageId/retry', (req, res) => {
   try {
     const db = getDb();
     const msg = db.prepare(`
-      SELECT m.*, l.profile_url, l.lead_id
+      SELECT m.*, l.profile_url
       FROM messages m
       JOIN leads l ON l.id = m.lead_id
       WHERE m.id = ?
