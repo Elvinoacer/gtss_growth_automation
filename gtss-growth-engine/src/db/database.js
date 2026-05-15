@@ -119,8 +119,11 @@ function isWithinLimit(platform, actionType) {
   const limit = platformLimits[normalizedActionType];
 
   if (typeof limit !== "number") {
-    console.warn(`[LIMITS] No limit configured for ${platform}.${normalizedActionType} — blocking by default`);
-    return false;
+    // Emit a visible warning; use a conservative default of 5 instead of blocking
+    console.warn(
+      `[LIMITS] No limit configured for ${platform}.${normalizedActionType} — defaulting to 5`,
+    );
+    return getDailyActionCount(platform, normalizedActionType) < 5;
   }
 
   return getDailyActionCount(platform, normalizedActionType) < limit;

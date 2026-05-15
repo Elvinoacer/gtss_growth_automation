@@ -130,6 +130,30 @@ function recordOutcome(action, actionType, outcomeObj) {
     db.prepare(`UPDATE messages SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE id = ?`)
       .run(action.message_id);
 
+    // For LinkedIn connect actions, queue the DM body as a new pending message
+    // so it fires once the connection is accepted (on the next queue run)
+    if (normalizedActionType === 'connections') {
+      const originalMessage = db.prepare(`SELECT * FROM messages WHERE id = ?`).get(action.message_id);
+      if (originalMessage) {
+        const existing = db.prepare(`
+          SELECT id FROM messages
+          WHERE lead_id = ? AND status IN ('pending','approved') AND is_follow_up = 0
+          LIMIT 1
+        `).get(action.lead_id);
+
+        if (!existing) {
+          db.prepare(`
+            INSERT INTO messages (lead_id, platform, body, variant, is_follow_up, status, generated_at)
+            VALUES (?, ?, ?, 'A', 0, 'pending', CURRENT_TIMESTAMP)
+          `).run(
+            action.lead_id,
+            action.platform,
+            originalMessage.body
+          );
+        }
+      }
+    }
+
     const lead = db.prepare(`SELECT status FROM leads WHERE id = ?`).get(action.lead_id);
     if (lead && ['discovered', 'qualified', 'deprioritized', 'scoring_failed'].includes(lead.status)) {
        db.prepare(`UPDATE leads SET status = 'messaged', updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
@@ -145,9 +169,22 @@ function recordOutcome(action, actionType, outcomeObj) {
       WHERE id = ?
     `).run(reason, action.message_id);
   } else if (outcome === 'limit_reached') {
-    db.prepare(`UPDATE messages SET status = 'failed' WHERE id = ?`).run(action.message_id);
-  } else if (outcome === 'skipped' || outcome === 'already_connected' || outcome === 'no_posts') {
+    // Snooze until next day instead of permanently failing
+    db.prepare(`
+      UPDATE messages
+      SET snooze_until = date('now', 'localtime', '+1 day')
+      WHERE id = ?
+    `).run(action.message_id);
+  } else if (outcome === 'already_connected' || outcome === 'no_posts') {
+    // These are genuine "nothing to do" states
     db.prepare(`UPDATE messages SET status = 'skipped' WHERE id = ?`).run(action.message_id);
+  } else if (outcome === 'skipped') {
+    // Generic skip — only snooze, keep status as 'approved' for retry
+    db.prepare(`
+      UPDATE messages
+      SET snooze_until = datetime('now', '+1 hour')
+      WHERE id = ?
+    `).run(action.message_id);
   }
 }
 
@@ -225,9 +262,15 @@ async function processActionQueue(jobId, sseRes) {
 
       // 1. Double check limits right before action
       if (!isWithinLimit(platform, actionType)) {
-        emit('warn', `Daily limit reached for ${platform} ${actionType}. Skipping.`);
+        emit('warn', `Daily limit reached for ${platform} ${actionType}. Will retry tomorrow.`);
         emitState(emit, jobId, 'RATE_LIMITED', `Daily limit reached for ${platform} ${actionType}.`, eventBase);
-        recordOutcome(action, actionType, { outcome: 'skipped', reason: 'Daily limit reached' });
+        // Snooze until midnight so it re-queues on the next calendar day
+        const db = getDb();
+        db.prepare(`
+          UPDATE messages
+          SET snooze_until = date('now', 'localtime', '+1 day')
+          WHERE id = ?
+        `).run(action.message_id);
         skipped++;
         continue;
       }

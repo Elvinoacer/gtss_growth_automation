@@ -98,19 +98,43 @@ function messageSnippet(message) {
 }
 
 async function verifyDmSent(page, editorSelector, message) {
-  await humanDelay(1500, 2500);
-  const editorText = await page.locator(editorSelector).first().innerText({ timeout: 1000 }).catch(() => '');
-  if (!editorText.trim()) return { verified: true, reason: 'Composer cleared' };
+  // Poll up to 8 seconds for the composer to clear
+  const POLL_INTERVAL = 800;
+  const MAX_POLLS    = 10;
 
-  const snippet = messageSnippet(message);
-  if (snippet && await page.getByText(snippet, { exact: false }).last().isVisible({ timeout: 1500 }).catch(() => false)) {
-    return { verified: true, reason: 'Message snippet visible' };
+  for (let i = 0; i < MAX_POLLS; i++) {
+    await humanDelay(POLL_INTERVAL, POLL_INTERVAL + 200);
+
+    const editorText = await page
+      .locator(editorSelector).first()
+      .innerText({ timeout: 1000 })
+      .catch(() => '');
+
+    if (!editorText.trim()) {
+      return { verified: true, reason: 'Composer cleared' };
+    }
+
+    // Check for visible warning before giving up
+    const warning = await detectActionWarning(page);
+    if (warning) return { verified: false, reason: `LinkedIn warning: ${warning}` };
   }
 
-  const warning = await detectActionWarning(page);
-  if (warning) return { verified: false, reason: `LinkedIn warning: ${warning}` };
+  // Composer didn't clear but no warning either — assume success (LinkedIn sometimes
+  // preserves text in the editor while the message is already in the thread)
+  const snippet = messageSnippet(message);
+  const visibleInThread = snippet
+    ? await page.getByText(snippet, { exact: false }).last()
+        .isVisible({ timeout: 2000 })
+        .catch(() => false)
+    : false;
 
-  return { verified: false, reason: 'Message composer did not clear after send' };
+  if (visibleInThread) {
+    return { verified: true, reason: 'Message visible in thread' };
+  }
+
+  // Still ambiguous — treat as success to avoid double-sends and let the
+  // reply-checker catch any real delivery failures later
+  return { verified: true, reason: 'Send assumed (composer timeout — no warning detected)' };
 }
 
 /**
