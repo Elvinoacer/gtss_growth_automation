@@ -32,7 +32,23 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${crypto.randomBytes(4).toString("hex")}${ext}`);
   },
 });
-const upload = multer({ storage, limits: { fileSize: 25 * 1024 * 1024 } }); // 25MB max
+const ALLOWED_MIMES = new Set([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+  'video/mp4', 'video/quicktime', 'video/x-msvideo',
+  'video/x-matroska', 'video/x-m4v',
+]);
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_MIMES.has(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Unsupported file type: ${file.mimetype}`), false);
+    }
+  },
+});
 
 // ---------------------------------------------------------------------------
 // Page Route
@@ -384,19 +400,19 @@ router.get("/api/scheduler/pause", (req, res) => {
 // API: Media Upload
 // ---------------------------------------------------------------------------
 
-router.post(
-  "/api/scheduler/upload-media",
-  upload.single("media"),
-  (req, res) => {
+router.post("/api/scheduler/upload-media", (req, res) => {
+  upload.single("media")(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
     res.json({
       filename: req.file.filename,
-      path: `/uploads/${req.file.filename}`,
-      filePath: req.file.path,
+      path: `/uploads/${req.file.filename}`, // web-accessible preview URL
+      filePath: req.file.path, // absolute FS path for Playwright
       size: req.file.size,
+      mimetype: req.file.mimetype,
     });
-  },
-);
+  });
+});
 
 module.exports = router;

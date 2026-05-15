@@ -437,21 +437,34 @@ document.addEventListener("DOMContentLoaded", () => {
     mediaFileInput.addEventListener("change", async (e) => {
       const file = e.target.files[0];
       if (!file) return;
+
       const formData = new FormData();
       formData.append("media", file);
+
       try {
-        const result = await fetch("/api/scheduler/upload-media", {
+        const res = await fetch("/api/scheduler/upload-media", {
           method: "POST",
           body: formData,
-        }).then((r) => r.json());
-        uploadedMediaPath = result.path;
-        uploadedMediaFilePath = result.filePath || result.path;
-        mediaThumb.src = result.path;
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `HTTP ${res.status}`);
+        }
+        const result = await res.json();
+
+        if (!result.filePath) throw new Error("Server did not return a file path");
+
+        uploadedMediaFilePath = result.filePath; // absolute FS path — used when posting
+        uploadedMediaPath = result.path; // web URL — used for preview thumbnail only
+
+        mediaThumb.src = uploadedMediaPath;
         mediaFilename.textContent = file.name;
         mediaPlaceholder.classList.add("hidden");
         mediaPreview.classList.remove("hidden");
+        showToast("Media uploaded", "success");
       } catch (err) {
-        showToast("Upload failed", "error");
+        showToast(`Upload failed: ${err.message}`, "error");
+        mediaFileInput.value = "";
       }
     });
 
@@ -508,7 +521,7 @@ document.addEventListener("DOMContentLoaded", () => {
           body: JSON.stringify({
             platforms,
             body: postBody.value,
-            mediaPath: uploadedMediaFilePath || uploadedMediaPath,
+            mediaPath: uploadedMediaFilePath || null,
             publishNow: true,
           }),
         });
@@ -543,7 +556,7 @@ document.addEventListener("DOMContentLoaded", () => {
           body: JSON.stringify({
             platforms,
             body: postBody.value,
-            mediaPath: uploadedMediaFilePath || uploadedMediaPath,
+            mediaPath: uploadedMediaFilePath || null,
             scheduledAt,
           }),
         });

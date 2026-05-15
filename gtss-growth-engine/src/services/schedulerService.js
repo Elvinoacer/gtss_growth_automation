@@ -142,32 +142,61 @@ async function postToLinkedIn(page, body, mediaPath, emit) {
 
   // Upload media if provided
   if (mediaPath) {
-    const mediaBtn = await firstVisibleLocator(page, [
-      'button[aria-label="Add media"]',
-      'button[aria-label="Add a photo"]',
-      'button[aria-label="Add media to your post"]',
-      'button[aria-label*="media" i]'
-    ], 3000);
+    const mediaBtn = await firstVisibleLocator(
+      page,
+      [
+        'button[aria-label="Add media"]',
+        'button[aria-label="Add a photo"]',
+        'button[aria-label="Add media to your post"]',
+        'button[aria-label*="media" i]',
+      ],
+      3000,
+    );
 
     if (mediaBtn) {
       try {
-        const fileChooserPromise = page.waitForEvent('filechooser', { timeout: 5000 });
+        const fileChooserPromise = page.waitForEvent("filechooser", {
+          timeout: 5000,
+        });
         await mediaBtn.locator.click();
         const fileChooser = await fileChooserPromise;
         await fileChooser.setFiles(mediaPath);
-        await humanDelay(3000, 5000);
+        await humanDelay(2000, 3000);
 
-        // Click Next or Done to confirm media
-        const nextBtn = await firstVisibleLocator(page, [
-          'button:has-text("Next")',
-          'button:has-text("Done")'
-        ], 3000);
-        if (nextBtn) {
-          await nextBtn.locator.click();
+        const mediaReady = await Promise.race([
+          page
+            .locator('[data-test-id="share-to-feed-media-thumbnail"]')
+            .first()
+            .waitFor({ state: "visible", timeout: 30000 })
+            .then(() => "thumbnail"),
+          page
+            .locator('button:has-text("Done"), button:has-text("Next")')
+            .first()
+            .waitFor({ state: "visible", timeout: 30000 })
+            .then(() => "next-btn"),
+        ]).catch(() => "timeout");
+
+        if (mediaReady === "timeout") {
+          emit({
+            type: "warning",
+            platform: "linkedin",
+            message: "Media may not have finished uploading before posting.",
+          });
+        }
+
+        const confirmBtn = await firstVisibleLocator(
+          page,
+          ['button:has-text("Next")', 'button:has-text("Done")'],
+          4000,
+        );
+        if (confirmBtn) {
+          await confirmBtn.locator.click();
           await humanDelay(1000, 2000);
         }
       } catch (e) {
-        logger.error('Failed to upload media via filechooser on LinkedIn', { error: e.message });
+        const msg = `Media upload failed on LinkedIn: ${e.message}`;
+        logger.error(msg);
+        emit({ type: "warning", platform: "linkedin", message: msg });
       }
     } else {
       const fileInput = page.locator('input[type="file"]');
@@ -227,12 +256,45 @@ async function postToX(page, body, mediaPath, emit) {
   await humanDelay(1000, 2000);
 
   if (mediaPath) {
-    const fileInput = page.locator(
+    const FILE_INPUT_SELECTORS = [
       'input[type="file"][data-testid="fileInput"]',
-    );
-    if ((await fileInput.count()) > 0) {
-      await fileInput.first().setInputFiles(mediaPath);
-      await humanDelay(3000, 5000);
+      'input[type="file"][accept*="image"]',
+      'input[type="file"][accept*="video"]',
+      'input[type="file"]',
+    ];
+
+    let attached = false;
+    for (const sel of FILE_INPUT_SELECTORS) {
+      const inp = page.locator(sel);
+      if ((await inp.count()) > 0) {
+        try {
+          await inp.first().setInputFiles(mediaPath);
+          attached = true;
+          break;
+        } catch (_) {
+          /* try next */
+        }
+      }
+    }
+
+    if (!attached) {
+      emit({
+        type: "warning",
+        platform: "x",
+        message: "Could not attach media on X — file input not found.",
+      });
+    } else {
+      await page
+        .locator('[data-testid="attachments"] img, [data-testid="card-image"]')
+        .first()
+        .waitFor({ state: "visible", timeout: 30000 })
+        .catch(() =>
+          emit({
+            type: "warning",
+            platform: "x",
+            message: "X media preview not detected; posting anyway.",
+          }),
+        );
     }
   }
 
@@ -275,10 +337,52 @@ async function postToFacebook(page, body, mediaPath, emit) {
   await humanDelay(1000, 2000);
 
   if (mediaPath) {
+    const photoVideoBtn = await firstVisibleLocator(
+      page,
+      [
+        '[aria-label="Photo/Video"]',
+        'div[role="button"]:has-text("Photo")',
+        'span:has-text("Photo/video")',
+      ],
+      5000,
+    );
+
+    if (photoVideoBtn) {
+      await photoVideoBtn.locator.click();
+      await humanDelay(1500, 2500);
+    }
+
     const fileInput = page.locator('input[type="file"]');
     if ((await fileInput.count()) > 0) {
-      await fileInput.first().setInputFiles(mediaPath);
-      await humanDelay(3000, 5000);
+      try {
+        await fileInput.first().setInputFiles(mediaPath);
+        await humanDelay(1000, 2000);
+        await page
+          .locator(
+            '[data-pagelet="FeedComposer"] img[src*="blob:"], img[src*="fbcdn"]',
+          )
+          .first()
+          .waitFor({ state: "visible", timeout: 30000 })
+          .catch(() =>
+            emit({
+              type: "warning",
+              platform: "facebook",
+              message: "Facebook media preview not detected; posting anyway.",
+            }),
+          );
+      } catch (e) {
+        emit({
+          type: "warning",
+          platform: "facebook",
+          message: `Media attach failed: ${e.message}`,
+        });
+      }
+    } else {
+      emit({
+        type: "warning",
+        platform: "facebook",
+        message: "File input not found on Facebook. Posting text only.",
+      });
     }
   }
 
@@ -334,10 +438,22 @@ async function postToInstagram(page, body, mediaPath, emit) {
     const nextBtn = page.locator('button:has-text("Next")');
     if ((await nextBtn.count()) > 0) {
       await nextBtn.click();
+      await page
+        .locator('[aria-label="Select crop"], canvas, img.x5yr21d')
+        .first()
+        .waitFor({ state: "visible", timeout: 15000 })
+        .catch(() => {});
       await humanDelay(1500, 2500);
-      // Second "Next" for filters
+
       if ((await nextBtn.count()) > 0) {
         await nextBtn.click();
+        await page
+          .locator(
+            'textarea[aria-label="Write a caption..."], div[role="textbox"]',
+          )
+          .first()
+          .waitFor({ state: "visible", timeout: 15000 })
+          .catch(() => {});
         await humanDelay(1500, 2500);
       }
     }
@@ -381,6 +497,28 @@ async function publishPost(postId, emit, browserOptions = {}) {
   const db = getDb();
   const post = db.prepare("SELECT * FROM posts WHERE id = ?").get(postId);
   if (!post) throw new Error(`Post ${postId} not found`);
+
+  // ── Media pre-flight ──────────────────────────────────────────────────────
+  const fs = require("fs");
+  if (post.media_path) {
+    if (!fs.existsSync(post.media_path)) {
+      emit({
+        type: "error",
+        message: `Media file not found on disk: ${post.media_path}. Post will be published without media.`,
+      });
+      post.media_path = null;
+    } else {
+      const ALLOWED_EXT = /\.(jpe?g|png|gif|webp|mp4|mov|avi|mkv|m4v)$/i;
+      if (!ALLOWED_EXT.test(post.media_path)) {
+        emit({
+          type: "warning",
+          message: `Unexpected file extension for media: ${post.media_path}. Skipping media.`,
+        });
+        post.media_path = null;
+      }
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   const platforms = JSON.parse(post.platforms);
   const succeeded = [];
@@ -481,6 +619,20 @@ async function publishPost(postId, emit, browserOptions = {}) {
     ).run(postId);
   } else {
     db.prepare(`UPDATE posts SET status = 'failed' WHERE id = ?`).run(postId);
+  }
+
+  // Cleanup uploaded media file
+  if (post.media_path) {
+    fs.unlink(post.media_path, (err) => {
+      if (err)
+        logger.warn("Could not delete media file after publish", {
+          path: post.media_path,
+        });
+      else
+        logger.info("Deleted media file after publish", {
+          path: post.media_path,
+        });
+    });
   }
 
   return { success: succeeded, failed };

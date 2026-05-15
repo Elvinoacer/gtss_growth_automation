@@ -35,6 +35,27 @@ function startBackgroundJobs() {
   logger.info("SERVER", "Background automation worker initializing.");
   initReplyChecker();
   initScheduledPoster();
+
+  // Cleanup orphan uploads (older than 7 days) at 3 AM daily
+  const cron = require('node-cron');
+  const fs = require('fs');
+  const path = require('path');
+  cron.schedule('0 3 * * *', () => {
+    const dir = path.join(__dirname, '../../public/uploads');
+    if (!fs.existsSync(dir)) return;
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    fs.readdirSync(dir).forEach((f) => {
+      const fp = path.join(dir, f);
+      try {
+        const stats = fs.statSync(fp);
+        if (stats.mtimeMs < cutoff) {
+          fs.unlinkSync(fp);
+          logger.info('SERVER', `Cleaned up orphan upload: ${f}`);
+        }
+      } catch (e) { /* ignore */ }
+    });
+  });
+
   logger.info("SERVER", "Background automation worker initialized.");
 }
 
