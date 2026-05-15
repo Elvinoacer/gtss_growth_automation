@@ -266,10 +266,16 @@
 <label class="block font-label-caps text-label-caps text-tertiary-container mb-1.5">Max Leads</label>
 <input class="w-full bg-surface border border-outline-variant rounded px-3 py-2 font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary" type="number" value="20"/>
 </div>
-<button class="w-full bg-primary text-on-primary font-label-caps text-label-caps py-2.5 rounded mt-2 hover:bg-primary/90 transition-colors flex items-center justify-center gap-2">
+<button id="start-discovery-btn" class="w-full bg-primary text-on-primary font-label-caps text-label-caps py-2.5 rounded mt-2 hover:bg-primary/90 transition-colors flex items-center justify-center gap-2">
 <span class="material-symbols-outlined text-[18px]">travel_explore</span>
                             Start Discovery
                         </button>
+<div id="result-summary" class="mt-4 p-3 bg-surface-container border border-outline-variant rounded-lg text-on-surface font-body-sm" style="display: none;">
+    <strong id="result-summary-text">Discovery complete: 0 new leads, 0 duplicates.</strong>
+</div>
+<style>
+#result-summary.visible { display: block !important; }
+</style>
 </div>
 </div>
 <!-- Live Log Panel -->

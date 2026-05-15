@@ -1,4 +1,5 @@
 const { getDb } = require("../db/database");
+const { callGeminiText } = require("./aiService");
 const logger = require("../utils/logger");
 
 const jobStreams = new Map();
@@ -79,88 +80,7 @@ Respond ONLY with valid JSON, no markdown, no preamble:
 {"score": 72, "reason": "Restaurant owner in Nairobi with active profile and website — strong match.", "factors": {"business_type": 25, "location": 18, "business_size": 15, "completeness": 8, "recency": 6}}`;
 }
 
-function stripCodeFences(text) {
-  let cleaned = text.trim();
-  cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-  return cleaned.trim();
-}
 
-async function callGemini(prompt) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not set in environment");
-  }
-
-  const primaryModel = process.env.GEMINI_MODEL || "gemini-2.0-flash";
-  const modelsToTry = [...new Set([primaryModel, "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"])];
-
-  let lastError;
-  let response;
-
-  for (const model of modelsToTry) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-      }),
-    });
-    const text = await res.text().catch(() => "");
-    response = { status: res.status, ok: res.ok, text };
-
-    if (response.status === 429 || response.text.includes("429")) {
-      logger.warn("GEMINI", `Rate limited (429) for model ${model}, trying next model`);
-      lastError = new Error(`Gemini API error 429 for model ${model}: ${response.text}`);
-      continue;
-    }
-
-    if (!response.ok) {
-      lastError = new Error(`Gemini API error ${response.status}: ${response.text}`);
-      lastError.status = response.status;
-      if (response.status === 404 || response.status === 429) {
-        logger.warn("GEMINI", `${response.status} for model ${model}, trying next`);
-        continue;
-      }
-      throw lastError;
-    }
-
-    break; // Success
-  }
-
-  if (!response || !response.ok) {
-    throw lastError;
-  }
-
-  let data;
-  try {
-    data = JSON.parse(response.text);
-  } catch (err) {
-    logger.error("GEMINI", "Failed to parse Gemini response JSON", {
-      raw: response.text,
-    });
-    const parseError = new Error("Invalid JSON in Gemini response");
-    parseError.status = "parse_failed";
-    throw parseError;
-  }
-
-  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) {
-    throw new Error("Empty response content from Gemini API");
-  }
-
-  try {
-    return JSON.parse(stripCodeFences(rawText));
-  } catch (err) {
-    logger.error("GEMINI", "Failed to parse Gemini message content as JSON", {
-      raw: rawText,
-    });
-    const contentError = new Error("Gemini did not return valid JSON content");
-    contentError.status = "parse_failed";
-    throw contentError;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Core scoring
@@ -171,7 +91,19 @@ async function scoreLead(lead) {
   const prompt = buildPrompt(lead);
 
   try {
-    const result = await callGemini(prompt);
+    const rawResult = await callGeminiText(prompt);
+    
+    let result;
+    try {
+      result = JSON.parse(rawResult);
+    } catch (err) {
+      logger.error("GEMINI", "Failed to parse Gemini message content as JSON", {
+        raw: rawResult,
+      });
+      const contentError = new Error("Gemini did not return valid JSON content");
+      contentError.status = "parse_failed";
+      throw contentError;
+    }
 
     const score = Math.max(0, Math.min(100, Number(result.score) || 0));
     const reason = String(result.reason || "");

@@ -6,6 +6,7 @@ const {
   checkSessionExpired,
 } = require("../automation/browserBase");
 const { isSessionValid } = require("../automation/sessionManager");
+const { callGeminiText } = require("./aiService");
 const logger = require("../utils/logger");
 
 // ---------------------------------------------------------------------------
@@ -141,10 +142,39 @@ async function postToLinkedIn(page, body, mediaPath, emit) {
 
   // Upload media if provided
   if (mediaPath) {
-    const fileInput = page.locator('input[type="file"]');
-    if ((await fileInput.count()) > 0) {
-      await fileInput.first().setInputFiles(mediaPath);
-      await humanDelay(3000, 5000);
+    const mediaBtn = await firstVisibleLocator(page, [
+      'button[aria-label="Add media"]',
+      'button[aria-label="Add a photo"]',
+      'button[aria-label="Add media to your post"]',
+      'button[aria-label*="media" i]'
+    ], 3000);
+
+    if (mediaBtn) {
+      try {
+        const fileChooserPromise = page.waitForEvent('filechooser', { timeout: 5000 });
+        await mediaBtn.locator.click();
+        const fileChooser = await fileChooserPromise;
+        await fileChooser.setFiles(mediaPath);
+        await humanDelay(3000, 5000);
+
+        // Click Next or Done to confirm media
+        const nextBtn = await firstVisibleLocator(page, [
+          'button:has-text("Next")',
+          'button:has-text("Done")'
+        ], 3000);
+        if (nextBtn) {
+          await nextBtn.locator.click();
+          await humanDelay(1000, 2000);
+        }
+      } catch (e) {
+        logger.error('Failed to upload media via filechooser on LinkedIn', { error: e.message });
+      }
+    } else {
+      const fileInput = page.locator('input[type="file"]');
+      if ((await fileInput.count()) > 0) {
+        await fileInput.first().setInputFiles(mediaPath);
+        await humanDelay(3000, 5000);
+      }
     }
   }
 
@@ -461,9 +491,6 @@ async function publishPost(postId, emit, browserOptions = {}) {
 // ---------------------------------------------------------------------------
 
 async function generateCaption(topic, platform, tone) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not set in environment");
-
   const limit = POST_CHAR_LIMITS[platform] || 2200;
   const toneLabel = tone || "engaging";
 
@@ -473,62 +500,7 @@ Platform character limit: ${limit}
 Make it engaging, relevant to Kenyan business owners, and end with a call to action.
 Return ONLY the caption text, no explanations.`;
 
-  const primaryModel = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
-  const modelsToTry = [
-    ...new Set([
-      primaryModel,
-      "gemini-2.0-flash",
-      "gemini-1.5-flash",
-      "gemini-1.5-pro",
-    ]),
-  ];
-
-  let lastError;
-  for (const model of modelsToTry) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-        }),
-      });
-
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => "");
-        if (response.status === 429 || errorBody.includes("429")) {
-          lastError = new Error(
-            `Gemini API error 429 for model ${model}: ${errorBody}`,
-          );
-          continue; // Try next model
-        }
-        throw new Error(`Gemini API error ${response.status}: ${errorBody}`);
-      }
-
-      const data = await response.json();
-      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!rawText) throw new Error("Empty response from Gemini API");
-
-      // Strip any code fences
-      let caption = rawText.trim();
-      caption = caption
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```$/i, "");
-      caption = caption.replace(/^["']|["']$/g, "");
-
-      return caption.trim();
-    } catch (err) {
-      lastError = err;
-      if (err.message.includes("429")) {
-        continue; // Try next model
-      }
-      throw err; // For non-429 errors, throw immediately
-    }
-  }
-
-  throw lastError;
+  return await callGeminiText(prompt);
 }
 
 module.exports = {

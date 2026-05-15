@@ -224,7 +224,7 @@ async function humanScroll(page) {
  */
 async function detectCaptcha(page) {
   try {
-    const content = await page.content();
+    const content = await page.innerText('body').catch(() => '');
     const contentLower = content.toLowerCase();
 
     const triggers = [
@@ -252,7 +252,13 @@ async function checkSessionExpired(page, platform, emit) {
     "/i/flow/login",
     "/challenge",
   ];
-  const expired = loginSignals.some((signal) => url.includes(signal));
+  let expired = loginSignals.some((signal) => url.includes(signal));
+
+  // If we are on the LinkedIn homepage (not /feed or /in), we are logged out.
+  if (platform === 'linkedin' && url.match(/^https:\/\/[a-z0-9-]*\.?linkedin\.com\/?$/i)) {
+    expired = true;
+  }
+
   const challenged = await detectCaptcha(page);
 
   if (!expired && !challenged) {

@@ -2,6 +2,7 @@ const path = require("path");
 const fs = require("fs");
 const { getDb } = require("../db/database");
 const { getPrimaryPlatform } = require("./platformCatalog");
+const { callGeminiText } = require("./aiService");
 const logger = require("../utils/logger");
 
 // ---------------------------------------------------------------------------
@@ -130,73 +131,6 @@ function stripCodeFences(text) {
   let cleaned = text.trim();
   cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   return cleaned.trim();
-}
-
-async function callGeminiText(prompt) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not set in environment");
-
-  const primaryModel = process.env.GEMINI_MODEL || "gemini-2.0-flash";
-  const modelsToTry = [...new Set([primaryModel, "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"])];
-
-  let lastError;
-  let response;
-
-  for (const model of modelsToTry) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-      }),
-    });
-    const text = await res.text().catch(() => "");
-    response = { status: res.status, ok: res.ok, text };
-
-    if (response.status === 429 || response.text.includes("429")) {
-      logger.warn("GEMINI", `Rate limited (429) for model ${model}, trying next model`);
-      lastError = new Error(`Gemini API error 429 for model ${model}: ${response.text}`);
-      continue;
-    }
-
-    if (!response.ok) {
-      logger.error("GEMINI", "Gemini text generation failed", {
-        status: response.status,
-        body: response.text,
-      });
-      lastError = new Error(`Gemini API error ${response.status}: ${response.text}`);
-      lastError.status = response.status;
-      if (response.status === 404 || response.status === 429) {
-        logger.warn("GEMINI", `${response.status} for model ${model}, trying next`);
-        continue;
-      }
-      throw lastError;
-    }
-
-    break; // Success
-  }
-
-  if (!response || !response.ok) {
-    throw lastError;
-  }
-
-  let data;
-  try {
-    data = JSON.parse(response.text);
-  } catch (err) {
-    logger.error("GEMINI", "Failed to parse Gemini response JSON", {
-      raw: response.text,
-    });
-    const parseError = new Error("Invalid JSON in Gemini response");
-    parseError.status = "parse_failed";
-    throw parseError;
-  }
-
-  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) throw new Error("Empty response from Gemini API");
-  return rawText.trim();
 }
 
 // ---------------------------------------------------------------------------
