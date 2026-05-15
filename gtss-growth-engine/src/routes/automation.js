@@ -9,6 +9,8 @@ const {
   getQueuedActions,
 } = require("../automation/executor");
 const { getPlatformKeys } = require("../services/platformCatalog");
+const { createActionFingerprint, releaseActionFingerprint } = require('../automation/idempotency');
+const { determineActionType } = require('../automation/executor');
 
 const router = express.Router();
 
@@ -165,9 +167,26 @@ router.patch("/api/automation/queue/:messageId/skip", (req, res) => {
   }
 });
 
-router.patch("/api/automation/queue/:messageId/retry", (req, res) => {
+router.patch('/api/automation/queue/:messageId/retry', (req, res) => {
   try {
     const db = getDb();
+    const msg = db.prepare(`
+      SELECT m.*, l.profile_url, l.lead_id
+      FROM messages m
+      JOIN leads l ON l.id = m.lead_id
+      WHERE m.id = ?
+    `).get(req.params.messageId);
+
+    if (!msg) return res.status(404).json({ error: 'Queue message not found' });
+
+    // Clear the fingerprint so this action is not treated as a duplicate
+    const actionType = determineActionType(msg);
+    const fingerprint = createActionFingerprint(
+      { platform: msg.platform, profile_url: msg.profile_url, lead_id: msg.lead_id, message_id: msg.id },
+      actionType
+    );
+    releaseActionFingerprint(fingerprint);
+
     const result = db.prepare(`
       UPDATE messages
       SET status = 'approved',
@@ -175,11 +194,11 @@ router.patch("/api/automation/queue/:messageId/retry", (req, res) => {
           last_error = NULL,
           snooze_until = NULL
       WHERE id = ?
-        AND status IN ('approved', 'blocked')
+        AND status IN ('approved', 'blocked', 'skipped', 'sent')
     `).run(req.params.messageId);
 
     if (result.changes === 0) {
-      return res.status(404).json({ error: "Queue message not found" });
+      return res.status(404).json({ error: 'Queue message not found or already pending' });
     }
 
     res.json({ success: true });

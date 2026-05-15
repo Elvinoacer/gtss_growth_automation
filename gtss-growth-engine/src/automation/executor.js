@@ -255,9 +255,10 @@ function recordOutcome(action, actionType, outcomeObj) {
     // Generic skip — only snooze, keep status as 'approved' for retry
     db.prepare(`
       UPDATE messages
-      SET snooze_until = datetime('now', '+1 hour')
+      SET snooze_until = datetime('now', '+1 hour'),
+          last_error = ?
       WHERE id = ?
-    `).run(action.message_id);
+    `).run(reason || 'Skipped', action.message_id);
   }
 }
 
@@ -426,7 +427,20 @@ async function processActionQueue(jobId, sseRes) {
       if (!reservation.reserved) {
         emit('warn', `Duplicate ${platform} ${actionType} skipped: ${reservation.reason}`);
         emitState(emit, jobId, 'COMPLETED', 'Duplicate action skipped.', { ...eventBase, fingerprint: reservation.fingerprint, reason: reservation.reason });
-        recordOutcome(action, actionType, { outcome: 'skipped', reason: reservation.reason });
+        
+        // Snooze until the fingerprint expires so we don't re-check every hour
+        const existingFp = getDb().prepare(
+          `SELECT expires_at FROM action_fingerprints WHERE fingerprint = ?`
+        ).get(reservation.fingerprint);
+
+        const snoozeUntil = existingFp?.expires_at ?? `datetime('now', '+7 days')`;
+        getDb().prepare(`
+          UPDATE messages
+          SET snooze_until = ?,
+              last_error = ?
+          WHERE id = ?
+        `).run(snoozeUntil, reservation.reason, action.message_id);
+
         skipped++;
         continue;
       }
