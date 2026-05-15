@@ -20,6 +20,23 @@ router.get('/', (req, res) => {
   });
 });
 
+router.get('/config', (req, res) => {
+  const row = getDb().prepare("SELECT value FROM settings WHERE key = 'discovery_max_leads'").get();
+  res.json({ maxLeads: row ? Number(row.value) : 20 });
+});
+
+router.post('/config', (req, res) => {
+  const maxLeads = Number(req.body.maxLeads);
+  if (!Number.isInteger(maxLeads) || maxLeads < 1 || maxLeads > 100) {
+    return res.status(400).json({ error: 'maxLeads must be between 1 and 100' });
+  }
+  getDb().prepare(`
+    INSERT INTO settings (key, value) VALUES ('discovery_max_leads', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(String(maxLeads));
+  res.json({ success: true });
+});
+
 router.post('/start', (req, res) => {
   const { keyword, platforms, maxLeads } = req.body;
   const selectedPlatforms = Array.isArray(platforms) ? platforms : [];

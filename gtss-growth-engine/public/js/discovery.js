@@ -356,10 +356,42 @@ async function rerun(id) {
   }
 }
 
+async function loadDiscoveryConfig() {
+  try {
+    const config = await window.gtss.fetchJSON("/api/discovery/config");
+    const input = document.getElementById("max-leads-input");
+    if (input && config.maxLeads) {
+      input.value = config.maxLeads;
+    }
+  } catch (error) {
+    console.error("Failed to load discovery config", error);
+  }
+}
+
+async function saveDiscoveryConfig() {
+  const maxLeads = Number(document.getElementById("max-leads-input").value);
+  if (isNaN(maxLeads) || maxLeads < 1) return;
+  
+  try {
+    await window.gtss.fetchJSON("/api/discovery/config", {
+      method: "POST",
+      body: JSON.stringify({ maxLeads }),
+    });
+  } catch (error) {
+    console.error("Failed to save discovery config", error);
+  }
+}
+
 function bindEvents() {
   document
     .getElementById("discovery-form")
     .addEventListener("submit", startDiscovery);
+  
+  const maxLeadsInput = document.getElementById("max-leads-input");
+  if (maxLeadsInput) {
+    maxLeadsInput.addEventListener("change", saveDiscoveryConfig);
+  }
+
   document
     .getElementById("stop-button")
     .addEventListener("click", stopDiscovery);
@@ -452,6 +484,7 @@ function bindEvents() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   await loadPlatformControls();
+  await loadDiscoveryConfig();
   bindEvents();
   loadResults().catch((error) => window.gtss.showToast(error.message, "error"));
   loadHistory().catch((error) => window.gtss.showToast(error.message, "error"));
