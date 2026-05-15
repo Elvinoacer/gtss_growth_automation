@@ -90,6 +90,69 @@ async function firstVisibleLocator(page, selectors, timeoutMs = 5000) {
   return null;
 }
 
+function decodeHtmlEntities(text) {
+  const entityMap = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    apos: "'",
+    nbsp: " ",
+  };
+
+  return String(text ?? "").replace(
+    /&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g,
+    (match, entity) => {
+      if (entity.startsWith("#x") || entity.startsWith("#X")) {
+        const codePoint = Number.parseInt(entity.slice(2), 16);
+        return Number.isNaN(codePoint)
+          ? match
+          : String.fromCodePoint(codePoint);
+      }
+
+      if (entity.startsWith("#")) {
+        const codePoint = Number.parseInt(entity.slice(1), 10);
+        return Number.isNaN(codePoint)
+          ? match
+          : String.fromCodePoint(codePoint);
+      }
+
+      return entityMap[entity] || match;
+    },
+  );
+}
+
+function normalizeLinkedInText(text) {
+  let normalized = decodeHtmlEntities(text)
+    .normalize("NFKC")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\u00A0/g, " ")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[–—]/g, "-")
+    .replace(/…/g, "...")
+    .replace(/!\[([^\]]*)\]\((.*?)\)/g, "$1")
+    .replace(/\[([^\]]+)\]\((.*?)\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^>\s?/gm, "")
+    .replace(/^\s*[-*+•]\s+/gm, "")
+    .replace(/^\s*\d+[.)]\s+/gm, "")
+    .replace(/(\*\*|__)(.*?)\1/g, "$2")
+    .replace(/(\*|_)(.*?)\1/g, "$2")
+    .replace(/~~(.*?)~~/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "");
+
+  normalized = normalized
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return normalized;
+}
+
 async function dismissBlockingOverlays(page) {
   const dismissSelectors = [
     'button[aria-label="Dismiss"]',
@@ -219,6 +282,8 @@ async function deleteMediaFile(mediaPath) {
 // ---------------------------------------------------------------------------
 
 async function postToLinkedIn(page, body, mediaPath, emit) {
+  const cleanBody = normalizeLinkedInText(body);
+
   emit({
     type: "info",
     platform: "linkedin",
@@ -312,7 +377,15 @@ async function postToLinkedIn(page, body, mediaPath, emit) {
     );
   }
 
-  await typeTextWithFallback(editor.locator, body);
+  if (cleanBody !== String(body ?? "")) {
+    emit({
+      type: "info",
+      platform: "linkedin",
+      message: "Normalized LinkedIn text to plain supported characters.",
+    });
+  }
+
+  await typeTextWithFallback(editor.locator, cleanBody);
   await humanDelay(1000, 2000);
 
   // Upload media if provided
@@ -838,9 +911,11 @@ async function generateCaption(topic, platform, tone) {
 Tone: ${toneLabel}
 Platform character limit: ${limit}
 Make it engaging, relevant to Kenyan business owners, and end with a call to action.
+Use plain text only. Do not use markdown formatting, HTML entities, bullets, or special styling characters.
 Return ONLY the caption text, no explanations.`;
 
-  return await callGeminiText(prompt);
+  const caption = await callGeminiText(prompt);
+  return platform === "linkedin" ? normalizeLinkedInText(caption) : caption;
 }
 
 module.exports = {
