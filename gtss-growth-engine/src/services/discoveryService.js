@@ -259,15 +259,15 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
   const db = getDb();
   const emit = (e) => emitJobEvent(jobId, { ...e, jobId });
   const selected = platforms.filter((p) => listDiscoverySources().includes(p));
-  const perPlatform = Math.ceil(maxLeads / Math.max(selected.length, 1));
+  let totalNewCollected = 0;
   const rawProfiles = [];
 
-  emit({ type: "info", message: `Starting discovery for "${keyword}"` });
+  emit({ type: "info", message: `Starting discovery for "${keyword}" (Goal: ${maxLeads} new leads)` });
 
   try {
     for (const platform of selected) {
       if (isJobStopped(jobId)) break;
-      if (rawProfiles.length >= maxLeads) break;
+      if (totalNewCollected >= maxLeads) break;
 
       // Limit Check
       if (!isWithinLimit(platform, "visits")) {
@@ -275,19 +275,34 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
         continue;
       }
 
-      const count = Math.min(perPlatform, maxLeads - rawProfiles.length);
-      emit({ type: "info", platform, message: `Searching ${platform}` });
+      const needed = maxLeads - totalNewCollected;
+      emit({ type: "info", platform, message: `Searching ${platform} for up to ${needed} more new leads...` });
 
       try {
         const found = await withTimeout(
-          platformDiscoveryMap[platform](keyword, count, emit, jobId),
+          platformDiscoveryMap[platform](keyword, needed, emit, jobId),
           Number(process.env.DISCOVERY_PLATFORM_TIMEOUT_MS || 300_000),
           `${platform} discovery`,
         );
+
         found.forEach((p) => {
-          if (rawProfiles.length < maxLeads)
-            rawProfiles.push({ ...p, source_keyword: keyword });
+          // Check if this profile is already in our collected list or in the DB
+          const isInBatch = rawProfiles.some(rp => rp.profile_url === p.profile_url);
+          const existsInDb = db.prepare('SELECT 1 FROM leads WHERE profile_url = ?').get(p.profile_url);
+          
+          if (!isInBatch && !existsInDb) {
+            totalNewCollected++;
+          }
+          
+          // We still push duplicates to rawProfiles so insertLeads can report them correctly,
+          // but we only count non-duplicates toward our stopping goal.
+          rawProfiles.push({ ...p, source_keyword: keyword });
         });
+
+        if (totalNewCollected >= maxLeads) {
+          emit({ type: "info", message: `Target of ${maxLeads} new leads reached.` });
+          break;
+        }
       } catch (e) {
         emit({ type: "error", platform, message: e.message });
       }
