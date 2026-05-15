@@ -278,21 +278,6 @@ router.patch("/api/messages/:id/approve", (req, res) => {
      WHERE lead_id = ? AND id != ? AND status = 'pending' AND is_follow_up = ?`,
   ).run(msg.lead_id, id, msg.is_follow_up);
 
-  // Update lead status to 'messaged' if not already further in pipeline
-  const lead = db
-    .prepare("SELECT status FROM leads WHERE id = ?")
-    .get(msg.lead_id);
-  if (
-    lead &&
-    !["messaged", "replied", "meeting_booked", "converted"].includes(
-      lead.status,
-    )
-  ) {
-    db.prepare(
-      "UPDATE leads SET status = 'messaged', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    ).run(msg.lead_id);
-  }
-
   return res.json({ success: true, id });
 });
 

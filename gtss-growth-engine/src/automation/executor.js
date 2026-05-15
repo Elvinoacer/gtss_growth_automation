@@ -164,10 +164,17 @@ function recordOutcome(action, actionType, outcomeObj) {
       UPDATE messages
       SET retry_count = retry_count + 1,
           last_error = ?,
-          status = CASE WHEN retry_count >= 2 THEN 'failed' ELSE 'approved' END,
-          snooze_until = datetime('now', '+1 hour')
+          status = 'approved',
+          snooze_until = datetime('now', '+' || MIN((retry_count + 1) * 60, 1440) || ' minutes')
       WHERE id = ?
     `).run(reason, action.message_id);
+  } else if (outcome === 'not_connected') {
+    // Give the connection time to be accepted without burning a send retry.
+    db.prepare(`
+      UPDATE messages
+      SET snooze_until = datetime('now', '+24 hours')
+      WHERE id = ?
+    `).run(action.message_id);
   } else if (outcome === 'limit_reached') {
     // Snooze until next day instead of permanently failing
     db.prepare(`
@@ -292,7 +299,6 @@ async function processActionQueue(jobId, sseRes) {
       }
 
       let browserState = null;
-      let actionAttempted = false;
       try {
         emitState(emit, jobId, 'STARTING_BROWSER', `Starting browser for ${platform}.`, { ...eventBase, fingerprint: reservation.fingerprint });
         browserState = await createBrowser(platform);
@@ -318,7 +324,6 @@ async function processActionQueue(jobId, sseRes) {
         }
 
         emitState(emit, jobId, 'RUNNING', `Running ${platform} ${actionType}.`, { ...eventBase, fingerprint: reservation.fingerprint });
-        actionAttempted = true;
         const outcomeObj = await runAutomationAction(action, browserState, emit);
         
         // Post-action session check
@@ -342,10 +347,13 @@ async function processActionQueue(jobId, sseRes) {
         });
 
         if (outcomeObj.outcome === 'sent') successes++;
-        else if (['skipped', 'already_connected', 'no_posts'].includes(outcomeObj.outcome)) {
+        else if (['skipped', 'already_connected', 'no_posts', 'not_connected'].includes(outcomeObj.outcome)) {
           releaseActionFingerprint(reservation.fingerprint);
           skipped++;
-        } else failures++;
+        } else {
+          releaseActionFingerprint(reservation.fingerprint);
+          failures++;
+        }
 
       } catch (err) {
         logger.error('AUTOMATION', `Error on action ${action.message_id}`, err);
@@ -354,9 +362,7 @@ async function processActionQueue(jobId, sseRes) {
           await captureFailureArtifact(browserState.page, platform, `${actionType}-${action.message_id}-exception`);
         }
         emitState(emit, jobId, 'FAILED', `Action failed: ${err.message}`, { ...eventBase, fingerprint: reservation.fingerprint });
-        if (!actionAttempted) {
-          releaseActionFingerprint(reservation.fingerprint);
-        }
+        releaseActionFingerprint(reservation.fingerprint);
         recordOutcome(action, actionType, { outcome: 'failed', reason: err.message });
         failures++;
       } finally {

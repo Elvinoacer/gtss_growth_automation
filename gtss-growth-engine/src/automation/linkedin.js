@@ -37,14 +37,19 @@ const SELECTORS = {
     'button.artdeco-button--primary'
   ],
   dmEditor: [
-    '.msg-form__contenteditable[role="textbox"]',
-    '[contenteditable="true"][role="textbox"]',
-    '.msg-form__msg-content-container [contenteditable="true"]'
+    '.msg-form__contenteditable[contenteditable="true"]',
+    '[contenteditable="true"][aria-label*="message" i]',
+    '[contenteditable="true"][aria-label*="Write" i]',
+    '[contenteditable="true"][data-placeholder]',
+    '.msg-overlay-conversation-bubble [contenteditable="true"]',
+    '[contenteditable="true"][role="textbox"]'
   ],
   dmSend: [
+    'button.msg-form__send-button[aria-label]',
+    'button[aria-label="Send"][type="submit"]',
+    '.msg-form__send-btn-container button[type="submit"]',
     'button.msg-form__send-button',
-    'button[aria-label*="Send"]',
-    'button:has-text("Send")'
+    '.msg-overlay-conversation-bubble button[aria-label*="Send" i]'
   ],
   unlikePost: [
     'button[aria-pressed="false"]:has-text("Like")',
@@ -98,38 +103,37 @@ function messageSnippet(message) {
 }
 
 async function verifyDmSent(page, editorSelector, message) {
-  // Poll up to 8 seconds for the composer to clear
+  const snippet = messageSnippet(message);
+
+  // Poll up to 8 seconds for the message to appear or the composer to clear
   const POLL_INTERVAL = 800;
   const MAX_POLLS    = 10;
 
   for (let i = 0; i < MAX_POLLS; i++) {
     await humanDelay(POLL_INTERVAL, POLL_INTERVAL + 200);
 
+    const visibleInThread = snippet
+      ? await page.getByText(snippet, { exact: false }).last()
+          .isVisible({ timeout: 1000 })
+          .catch(() => false)
+      : false;
+
+    if (visibleInThread) {
+      return { verified: true, reason: 'Message visible in thread' };
+    }
+
     const editorText = await page
       .locator(editorSelector).first()
-      .innerText({ timeout: 1000 })
+      .evaluate(el => (el.textContent || el.innerText || '').trim(), undefined, { timeout: 1000 })
       .catch(() => '');
 
-    if (!editorText.trim()) {
+    if (!editorText) {
       return { verified: true, reason: 'Composer cleared' };
     }
 
     // Check for visible warning before giving up
     const warning = await detectActionWarning(page);
     if (warning) return { verified: false, reason: `LinkedIn warning: ${warning}` };
-  }
-
-  // Composer didn't clear but no warning either — assume success (LinkedIn sometimes
-  // preserves text in the editor while the message is already in the thread)
-  const snippet = messageSnippet(message);
-  const visibleInThread = snippet
-    ? await page.getByText(snippet, { exact: false }).last()
-        .isVisible({ timeout: 2000 })
-        .catch(() => false)
-    : false;
-
-  if (visibleInThread) {
-    return { verified: true, reason: 'Message visible in thread' };
   }
 
   // Still ambiguous — treat as success to avoid double-sends and let the
@@ -287,12 +291,17 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     const messageMatch = await firstVisible(page, SELECTORS.message, 3000);
     if (!messageMatch) {
        emit('warn', 'Could not find "Message" button. Ensure you are connected 1st-degree.');
-       return { outcome: 'failed', reason: 'Not connected or cannot message' };
+       return { outcome: 'not_connected', reason: 'Message button not visible - connection may not be accepted yet' };
     }
 
     emit('info', `Clicking Message (${messageMatch.selector})...`);
     await messageMatch.locator.click();
     await humanDelay(2000, 3000);
+
+    await page.locator('.msg-overlay-conversation-bubble, .msg-form__contenteditable, [contenteditable="true"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 8000 })
+      .catch(() => {});
 
     // The messaging overlay should pop up. Find the editor.
     const editorMatch = await firstVisible(page, SELECTORS.dmEditor, 5000);
