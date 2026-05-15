@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Automation Control - Growth Engine</title>
+<!-- Material Symbols Outlined -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Google Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Tailwind Configuration -->
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-error": "#ffffff",
+                        "surface-container-low": "#f2f4f6",
+                        "on-tertiary-container": "#e9f0ff",
+                        "on-secondary-container": "#57657b",
+                        "inverse-on-surface": "#eff1f3",
+                        "surface-variant": "#e0e3e5",
+                        "surface": "#f7f9fb",
+                        "on-primary": "#ffffff",
+                        "error-container": "#ffdad6",
+                        "on-tertiary-fixed-variant": "#38485d",
+                        "on-primary-fixed-variant": "#003ea8",
+                        "surface-container-high": "#e6e8ea",
+                        "on-tertiary-fixed": "#0b1c30",
+                        "on-background": "#191c1e",
+                        "tertiary-fixed-dim": "#b7c8e1",
+                        "outline-variant": "#c3c6d7",
+                        "secondary-fixed-dim": "#b9c7e0",
+                        "inverse-primary": "#b4c5ff",
+                        "surface-dim": "#d8dadc",
+                        "primary-fixed-dim": "#b4c5ff",
+                        "on-surface-variant": "#434655",
+                        "secondary-container": "#d5e3fd",
+                        "on-secondary-fixed-variant": "#3a485c",
+                        "primary": "#004ac6",
+                        "background": "#f7f9fb",
+                        "tertiary": "#46566c",
+                        "surface-tint": "#0053db",
+                        "surface-container-highest": "#e0e3e5",
+                        "surface-container": "#eceef0",
+                        "tertiary-container": "#5e6e85",
+                        "on-primary-container": "#eeefff",
+                        "error": "#ba1a1a",
+                        "secondary-fixed": "#d5e3fd",
+                        "on-tertiary": "#ffffff",
+                        "on-error-container": "#93000a",
+                        "tertiary-fixed": "#d3e4fe",
+                        "outline": "#737686",
+                        "inverse-surface": "#2d3133",
+                        "surface-bright": "#f7f9fb",
+                        "primary-container": "#2563eb",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary-fixed": "#00174b",
+                        "on-secondary-fixed": "#0d1c2f",
+                        "on-secondary": "#ffffff",
+                        "secondary": "#515f74",
+                        "on-surface": "#191c1e",
+                        "primary-fixed": "#dbe1ff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "sidebar-width": "260px",
+                        "table-row-height": "2.5rem",
+                        "gutter": "1rem",
+                        "container-max": "1440px",
+                        "margin-page": "1.5rem"
+                    },
+                    "fontFamily": {
+                        "mono-code": ["JetBrains Mono"],
+                        "body-sm": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "display-lg": ["Inter"],
+                        "body-xs": ["Inter"],
+                        "label-caps": ["Inter"]
+                    },
+                    "fontSize": {
+                        "mono-code": ["12px", { "lineHeight": "18px", "fontWeight": "400" }],
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "display-lg": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body-xs": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "label-caps": ["11px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body data-page-title="Automation">
+<!-- SHELL -->
+<main class="page-content">
+<!-- SideNavBar Component -->
+<nav class="fixed left-0 top-0 h-full w-[260px] bg-inverse-surface dark:bg-inverse-surface border-r border-outline-variant flex flex-col py-6 z-20">
+<!-- Header -->
+<div class="px-6 mb-8 flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-primary flex items-center justify-center text-on-primary font-bold text-headline-md">
+                G
+            </div>
+<div>
+<h1 class="text-headline-md font-bold text-on-primary-container">Growth Engine</h1>
+<p class="font-body-xs text-body-xs text-surface-variant">GTSS Internal Ops</p>
+</div>
+</div>
+<!-- CTA -->
+<div class="px-6 mb-6">
+<button class="w-full bg-primary hover:bg-surface-tint text-on-primary font-label-caps text-label-caps py-2 rounded scale-98 active:opacity-80 transition-all flex items-center justify-center gap-2">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
+                Quick-run Automation
+            </button>
+</div>
+<!-- Navigation Links -->
+<div class="flex-1 overflow-y-auto px-4 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2 rounded hover:bg-surface-variant/10 transition-colors text-surface-variant font-body-sm hover:text-white scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span>Dashboard</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded hover:bg-surface-variant/10 transition-colors text-surface-variant font-body-sm hover:text-white scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined">search</span>
+<span>Lead Discovery</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded hover:bg-surface-variant/10 transition-colors text-surface-variant font-body-sm hover:text-white scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined">verified_user</span>
+<span>Qualification</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded hover:bg-surface-variant/10 transition-colors text-surface-variant font-body-sm hover:text-white scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined">chat</span>
+<span>Messages</span>
+</a>
+<!-- Active Tab -->
+<a class="flex items-center gap-3 px-3 py-2 rounded scale-98 active:opacity-80 transition-all text-primary-fixed bg-primary-fixed-variant/20 font-bold border-l-4 border-primary" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">smart_toy</span>
+<span>Automation</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded hover:bg-surface-variant/10 transition-colors text-surface-variant font-body-sm hover:text-white scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined">account_tree</span>
+<span>CRM Pipeline</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded hover:bg-surface-variant/10 transition-colors text-surface-variant font-body-sm hover:text-white scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined">calendar_month</span>
+<span>Content Scheduler</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded hover:bg-surface-variant/10 transition-colors text-surface-variant font-body-sm hover:text-white scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span>Settings</span>
+</a>
+</div>
+<!-- Footer Links -->
+<div class="mt-auto px-4 pt-6 border-t border-surface-variant/20 space-y-1">
+<p class="px-3 py-2 font-label-caps text-label-caps text-surface-variant/50">PLATFORMS</p>
+<div class="flex items-center gap-3 px-3 py-1.5 text-surface-variant font-body-sm">
+<span class="material-symbols-outlined text-[10px] text-primary-fixed-dim" style="font-variation-settings: 'FILL' 1;">fiber_manual_record</span>
+<span>LinkedIn</span>
+</div>
+<div class="flex items-center gap-3 px-3 py-1.5 text-surface-variant font-body-sm">
+<span class="material-symbols-outlined text-[10px] text-primary-fixed-dim" style="font-variation-settings: 'FILL' 1;">fiber_manual_record</span>
+<span>X Platform</span>
+</div>
+<div class="flex items-center gap-3 px-3 py-1.5 text-surface-variant font-body-sm">
+<span class="material-symbols-outlined text-[10px] text-primary-fixed-dim" style="font-variation-settings: 'FILL' 1;">fiber_manual_record</span>
+<span>Facebook</span>
+</div>
+<div class="flex items-center gap-3 px-3 py-1.5 text-surface-variant font-body-sm">
+<span class="material-symbols-outlined text-[10px] text-primary-fixed-dim" style="font-variation-settings: 'FILL' 1;">fiber_manual_record</span>
+<span>Instagram</span>
+</div>
+</div>
+</nav>
+<!-- Main Workspace -->
+<div class="flex-1 flex flex-col h-full ml-[260px] w-[calc(100%-260px)] relative bg-background">
+<!-- TopNavBar Component -->
+<header class="flex justify-between items-center h-16 px-margin-page bg-surface border-b border-outline-variant z-10">
+<div class="flex items-center gap-4">
+<!-- Search (Hidden as per JSON) -->
+</div>
+<div class="flex items-center gap-6">
+<span class="font-label-caps text-label-caps text-on-surface-variant">Actions today: 34 / 65</span>
+<button class="font-label-caps text-label-caps text-primary hover:text-surface-tint opacity-90 active:scale-95 transition-all">
+                    Quick-run
+                </button>
+<div class="flex items-center gap-3">
+<button class="w-8 h-8 flex items-center justify-center text-on-surface-variant hover:text-primary transition-colors opacity-90 active:scale-95">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="w-8 h-8 flex items-center justify-center text-on-surface-variant hover:text-primary transition-colors opacity-90 active:scale-95">
+<span class="material-symbols-outlined">calendar_today</span>
+</button>
+<div class="w-8 h-8 rounded-full bg-surface-variant overflow-hidden border border-outline-variant ml-2">
+<img alt="User Profile" class="w-full h-full object-cover" data-alt="A professional headshot of a person with a neutral expression, lit by soft, bright studio lighting against a light gray background, fitting a modern corporate aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuB-buy24dXyqW7b4GR571VAkvHdXkfYnO0hZVnht0VlC46fg7xk4tmq8h1UtIBtYtJKpH-_Kg_lviWbUpuqOll9m1uL-WfpBBmOEo6v1Qt-MM3Ua8TiI0fLldGcoe5xw65rAS77ocdJKwJ03AJJhKtJIc9DJHtBDjqikmam4kXyXFPLwHOyn4pgaMEYp-aBMXJiD20M-PaZoqFOuYkO4VWg1UixiqSyxhgOxBrtrUxGusXG6qTfUsnUe0vHa7dqS1CivCLcxjnOgKM"/>
+</div>
+</div>
+</div>
+</header>
+<!-- Scrollable Content Canvas -->
+<main class="flex-1 overflow-y-auto p-margin-page">
+<div class="max-w-container-max mx-auto space-y-8">
+<!-- CAPTCHA/Warning Alert Banner -->
+<div id="captcha-banner" style="display: none;" class="bg-error-container border border-error/20 rounded p-4 flex items-start sm:items-center gap-4 shadow-[0_4px_4px_rgba(0,0,0,0.04)]">
+<div class="mt-0.5 sm:mt-0 text-error">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">warning</span>
+</div>
+<div class="flex-1">
+<h3 class="font-headline-md text-headline-md text-on-error-container text-base"><span id="captcha-platform-text"></span> Activity Warning</h3>
+<p class="font-body-sm text-body-sm text-on-error-container/80 mt-1 sm:mt-0">Browser automation paused. CAPTCHA detected. Manual intervention required to clear status.</p>
+</div>
+<button id="manual-open-btn" class="shrink-0 bg-surface text-primary font-label-caps text-label-caps px-4 py-2 rounded border border-primary hover:bg-surface-variant transition-colors mr-2">
+                        Open Browser
+                    </button>
+<button id="manual-resume-btn" class="shrink-0 bg-error text-on-error font-label-caps text-label-caps px-4 py-2 rounded hover:bg-error/90 transition-colors">
+                        Resume Run
+                    </button>
+</div>
+<!-- Control Header -->
+<div class="flex justify-between items-end">
+<div>
+<h2 class="font-display-lg text-display-lg text-on-surface">Automation Control</h2>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-1">Manage and monitor active browser routines.</p>
+</div>
+<div class="flex gap-3">
+<button id="run-all-btn" class="bg-primary hover:bg-surface-tint text-on-primary font-label-caps text-label-caps px-6 py-3 rounded-lg flex items-center gap-2 shadow-[0_4px_4px_rgba(0,0,0,0.04)] transition-colors">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
+                        Run Queue
+                    </button>
+<button id="stop-btn" style="display: none;" class="bg-error hover:bg-[#a31717] text-on-error font-label-caps text-label-caps px-6 py-3 rounded-lg flex items-center gap-2 shadow-[0_4px_4px_rgba(0,0,0,0.04)] transition-colors">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">stop_circle</span>
+                        Stop Automation
+                    </button>
+</div>
+</div>
+<!-- Daily Limit Dashboard (StatCards) -->
+<div id="limit-cards" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
+    <!-- Populated by JS -->
+</div>
+<!-- Main Grid Layout for Table and Log -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-gutter">
+<!-- Action Queue Table Container -->
+<div class="lg:col-span-8 bg-surface-container-lowest border border-outline-variant rounded-lg shadow-[0_4px_4px_rgba(0,0,0,0.04)] overflow-hidden flex flex-col h-[500px]">
+<div class="px-4 py-3 border-b border-outline-variant flex justify-between items-center bg-surface-bright">
+<h3 class="font-headline-md text-headline-md text-on-surface text-base">Action Queue</h3>
+<div class="flex gap-2">
+<button class="text-secondary hover:text-on-surface transition-colors p-1 rounded hover:bg-surface-variant/50">
+<span class="material-symbols-outlined text-sm">filter_list</span>
+</button>
+<button class="text-secondary hover:text-on-surface transition-colors p-1 rounded hover:bg-surface-variant/50">
+<span class="material-symbols-outlined text-sm">more_vert</span>
+</button>
+</div>
+</div>
+<div class="flex-1 overflow-auto">
+<table class="w-full text-left border-collapse">
+<thead class="sticky top-0 bg-surface-bright shadow-sm z-10">
+<tr>
+<th class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant w-1/4">Lead Name</th>
+<th class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant w-1/6">Platform</th>
+<th class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant w-1/6">Action Type</th>
+<th class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant w-1/4">Status</th>
+<th class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant text-right">Actions</th>
+</tr>
+</thead>
+<tbody id="queue-body" class="font-body-sm text-body-sm text-on-surface">
+<!-- Populated by JS -->
+</tbody>
+</table>
+<div id="empty-state" class="p-10 text-center flex-1 flex flex-col justify-center">
+    <div class="w-12 h-12 rounded-full bg-surface-variant mx-auto flex items-center justify-center text-secondary mb-4">
+        <span class="material-symbols-outlined text-2xl">check_circle</span>
+    </div>
+    <h3 class="font-headline-md text-headline-md text-on-surface">Queue is Empty</h3>
+    <p class="font-body-sm text-body-sm text-on-surface-variant mt-2 max-w-[280px] mx-auto">All approved messages have been processed. Approve more messages to run automation.</p>
+</div>
+</div>
+</div>
+<!-- Live Execution Log Panel -->
+<div class="lg:col-span-4 bg-inverse-surface rounded-lg shadow-lg flex flex-col h-[500px] border border-outline-variant/20 overflow-hidden">
+<div class="px-4 py-3 border-b border-outline-variant/30 flex justify-between items-center bg-inverse-surface/90">
+<h3 class="font-label-caps text-label-caps text-inverse-on-surface flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-primary inline-block"></span>
+                                Live Execution Log
+                            </h3>
+<div class="flex gap-3">
+<button id="log-clear-btn" class="font-label-caps text-label-caps text-outline hover:text-inverse-on-surface transition-colors">Clear</button>
+<label class="flex items-center gap-2 cursor-pointer font-label-caps text-label-caps text-outline hover:text-inverse-on-surface transition-colors">
+<input id="log-autoscroll" checked="" class="form-checkbox h-3 w-3 rounded text-primary border-outline-variant/50 focus:ring-0 bg-transparent" type="checkbox"/>
+                                    Scroll
+                                </label>
+</div>
+</div>
+<div id="log-container" class="flex-1 p-4 overflow-y-auto font-mono-code text-mono-code text-tertiary-fixed-dim space-y-1.5 selection:bg-surface-variant/30">
+    <div class="flex gap-3"><span class="text-outline shrink-0">[System]</span> <span class="text-secondary-fixed-dim shrink-0">READY</span> <span class="text-inverse-on-surface">Waiting for execution trigger...</span></div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+</main>
+<script src="/js/app.js"></script>
+<script src="/js/automation.js"></script>
+</body></html>

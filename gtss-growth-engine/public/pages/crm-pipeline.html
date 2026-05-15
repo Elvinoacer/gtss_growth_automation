@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Growth Engine - CRM Pipeline</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@400&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-error": "#ffffff",
+                        "surface-container-low": "#f2f4f6",
+                        "on-tertiary-container": "#e9f0ff",
+                        "on-secondary-container": "#57657b",
+                        "inverse-on-surface": "#eff1f3",
+                        "surface-variant": "#e0e3e5",
+                        "surface": "#f7f9fb",
+                        "on-primary": "#ffffff",
+                        "error-container": "#ffdad6",
+                        "on-tertiary-fixed-variant": "#38485d",
+                        "on-primary-fixed-variant": "#003ea8",
+                        "surface-container-high": "#e6e8ea",
+                        "on-tertiary-fixed": "#0b1c30",
+                        "on-background": "#191c1e",
+                        "tertiary-fixed-dim": "#b7c8e1",
+                        "outline-variant": "#c3c6d7",
+                        "secondary-fixed-dim": "#b9c7e0",
+                        "inverse-primary": "#b4c5ff",
+                        "surface-dim": "#d8dadc",
+                        "primary-fixed-dim": "#b4c5ff",
+                        "on-surface-variant": "#434655",
+                        "secondary-container": "#d5e3fd",
+                        "on-secondary-fixed-variant": "#3a485c",
+                        "primary": "#004ac6",
+                        "background": "#f7f9fb",
+                        "tertiary": "#46566c",
+                        "surface-tint": "#0053db",
+                        "surface-container-highest": "#e0e3e5",
+                        "surface-container": "#eceef0",
+                        "tertiary-container": "#5e6e85",
+                        "on-primary-container": "#eeefff",
+                        "error": "#ba1a1a",
+                        "secondary-fixed": "#d5e3fd",
+                        "on-tertiary": "#ffffff",
+                        "on-error-container": "#93000a",
+                        "tertiary-fixed": "#d3e4fe",
+                        "outline": "#737686",
+                        "inverse-surface": "#2d3133",
+                        "surface-bright": "#f7f9fb",
+                        "primary-container": "#2563eb",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary-fixed": "#00174b",
+                        "on-secondary-fixed": "#0d1c2f",
+                        "on-secondary": "#ffffff",
+                        "secondary": "#515f74",
+                        "on-surface": "#191c1e",
+                        "primary-fixed": "#dbe1ff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "sidebar-width": "260px",
+                        "table-row-height": "2.5rem",
+                        "gutter": "1rem",
+                        "container-max": "1440px",
+                        "margin-page": "1.5rem"
+                    },
+                    "fontFamily": {
+                        "mono-code": ["JetBrains Mono"],
+                        "body-sm": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "display-lg": ["Inter"],
+                        "body-xs": ["Inter"],
+                        "label-caps": ["Inter"]
+                    },
+                    "fontSize": {
+                        "mono-code": ["12px", { "lineHeight": "18px", "fontWeight": "400" }],
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "display-lg": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body-xs": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "label-caps": ["11px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .icon-fill {
+            font-variation-settings: 'FILL' 1;
+        }
+    </style>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body data-page-title="CRM Pipeline">
+<!-- SHELL -->
+<main class="page-content">
+<!-- SideNavBar -->
+<nav class="fixed left-0 top-0 h-full w-[260px] bg-inverse-surface dark:bg-inverse-surface border-r border-outline-variant flex flex-col py-6 z-20">
+<!-- Brand -->
+<div class="px-6 mb-8 flex items-center gap-3">
+<div class="w-8 h-8 bg-primary rounded flex items-center justify-center text-on-primary font-bold">
+                GE
+            </div>
+<div>
+<h1 class="text-headline-md font-bold text-on-primary-container font-headline-md">Growth Engine</h1>
+<p class="text-surface-variant font-body-sm text-body-xs opacity-70">GTSS Internal Ops</p>
+</div>
+</div>
+<!-- Navigation Links -->
+<div class="flex flex-col flex-1 px-4 gap-1">
+<a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined text-[20px]">dashboard</span>
+                Dashboard
+            </a>
+<a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined text-[20px]">search</span>
+                Lead Discovery
+            </a>
+<a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined text-[20px]">verified_user</span>
+                Qualification
+            </a>
+<a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined text-[20px]">chat</span>
+                Messages
+            </a>
+<a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined text-[20px]">smart_toy</span>
+                Automation
+            </a>
+<!-- Active Tab -->
+<a class="flex items-center gap-3 px-4 py-2.5 rounded text-primary-fixed bg-primary-fixed-variant/20 font-bold border-l-4 border-primary hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined text-[20px]">account_tree</span>
+                CRM Pipeline
+            </a>
+<a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined text-[20px]">calendar_month</span>
+                Content Scheduler
+            </a>
+<a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined text-[20px]">settings</span>
+                Settings
+            </a>
+</div>
+<!-- CTA & Footer -->
+<div class="px-6 mt-auto">
+<button class="w-full py-2 bg-primary text-on-primary rounded font-label-caps text-label-caps flex items-center justify-center gap-2 mb-6 hover:bg-primary/90 transition-colors">
+<span class="material-symbols-outlined text-[16px]">bolt</span>
+                Quick-run Automation
+            </button>
+<div class="flex justify-between items-center text-surface-variant px-2">
+<span class="material-symbols-outlined text-[16px] icon-fill text-[#0A66C2]">fiber_manual_record</span>
+<span class="material-symbols-outlined text-[16px] icon-fill text-surface-variant">fiber_manual_record</span>
+<span class="material-symbols-outlined text-[16px] icon-fill text-[#1877F2]">fiber_manual_record</span>
+<span class="material-symbols-outlined text-[16px] icon-fill text-[#E1306C]">fiber_manual_record</span>
+</div>
+</div>
+</nav>
+<!-- Main Workspace -->
+<div class="ml-[260px] flex-1 flex flex-col h-full overflow-hidden bg-background">
+<!-- TopNavBar -->
+<header class="flex justify-between items-center h-16 px-margin-page border-b border-outline-variant bg-surface w-full flex-shrink-0 z-10">
+<div class="flex items-center gap-6">
+<span class="font-headline-md font-bold text-on-surface">Growth Engine</span>
+<div class="h-4 w-px bg-outline-variant"></div>
+<span class="font-label-caps text-label-caps text-on-surface-variant">CRM Pipeline</span>
+</div>
+<div class="flex items-center gap-6">
+<div class="text-on-surface-variant font-body-sm flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+                    Actions today: 34 / 65
+                </div>
+<button class="px-4 py-1.5 bg-secondary-container text-on-secondary-container rounded font-label-caps text-label-caps hover:bg-secondary-container/80 transition-colors">
+                    Quick-run
+                </button>
+<div class="flex gap-4 text-on-surface-variant">
+<button class="hover:text-primary transition-colors opacity-90 active:scale-95 transition-transform">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="hover:text-primary transition-colors opacity-90 active:scale-95 transition-transform">
+<span class="material-symbols-outlined">calendar_today</span>
+</button>
+</div>
+<div class="w-8 h-8 rounded bg-tertiary-container text-on-tertiary-container flex items-center justify-center font-bold font-body-sm overflow-hidden border border-outline-variant">
+<img alt="User Profile" class="w-full h-full object-cover" data-alt="A professional headshot of a person looking directly at the camera. The individual has a neutral, professional expression, suitable for a corporate profile avatar. The background is simple and uncluttered, ensuring the focus remains entirely on the face. The lighting is balanced and flattering, creating a polished and approachable look ideal for a business software interface." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBBLq_BdNL0U7vXW6L2rUumom9sTI3kciHQzOiwqMmTF2EmFb5X4eyUBKIwqgDxXovsbZ_QUSCNoR6IY-U6Gq-pehdeW65dgdkFk2FA3JOlugUSVV9NuN4jkvk9ypeqcGe6Hh4KvnamZwOvij5_APkOKSDo-GcDit_GulW_TadOeNYdHzjbOLE7qcfzPPgEcRWPE5BzNVB7k6vaEnhgQ9RGBDahYVnEEbbTgoAGebZxc-xStCcXD9y0Gm6IDESZPW89QetlfgEp9E0"/>
+</div>
+</div>
+</header>
+<!-- Page Content -->
+<main class="flex-1 overflow-hidden flex flex-col p-margin-page gap-gutter">
+<!-- Summary Stats Bar -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-gutter flex-shrink-0">
+<!-- Stat Card 1 -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded p-4 flex flex-col gap-2 shadow-[0_2px_4px_rgba(0,0,0,0.02)]">
+<span class="font-label-caps text-label-caps text-on-surface-variant">Total Active Leads</span>
+<div class="flex items-end justify-between">
+<span class="font-display-lg text-display-lg text-on-surface">1,248</span>
+<span class="font-mono-code text-mono-code text-[#16A34A] bg-[#16A34A]/10 px-2 py-0.5 rounded flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">trending_up</span> +12%
+                        </span>
+</div>
+</div>
+<!-- Stat Card 2 -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded p-4 flex flex-col gap-2 shadow-[0_2px_4px_rgba(0,0,0,0.02)]">
+<span class="font-label-caps text-label-caps text-on-surface-variant">Avg. Days to Reply</span>
+<div class="flex items-end justify-between">
+<span class="font-display-lg text-display-lg text-on-surface">1.4</span>
+<span class="font-mono-code text-mono-code text-[#16A34A] bg-[#16A34A]/10 px-2 py-0.5 rounded flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">trending_down</span> -0.2
+                        </span>
+</div>
+</div>
+<!-- Stat Card 3 -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded p-4 flex flex-col gap-2 shadow-[0_2px_4px_rgba(0,0,0,0.02)]">
+<span class="font-label-caps text-label-caps text-on-surface-variant">Conversion Rate</span>
+<div class="flex items-end justify-between">
+<span class="font-display-lg text-display-lg text-on-surface">8.2%</span>
+<span class="font-mono-code text-mono-code text-[#DC2626] bg-[#DC2626]/10 px-2 py-0.5 rounded flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">trending_down</span> -1.1%
+                        </span>
+</div>
+</div>
+</div>
+<!-- Toolbar: Search & Filter -->
+<div class="flex items-center gap-4 flex-shrink-0 py-2 border-b border-outline-variant/50">
+<div class="relative w-64">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">search</span>
+<input class="w-full pl-9 pr-3 py-1.5 bg-surface-container-lowest border border-outline-variant rounded text-body-sm font-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors" placeholder="Search leads..." type="text"/>
+</div>
+<div class="h-6 w-px bg-outline-variant mx-2"></div>
+<select class="py-1.5 pl-3 pr-8 bg-surface-container-lowest border border-outline-variant rounded text-body-sm font-body-sm text-on-surface-variant focus:outline-none focus:border-primary cursor-pointer appearance-none">
+<option>All Platforms</option>
+<option>LinkedIn</option>
+<option>X Platform</option>
+</select>
+<select class="py-1.5 pl-3 pr-8 bg-surface-container-lowest border border-outline-variant rounded text-body-sm font-body-sm text-on-surface-variant focus:outline-none focus:border-primary cursor-pointer appearance-none">
+<option>Any Status</option>
+<option>Hot Leads</option>
+<option>Needs Follow-up</option>
+</select>
+<div class="ml-auto flex items-center gap-2">
+<button class="p-1.5 text-on-surface-variant hover:bg-surface-variant/50 rounded transition-colors" title="List View">
+<span class="material-symbols-outlined text-[20px]">view_list</span>
+</button>
+<button class="p-1.5 text-primary bg-primary-container/10 rounded transition-colors" title="Board View">
+<span class="material-symbols-outlined text-[20px]">view_column</span>
+</button>
+</div>
+</div>
+<!-- Kanban Board -->
+<div class="flex-1 overflow-x-auto overflow-y-hidden flex gap-4 pb-4">
+<!-- Column: Messaged -->
+<div class="w-[300px] flex-shrink-0 flex flex-col bg-surface-container rounded-lg border border-outline-variant/30 h-full">
+<div class="p-3 border-b border-outline-variant/30 flex items-center justify-between flex-shrink-0">
+<span class="font-label-caps text-label-caps text-on-surface">Messaged</span>
+<span class="font-mono-code text-mono-code text-on-surface-variant bg-surface-variant/30 px-2 py-0.5 rounded">124</span>
+</div>
+<div class="flex-1 overflow-y-auto p-2 flex flex-col gap-2">
+<!-- Card -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded p-3 cursor-pointer hover:border-primary transition-colors group shadow-sm">
+<div class="flex justify-between items-start mb-2">
+<span class="font-body-sm text-body-sm font-semibold text-on-surface">Sarah Jenkins</span>
+<span class="material-symbols-outlined text-[14px] icon-fill text-[#0A66C2]">fiber_manual_record</span>
+</div>
+<div class="font-body-xs text-body-xs text-on-surface-variant mb-3 line-clamp-1">VP of Growth at TechFlow</div>
+<div class="flex justify-between items-center pt-2 border-t border-outline-variant/30">
+<span class="font-mono-code text-mono-code text-on-surface-variant">2d ago</span>
+<button class="opacity-0 group-hover:opacity-100 transition-opacity text-primary font-label-caps text-label-caps">View</button>
+</div>
+</div>
+<!-- Card -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded p-3 cursor-pointer hover:border-primary transition-colors group shadow-sm">
+<div class="flex justify-between items-start mb-2">
+<span class="font-body-sm text-body-sm font-semibold text-on-surface">Marcus Chen</span>
+<span class="material-symbols-outlined text-[14px] icon-fill text-surface-variant">fiber_manual_record</span>
+</div>
+<div class="font-body-xs text-body-xs text-on-surface-variant mb-3 line-clamp-1">Founder, Stealth Startup</div>
+<div class="flex justify-between items-center pt-2 border-t border-outline-variant/30">
+<span class="font-mono-code text-mono-code text-on-surface-variant">4d ago</span>
+<button class="opacity-0 group-hover:opacity-100 transition-opacity text-primary font-label-caps text-label-caps">View</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Column: Replied -->
+<div class="w-[300px] flex-shrink-0 flex flex-col bg-surface-container rounded-lg border border-outline-variant/30 h-full">
+<div class="p-3 border-b border-outline-variant/30 flex items-center justify-between flex-shrink-0">
+<span class="font-label-caps text-label-caps text-on-surface">Replied</span>
+<span class="font-mono-code text-mono-code text-on-surface-variant bg-surface-variant/30 px-2 py-0.5 rounded">45</span>
+</div>
+<div class="flex-1 overflow-y-auto p-2 flex flex-col gap-2">
+<!-- Card -->
+<div class="bg-surface-container-lowest border border-primary border-l-4 rounded p-3 cursor-pointer hover:shadow-md transition-shadow group shadow-sm">
+<div class="flex justify-between items-start mb-2">
+<span class="font-body-sm text-body-sm font-semibold text-on-surface">Elena Rodriguez</span>
+<span class="material-symbols-outlined text-[14px] icon-fill text-[#0A66C2]">fiber_manual_record</span>
+</div>
+<div class="font-body-xs text-body-xs text-on-surface-variant mb-3 line-clamp-2">"Thanks for reaching out, I'm interested in learning more..."</div>
+<div class="flex justify-between items-center pt-2 border-t border-outline-variant/30">
+<span class="font-mono-code text-mono-code text-[#D97706] bg-[#D97706]/10 px-1.5 rounded">Action Req</span>
+<span class="font-mono-code text-mono-code text-on-surface-variant">1h ago</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Column: Meeting Booked -->
+<div class="w-[300px] flex-shrink-0 flex flex-col bg-surface-container rounded-lg border border-outline-variant/30 h-full">
+<div class="p-3 border-b border-outline-variant/30 flex items-center justify-between flex-shrink-0">
+<span class="font-label-caps text-label-caps text-on-surface">Meeting Booked</span>
+<span class="font-mono-code text-mono-code text-on-surface-variant bg-surface-variant/30 px-2 py-0.5 rounded">12</span>
+</div>
+<div class="flex-1 overflow-y-auto p-2 flex flex-col gap-2">
+<!-- Card -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded p-3 cursor-pointer hover:border-primary transition-colors group shadow-sm">
+<div class="flex justify-between items-start mb-2">
+<span class="font-body-sm text-body-sm font-semibold text-on-surface">David Kim</span>
+<span class="material-symbols-outlined text-[14px] icon-fill text-[#0A66C2]">fiber_manual_record</span>
+</div>
+<div class="flex items-center gap-2 font-body-xs text-body-xs text-on-surface-variant mb-3">
+<span class="material-symbols-outlined text-[14px]">event</span> Tomorrow, 2:00 PM
+                            </div>
+<div class="flex justify-between items-center pt-2 border-t border-outline-variant/30">
+<div class="flex -space-x-2">
+<img alt="Attendee 1" class="w-5 h-5 rounded-full border border-surface-container-lowest" data-alt="A small circular avatar showing a professional person. The image is cropped tightly around the face, displaying a clear, bright expression suitable for a business meeting contact icon." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCFTfTEV-95YAY7bIg9NEDgnjyxTuAAxbIRZV_5NQB_bHhDoShD7XJw9xZF7HiV6QhQ1zw8tBuXm_L--n1IZwJVy6KTQiTKLwd6NaQjKvHFkUs32VIXkPSGgcGz645SzyXXmIPg0yKXjDPX_WPQWuMEInpcx8HuqqOIviM5UkKYcHbe8rRVgJKodpOUP5INwE2BCG5gsnX7mpg3boZG4OHLJS67I04lWNB4E-Uyt0ORJd3OLkW8P6q12SbqzxK3euNAdprsjGykwzM"/>
+<div class="w-5 h-5 rounded-full border border-surface-container-lowest bg-surface-variant text-[10px] flex items-center justify-center font-bold">+1</div>
+</div>
+<span class="font-mono-code text-mono-code text-on-surface-variant">In 1d</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Column: Converted -->
+<div class="w-[300px] flex-shrink-0 flex flex-col bg-surface-container rounded-lg border border-outline-variant/30 h-full opacity-80">
+<div class="p-3 border-b border-outline-variant/30 flex items-center justify-between flex-shrink-0">
+<span class="font-label-caps text-label-caps text-on-surface">Converted</span>
+<span class="font-mono-code text-mono-code text-on-surface-variant bg-surface-variant/30 px-2 py-0.5 rounded">89</span>
+</div>
+<div class="flex-1 overflow-y-auto p-2 flex flex-col gap-2">
+<!-- Content omitted for brevity in design sample -->
+</div>
+</div>
+<!-- Column: Lost -->
+<div class="w-[300px] flex-shrink-0 flex flex-col bg-surface-container rounded-lg border border-outline-variant/30 h-full opacity-60">
+<div class="p-3 border-b border-outline-variant/30 flex items-center justify-between flex-shrink-0">
+<span class="font-label-caps text-label-caps text-on-surface">Lost</span>
+<span class="font-mono-code text-mono-code text-on-surface-variant bg-surface-variant/30 px-2 py-0.5 rounded">312</span>
+</div>
+<div class="flex-1 overflow-y-auto p-2 flex flex-col gap-2">
+<!-- Content omitted for brevity in design sample -->
+</div>
+</div>
+</div>
+</main>
+</div>
+</main>
+<script src="/js/app.js"></script>
+</body></html>

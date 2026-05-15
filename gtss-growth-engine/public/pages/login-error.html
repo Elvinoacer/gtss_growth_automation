@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Login | GTSS Growth Engine</title>
+    <link rel="stylesheet" href="/css/style.css">
+  </head>
+  <body>
+    <main class="login-page">
+      <form class="login-card" method="post" action="/login">
+        <h1>GTSS Growth Engine</h1>
+        <p class="error">Invalid passphrase.</p>
+        <div class="form-row">
+          <label for="passphrase">Passphrase</label>
+          <input id="passphrase" name="passphrase" type="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit">Sign in</button>
+      </form>
+    </main>
+    <script src="/js/app.js"></script>
+  </body>
+</html>

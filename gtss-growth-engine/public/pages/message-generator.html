@@ -1,0 +1,1050 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Message Generator - Growth Engine</title>
+    <meta
+      name="description"
+      content="Generate, review, and approve AI-crafted outreach messages for qualified leads."
+    />
+    <link rel="stylesheet" href="/css/style.css" />
+    <style>
+      /* ================================================================
+         Message Generator – Dark Theme
+         ================================================================ */
+
+      .msg-page {
+        display: grid;
+        gap: 22px;
+        padding: 28px;
+      }
+
+      /* ---------- Stat Row ---------- */
+      .stat-grid {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 14px;
+      }
+      .stat-card {
+        padding: 18px;
+        background: var(--gtss-card-bg);
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        transition:
+          border-color 180ms ease,
+          box-shadow 180ms ease;
+      }
+      .stat-card:hover {
+        border-color: var(--gtss-primary);
+        box-shadow: 0 0 0 1px var(--gtss-primary);
+      }
+      .stat-label {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--gtss-muted);
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .stat-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+      }
+      .stat-dot.pending {
+        background: var(--gtss-warning);
+      }
+      .stat-dot.approved {
+        background: var(--gtss-success);
+      }
+      .stat-dot.sent {
+        background: var(--gtss-primary);
+      }
+      .stat-dot.skipped {
+        background: #64748b;
+      }
+      .stat-dot.followup {
+        background: #a78bfa;
+      }
+      .stat-value {
+        font-size: 28px;
+        font-weight: 900;
+        color: var(--gtss-text);
+        line-height: 1;
+      }
+
+      /* ---------- Buttons ---------- */
+      .btn {
+        min-height: 38px;
+        border: 0;
+        border-radius: var(--gtss-radius);
+        padding: 0 16px;
+        color: #fff;
+        font: inherit;
+        font-weight: 800;
+        font-size: 13px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition:
+          opacity 120ms ease,
+          transform 80ms ease;
+      }
+      .btn:active {
+        transform: scale(0.97);
+      }
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .btn-primary {
+        background: var(--gtss-primary);
+      }
+      .btn-success {
+        background: var(--gtss-success);
+      }
+      .btn-danger {
+        background: var(--gtss-danger);
+      }
+      .btn-warning {
+        background: var(--gtss-warning);
+        color: #0f172a;
+      }
+      .btn-muted {
+        background: #334155;
+      }
+      .btn-outline {
+        background: transparent;
+        border: 1px solid var(--gtss-card-border);
+        color: var(--gtss-text);
+      }
+      .btn-sm {
+        min-height: 30px;
+        padding: 0 10px;
+        font-size: 12px;
+      }
+
+      /* ---------- Progress ---------- */
+      .progress-panel {
+        display: none;
+        padding: 18px;
+        background: var(--gtss-card-bg);
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        gap: 12px;
+      }
+      .progress-panel.visible {
+        display: grid;
+      }
+      .progress-label {
+        color: var(--gtss-text);
+        font-weight: 800;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .spinner {
+        width: 18px;
+        height: 18px;
+        border: 3px solid #334155;
+        border-top-color: var(--gtss-primary);
+        border-radius: 999px;
+        animation: spin 900ms linear infinite;
+        flex-shrink: 0;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .progress-track {
+        width: 100%;
+        height: 8px;
+        border-radius: 999px;
+        background: #0b1220;
+        overflow: hidden;
+      }
+      .progress-fill {
+        height: 100%;
+        width: 0%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--gtss-primary), #60a5fa);
+        transition: width 300ms ease;
+      }
+      .progress-text {
+        color: var(--gtss-muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      /* ---------- Filter Row ---------- */
+      .filter-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .filter-tabs {
+        display: flex;
+        gap: 0;
+        border-bottom: 1px solid var(--gtss-card-border);
+      }
+      .filter-tab {
+        padding: 10px 16px;
+        border: 0;
+        background: transparent;
+        color: var(--gtss-muted);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 800;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition:
+          color 120ms ease,
+          border-color 120ms ease;
+      }
+      .filter-tab:hover {
+        color: var(--gtss-text);
+      }
+      .filter-tab.active {
+        color: var(--gtss-primary);
+        border-bottom-color: var(--gtss-primary);
+      }
+      .tab-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 18px;
+        height: 17px;
+        margin-left: 5px;
+        padding: 0 4px;
+        border-radius: 999px;
+        background: rgb(59 130 246 / 18%);
+        color: var(--gtss-primary);
+        font-size: 10px;
+        font-weight: 900;
+      }
+      .filter-select,
+      .filter-input {
+        min-height: 34px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        padding: 6px 10px;
+        background: #0b1220;
+        color: var(--gtss-text);
+        font: inherit;
+        font-size: 13px;
+      }
+      .filter-input {
+        width: 200px;
+      }
+
+      /* ---------- Table ---------- */
+      .table-wrap {
+        overflow: auto;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 960px;
+      }
+      th,
+      td {
+        padding: 11px 12px;
+        border-bottom: 1px solid var(--gtss-card-border);
+        text-align: left;
+        color: var(--gtss-text);
+        font-size: 13px;
+      }
+      th {
+        color: var(--gtss-muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        position: sticky;
+        top: 0;
+        background: var(--gtss-card-bg);
+        z-index: 1;
+      }
+      tr {
+        cursor: pointer;
+        transition: background 120ms ease;
+      }
+      tr:hover {
+        background: rgb(59 130 246 / 6%);
+      }
+
+      /* Badges */
+      .platform-badge {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 3px 8px;
+        font-size: 11px;
+        font-weight: 900;
+      }
+      .platform-linkedin {
+        background: rgb(10 102 194 / 20%);
+        color: #60a5fa;
+      }
+      .platform-x {
+        background: rgb(241 245 249 / 14%);
+        color: #f8fafc;
+      }
+      .platform-facebook {
+        background: rgb(24 119 242 / 20%);
+        color: #93c5fd;
+      }
+      .platform-instagram {
+        background: rgb(236 72 153 / 20%);
+        color: #f9a8d4;
+      }
+
+      .variant-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 3px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 900;
+      }
+      .variant-a {
+        background: rgb(59 130 246 / 18%);
+        color: #93c5fd;
+      }
+      .variant-b {
+        background: rgb(168 85 247 / 18%);
+        color: #c4b5fd;
+      }
+
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 3px 9px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: capitalize;
+      }
+      .status-pending {
+        background: rgb(245 158 11 / 18%);
+        color: #fcd34d;
+      }
+      .status-approved {
+        background: rgb(34 197 94 / 18%);
+        color: #86efac;
+      }
+      .status-sent {
+        background: rgb(59 130 246 / 18%);
+        color: #93c5fd;
+      }
+      .status-skipped {
+        background: rgb(100 116 139 / 18%);
+        color: #94a3b8;
+      }
+
+      .msg-preview {
+        max-width: 280px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--gtss-muted);
+        font-size: 13px;
+      }
+      .row-actions {
+        display: flex;
+        gap: 6px;
+      }
+
+      .empty-state {
+        display: none;
+        padding: 42px 16px;
+        text-align: center;
+        color: var(--gtss-muted);
+      }
+      .empty-state.visible {
+        display: block;
+      }
+      .pagination {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 12px;
+        margin-top: 14px;
+        color: var(--gtss-muted);
+        font-size: 13px;
+      }
+
+      /* ---------- Modal (Full-screen overlay) ---------- */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 1100;
+        background: rgba(0, 0, 0, 0.6);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        backdrop-filter: blur(4px);
+      }
+      .modal-overlay.open {
+        display: flex;
+      }
+      .modal {
+        width: 100%;
+        max-width: 1060px;
+        max-height: calc(100vh - 48px);
+        background: var(--gtss-card-bg);
+        border: 1px solid var(--gtss-card-border);
+        border-radius: 12px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+      }
+      .modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 18px 24px;
+        border-bottom: 1px solid var(--gtss-card-border);
+      }
+      .modal-header-left {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+      .modal-header-title {
+        font-size: 17px;
+        font-weight: 800;
+        color: var(--gtss-text);
+      }
+      .modal-header-sub {
+        font-size: 12px;
+        color: var(--gtss-muted);
+      }
+      .modal-close {
+        width: 34px;
+        height: 34px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        background: transparent;
+        color: var(--gtss-muted);
+        cursor: pointer;
+        font-size: 16px;
+        display: grid;
+        place-items: center;
+      }
+      .modal-close:hover {
+        color: var(--gtss-text);
+        background: #334155;
+      }
+      .modal-body {
+        flex: 1;
+        display: flex;
+        overflow: hidden;
+      }
+
+      /* Context panel (left) */
+      .modal-context {
+        width: 320px;
+        flex-shrink: 0;
+        padding: 20px;
+        overflow-y: auto;
+        border-right: 1px solid var(--gtss-card-border);
+        background: #0b1220;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+      .ctx-label {
+        color: var(--gtss-muted);
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 4px;
+      }
+      .ctx-value {
+        color: var(--gtss-text);
+        font-size: 13px;
+      }
+      .ctx-value a {
+        color: #93c5fd;
+        text-decoration: underline;
+      }
+      .score-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 38px;
+        height: 24px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 900;
+        padding: 0 8px;
+      }
+      .score-red {
+        background: rgb(239 68 68 / 20%);
+        color: #fca5a5;
+      }
+      .score-amber {
+        background: rgb(245 158 11 / 20%);
+        color: #fcd34d;
+      }
+      .score-green {
+        background: rgb(34 197 94 / 20%);
+        color: #86efac;
+      }
+      .ctx-notes {
+        padding: 10px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        background: var(--gtss-card-bg);
+        color: var(--gtss-muted);
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        max-height: 120px;
+        overflow-y: auto;
+      }
+
+      /* Variants panel (right) */
+      .modal-variants {
+        flex: 1;
+        padding: 20px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .variant-section {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .variant-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .variant-label {
+        font-size: 13px;
+        font-weight: 800;
+        color: var(--gtss-text);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .char-counter {
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .char-ok {
+        color: var(--gtss-muted);
+      }
+      .char-warn {
+        color: var(--gtss-warning);
+      }
+      .char-over {
+        color: var(--gtss-danger);
+      }
+      .variant-textarea {
+        width: 100%;
+        min-height: 140px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        padding: 12px;
+        background: #0b1220;
+        color: var(--gtss-text);
+        font: inherit;
+        font-size: 13px;
+        line-height: 1.6;
+        resize: vertical;
+      }
+      .variant-textarea:focus {
+        border-color: var(--gtss-primary);
+        outline: none;
+      }
+
+      .modal-footer {
+        display: flex;
+        gap: 10px;
+        padding: 16px 24px;
+        border-top: 1px solid var(--gtss-card-border);
+        flex-wrap: wrap;
+      }
+      .modal-footer .spacer {
+        flex: 1;
+      }
+      .regen-loading {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        color: var(--gtss-muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .regen-loading.visible {
+        display: flex;
+      }
+
+      /* ---------- Settings Sidebar ---------- */
+      .settings-toggle {
+        position: fixed;
+        top: 80px;
+        right: 0;
+        z-index: 900;
+        width: 38px;
+        height: 38px;
+        border: 1px solid var(--gtss-card-border);
+        border-right: 0;
+        border-radius: var(--gtss-radius) 0 0 var(--gtss-radius);
+        background: var(--gtss-card-bg);
+        color: var(--gtss-muted);
+        cursor: pointer;
+        font-size: 18px;
+        display: grid;
+        place-items: center;
+      }
+      .settings-toggle:hover {
+        color: var(--gtss-text);
+      }
+      .settings-panel {
+        position: fixed;
+        top: var(--gtss-topbar-height);
+        right: -320px;
+        bottom: 0;
+        z-index: 800;
+        width: 300px;
+        background: var(--gtss-card-bg);
+        border-left: 1px solid var(--gtss-card-border);
+        padding: 20px;
+        overflow-y: auto;
+        transition: right 200ms ease;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      .settings-panel.open {
+        right: 0;
+      }
+      .settings-panel h3 {
+        font-size: 15px;
+        font-weight: 800;
+        color: var(--gtss-text);
+        margin: 0;
+      }
+      .settings-panel p {
+        font-size: 12px;
+        color: var(--gtss-muted);
+        margin: 0;
+      }
+      .setting-group {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .setting-label {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: var(--gtss-muted);
+        letter-spacing: 0.04em;
+      }
+      .setting-select,
+      .setting-input {
+        min-height: 34px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        padding: 6px 10px;
+        background: #0b1220;
+        color: var(--gtss-text);
+        font: inherit;
+        font-size: 13px;
+        width: 100%;
+      }
+      .radio-group {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .radio-pill {
+        padding: 6px 12px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: 999px;
+        background: transparent;
+        color: var(--gtss-muted);
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 120ms ease;
+      }
+      .radio-pill.selected {
+        background: var(--gtss-primary);
+        border-color: var(--gtss-primary);
+        color: #fff;
+      }
+
+      @media (max-width: 900px) {
+        .msg-page {
+          padding: 16px;
+        }
+        .stat-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+        .modal-context {
+          display: none;
+        }
+        .modal {
+          max-width: 100%;
+        }
+        .settings-panel {
+          width: 100%;
+          right: -100%;
+        }
+      }
+    </style>
+  </head>
+  <body data-page-title="Message Generator">
+    <!-- SHELL -->
+    <main class="page-content">
+      <div class="msg-page">
+        <!-- ============ STAT CARDS ============ -->
+        <section class="stat-grid" id="stat-grid">
+          <div class="stat-card">
+            <div class="stat-label">
+              <span class="stat-dot pending"></span> Pending
+            </div>
+            <div class="stat-value" id="stat-pending">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">
+              <span class="stat-dot approved"></span> Approved
+            </div>
+            <div class="stat-value" id="stat-approved">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">
+              <span class="stat-dot sent"></span> Sent
+            </div>
+            <div class="stat-value" id="stat-sent">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">
+              <span class="stat-dot skipped"></span> Skipped
+            </div>
+            <div class="stat-value" id="stat-skipped">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">
+              <span class="stat-dot followup"></span> Follow-ups
+            </div>
+            <div class="stat-value" id="stat-followups">—</div>
+          </div>
+        </section>
+
+        <!-- ============ ACTIONS ============ -->
+        <section
+          style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap"
+        >
+          <button id="generate-all-btn" class="btn btn-primary" type="button">
+            ⚡ Generate for All Qualified Leads
+          </button>
+        </section>
+
+        <!-- ============ PROGRESS ============ -->
+        <section id="progress-panel" class="progress-panel">
+          <div class="progress-label">
+            <span class="spinner"></span>
+            <span id="progress-label-text"
+              >Generating messages with Gemini AI...</span
+            >
+          </div>
+          <div class="progress-track">
+            <div id="progress-fill" class="progress-fill"></div>
+          </div>
+          <div class="progress-text" id="progress-text">
+            0 / 0 messages generated
+          </div>
+        </section>
+
+        <!-- ============ TABLE SECTION ============ -->
+        <section class="gtss-card" style="padding: 0; overflow: hidden">
+          <!-- Tabs -->
+          <div class="filter-tabs" id="filter-tabs">
+            <button class="filter-tab active" data-status="all">All</button>
+            <button class="filter-tab" data-status="pending">
+              Pending <span class="tab-count" id="tab-pending">0</span>
+            </button>
+            <button class="filter-tab" data-status="approved">
+              Approved <span class="tab-count" id="tab-approved">0</span>
+            </button>
+            <button class="filter-tab" data-status="sent">
+              Sent <span class="tab-count" id="tab-sent">0</span>
+            </button>
+            <button class="filter-tab" data-status="follow_up">
+              Follow-ups <span class="tab-count" id="tab-followups">0</span>
+            </button>
+          </div>
+
+          <div style="padding: 0 16px">
+            <div class="filter-row" style="padding: 12px 0">
+              <select id="platform-filter" class="filter-select">
+                <option value="">All Platforms</option>
+              </select>
+              <input
+                id="search-input"
+                class="filter-input"
+                type="text"
+                placeholder="Search lead name..."
+                aria-label="Search"
+              />
+              <span
+                id="total-badge"
+                style="
+                  margin-left: auto;
+                  color: var(--gtss-muted);
+                  font-size: 13px;
+                  font-weight: 700;
+                "
+                >0 messages</span
+              >
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Lead Name</th>
+                  <th>Platform</th>
+                  <th>Company</th>
+                  <th>Preview</th>
+                  <th>Variant</th>
+                  <th>Status</th>
+                  <th>Generated</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="msg-body"></tbody>
+            </table>
+            <div id="empty-state" class="empty-state">
+              <span style="display: block; margin-bottom: 10px; font-size: 32px"
+                >📬</span
+              >
+              No messages found for this filter.
+            </div>
+          </div>
+
+          <div class="pagination" style="padding: 14px 16px">
+            <button id="prev-page" class="btn btn-muted btn-sm" type="button">
+              Previous
+            </button>
+            <span id="page-label">Page 1 of 1</span>
+            <button id="next-page" class="btn btn-muted btn-sm" type="button">
+              Next
+            </button>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- ============ REVIEW MODAL ============ -->
+    <div id="modal-overlay" class="modal-overlay">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-header-left">
+            <div class="modal-header-title" id="modal-title">
+              Review Message
+            </div>
+            <div class="modal-header-sub" id="modal-sub"></div>
+          </div>
+          <button
+            id="modal-close"
+            class="modal-close"
+            type="button"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+        <div class="modal-body">
+          <!-- Left: Context -->
+          <div class="modal-context">
+            <div>
+              <div class="ctx-label">Name</div>
+              <div class="ctx-value" id="ctx-name">—</div>
+            </div>
+            <div>
+              <div class="ctx-label">Role</div>
+              <div class="ctx-value" id="ctx-role">—</div>
+            </div>
+            <div>
+              <div class="ctx-label">Company</div>
+              <div class="ctx-value" id="ctx-company">—</div>
+            </div>
+            <div>
+              <div class="ctx-label">Platform</div>
+              <div class="ctx-value" id="ctx-platform">—</div>
+            </div>
+            <div>
+              <div class="ctx-label">Score</div>
+              <div class="ctx-value" id="ctx-score">—</div>
+            </div>
+            <div>
+              <div class="ctx-label">AI Reasoning</div>
+              <div class="ctx-notes" id="ctx-reasoning">—</div>
+            </div>
+            <div>
+              <div class="ctx-label">Notes</div>
+              <div class="ctx-notes" id="ctx-notes">—</div>
+            </div>
+          </div>
+          <!-- Right: Variants -->
+          <div class="modal-variants">
+            <div class="variant-section">
+              <div class="variant-header">
+                <div class="variant-label">
+                  <span class="variant-badge variant-a">A</span> Variant A
+                  <span
+                    style="
+                      font-weight: 400;
+                      color: var(--gtss-muted);
+                      font-size: 12px;
+                    "
+                    >(Warm & Direct)</span
+                  >
+                </div>
+                <div class="char-counter" id="char-counter-a">0 / 0</div>
+              </div>
+              <textarea
+                id="variant-a-textarea"
+                class="variant-textarea"
+                rows="6"
+              ></textarea>
+            </div>
+            <div class="variant-section">
+              <div class="variant-header">
+                <div class="variant-label">
+                  <span class="variant-badge variant-b">B</span> Variant B
+                  <span
+                    style="
+                      font-weight: 400;
+                      color: var(--gtss-muted);
+                      font-size: 12px;
+                    "
+                    >(Curiosity-driven)</span
+                  >
+                </div>
+                <div class="char-counter" id="char-counter-b">0 / 0</div>
+              </div>
+              <textarea
+                id="variant-b-textarea"
+                class="variant-textarea"
+                rows="6"
+              ></textarea>
+            </div>
+            <div id="regen-loading" class="regen-loading">
+              <span class="spinner"></span> Regenerating variants...
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="modal-approve-a" class="btn btn-success" type="button">
+            ✓ Approve Variant A
+          </button>
+          <button id="modal-approve-b" class="btn btn-primary" type="button">
+            ✓ Approve Variant B
+          </button>
+          <button id="modal-regenerate" class="btn btn-outline" type="button">
+            ↺ Regenerate Both
+          </button>
+          <span class="spacer"></span>
+          <button id="modal-skip" class="btn btn-danger btn-sm" type="button">
+            Skip This Lead
+          </button>
+          <button
+            id="modal-close-btn"
+            class="btn btn-muted btn-sm"
+            type="button"
+          >
+            ✕ Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ SETTINGS TOGGLE ============ -->
+    <button
+      id="settings-toggle"
+      class="settings-toggle"
+      type="button"
+      aria-label="Settings"
+    >
+      ⚙
+    </button>
+
+    <!-- ============ SETTINGS PANEL ============ -->
+    <aside id="settings-panel" class="settings-panel">
+      <div>
+        <h3>Generation Settings</h3>
+        <p>Global rules for AI message drafting.</p>
+      </div>
+
+      <div class="setting-group">
+        <div class="setting-label">Templates</div>
+        <p style="color: var(--gtss-muted); font-size: 12px; line-height: 1.5">
+          Manage message templates from the Settings page. This panel only
+          controls drafting tone and product pitch.
+        </p>
+      </div>
+
+      <div class="setting-group">
+        <div class="setting-label">Tone</div>
+        <div class="radio-group" id="tone-group">
+          <button class="radio-pill selected" data-value="friendly">
+            Friendly
+          </button>
+          <button class="radio-pill" data-value="professional">
+            Professional
+          </button>
+          <button class="radio-pill" data-value="casual">Casual</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <div class="setting-label">Product Pitch</div>
+        <div class="radio-group" id="product-group">
+          <button class="radio-pill selected" data-value="Restaurant Manager">
+            Restaurant Manager
+          </button>
+          <button class="radio-pill" data-value="JustInTime">JustInTime</button>
+          <button class="radio-pill" data-value="custom">Custom</button>
+        </div>
+      </div>
+
+      <div class="setting-group" id="custom-pitch-group" style="display: none">
+        <div class="setting-label">Custom Pitch</div>
+        <input
+          id="custom-pitch-input"
+          class="setting-input"
+          type="text"
+          placeholder="Describe your product..."
+        />
+      </div>
+    </aside>
+
+    <script src="/js/app.js"></script>
+    <script src="/js/messages.js"></script>
+  </body>
+</html>

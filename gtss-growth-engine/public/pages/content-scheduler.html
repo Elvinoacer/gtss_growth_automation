@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Content Scheduler - GTSS Growth Engine</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "primary": "#004ac6", "on-primary": "#ffffff", "primary-container": "#2563eb",
+            "on-primary-container": "#eeefff", "secondary": "#515f74", "on-secondary": "#ffffff",
+            "secondary-container": "#d5e3fd", "surface": "#f7f9fb", "on-surface": "#191c1e",
+            "surface-variant": "#e0e3e5", "on-surface-variant": "#434655",
+            "outline": "#737686", "outline-variant": "#c3c6d7",
+            "error": "#ba1a1a", "on-error": "#ffffff", "error-container": "#ffdad6",
+            "inverse-surface": "#2d3133", "surface-container-lowest": "#ffffff",
+            "surface-container-low": "#f2f4f6", "surface-container": "#eceef0",
+            "primary-fixed": "#dbe1ff", "primary-fixed-dim": "#b4c5ff",
+            "inverse-primary": "#b4c5ff", "surface-bright": "#f7f9fb"
+          },
+          spacing: { "sidebar-width": "260px", "gutter": "1rem", "margin-page": "1.5rem" },
+          fontFamily: { "body-sm": ["Inter"], "headline-md": ["Inter"], "display-lg": ["Inter"], "label-caps": ["Inter"], "mono-code": ["JetBrains Mono"] },
+          fontSize: {
+            "headline-md": ["20px", { lineHeight: "28px", letterSpacing: "-0.01em", fontWeight: "600" }],
+            "label-caps": ["11px", { lineHeight: "16px", letterSpacing: "0.05em", fontWeight: "600" }],
+            "body-sm": ["14px", { lineHeight: "20px", fontWeight: "400" }],
+            "body-xs": ["12px", { lineHeight: "16px", fontWeight: "400" }],
+            "mono-code": ["12px", { lineHeight: "18px", fontWeight: "400" }]
+          }
+        }
+      }
+    }
+</script>
+<style>
+  .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+  .icon-fill { font-variation-settings: 'FILL' 1; }
+</style>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body data-page-title="Content Scheduler">
+<main class="page-content">
+<!-- SideNavBar -->
+<nav class="fixed left-0 top-0 h-full w-[260px] bg-inverse-surface border-r border-outline-variant flex flex-col py-6 z-20">
+  <div class="px-6 mb-8 flex items-center gap-3">
+    <div class="w-8 h-8 rounded bg-primary flex items-center justify-center text-on-primary font-bold">GE</div>
+    <div>
+      <h1 class="text-headline-md font-bold text-on-primary-container">Growth Engine</h1>
+      <p class="text-surface-variant text-body-xs opacity-70">GTSS Internal Ops</p>
+    </div>
+  </div>
+  <div class="flex flex-col flex-1 px-4 gap-1">
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/"><span class="material-symbols-outlined text-[20px]">dashboard</span>Dashboard</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/discovery"><span class="material-symbols-outlined text-[20px]">search</span>Lead Discovery</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/qualification"><span class="material-symbols-outlined text-[20px]">verified_user</span>Qualification</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/messages"><span class="material-symbols-outlined text-[20px]">chat</span>Messages</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/automation"><span class="material-symbols-outlined text-[20px]">smart_toy</span>Automation</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/crm"><span class="material-symbols-outlined text-[20px]">account_tree</span>CRM Pipeline</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-primary-fixed bg-primary-fixed-dim/20 font-bold border-l-4 border-primary" href="/scheduler"><span class="material-symbols-outlined text-[20px] icon-fill">calendar_month</span>Content Scheduler</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/settings"><span class="material-symbols-outlined text-[20px]">settings</span>Settings</a>
+  </div>
+</nav>
+
+<!-- Main Workspace -->
+<div class="ml-[260px] flex-1 flex flex-col h-screen overflow-hidden bg-surface">
+  <!-- TopNavBar -->
+  <header class="flex justify-between items-center h-16 px-margin-page border-b border-outline-variant bg-surface-container-lowest z-10 flex-shrink-0">
+    <div class="flex items-center gap-6">
+      <span class="font-headline-md font-bold text-on-surface">Content Scheduler</span>
+    </div>
+    <div class="flex items-center gap-4">
+      <div id="pause-banner" class="hidden items-center gap-2 bg-amber-50 border border-amber-300 text-amber-800 text-xs font-semibold px-3 py-1.5 rounded">
+        <span class="material-symbols-outlined text-[16px]">pause_circle</span>
+        Scheduler is paused — no posts will be published
+      </div>
+    </div>
+  </header>
+
+  <!-- Page Content -->
+  <main class="flex-1 p-margin-page overflow-y-auto flex gap-6">
+    <!-- Left Column: Compose + Calendar -->
+    <div class="flex-1 flex flex-col gap-6 min-w-0">
+
+      <!-- ============ COMPOSE PANEL ============ -->
+      <section class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-6">
+        <div class="flex justify-between items-center mb-4 border-b border-outline-variant/50 pb-4">
+          <h2 class="font-headline-md text-headline-md text-on-surface">Compose New Post</h2>
+          <div class="flex items-center gap-4">
+            <span class="font-label-caps text-label-caps text-on-surface-variant">PLATFORMS:</span>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" value="linkedin" class="platform-checkbox rounded border-outline-variant text-primary focus:ring-primary h-4 w-4"/>
+              <span class="text-body-sm text-on-surface">LinkedIn</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" value="x" class="platform-checkbox rounded border-outline-variant text-primary focus:ring-primary h-4 w-4"/>
+              <span class="text-body-sm text-on-surface">X</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" value="facebook" class="platform-checkbox rounded border-outline-variant text-primary focus:ring-primary h-4 w-4"/>
+              <span class="text-body-sm text-on-surface">Facebook</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" value="instagram" class="platform-checkbox rounded border-outline-variant text-primary focus:ring-primary h-4 w-4"/>
+              <span class="text-body-sm text-on-surface">Instagram</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-12 gap-6">
+          <!-- Text Input Area -->
+          <div class="col-span-8 flex flex-col gap-4">
+            <div class="relative">
+              <textarea id="post-body" class="w-full rounded border border-outline-variant bg-surface-bright p-3 text-body-sm text-on-surface focus:border-primary focus:ring-1 focus:ring-primary resize-none" placeholder="Draft your content here..." rows="6"></textarea>
+              <div id="char-counters" class="absolute bottom-3 right-3 font-mono-code text-mono-code text-on-surface-variant flex gap-3">
+                <!-- Populated by JS -->
+              </div>
+            </div>
+
+            <!-- AI Generator Sub-panel -->
+            <div class="bg-surface-container-low rounded p-4 border border-outline-variant/50">
+              <div class="flex items-center gap-2 mb-3">
+                <span class="material-symbols-outlined text-primary text-[18px]">auto_awesome</span>
+                <span class="font-label-caps text-label-caps text-on-surface">AI CAPTION GENERATOR</span>
+              </div>
+              <div class="flex gap-2 mb-3">
+                <input id="ai-topic" class="flex-1 rounded border border-outline-variant bg-surface p-2 text-body-sm h-9" placeholder="Enter topic or keywords..." type="text"/>
+              </div>
+              <div class="flex items-center gap-4">
+                <span class="text-body-xs text-on-surface-variant">Tone:</span>
+                <label class="flex items-center gap-1.5 cursor-pointer"><input type="radio" name="ai-tone" value="informative" class="text-primary focus:ring-primary h-3.5 w-3.5"/><span class="text-body-xs">Informative</span></label>
+                <label class="flex items-center gap-1.5 cursor-pointer"><input type="radio" name="ai-tone" value="promotional" class="text-primary focus:ring-primary h-3.5 w-3.5"/><span class="text-body-xs">Promotional</span></label>
+                <label class="flex items-center gap-1.5 cursor-pointer"><input type="radio" name="ai-tone" value="engaging" checked class="text-primary focus:ring-primary h-3.5 w-3.5"/><span class="text-body-xs">Engaging</span></label>
+                <button id="generate-caption-btn" class="ml-auto bg-secondary-container text-on-surface px-4 h-8 rounded text-body-sm flex items-center gap-2 hover:opacity-90 transition-opacity">
+                  <span class="material-symbols-outlined text-[16px]">auto_awesome</span> Generate
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Media + Controls -->
+          <div class="col-span-4 flex flex-col gap-4">
+            <!-- Media Upload -->
+            <div id="media-dropzone" class="flex-1 border-2 border-dashed border-outline-variant rounded bg-surface flex flex-col items-center justify-center p-4 hover:border-primary hover:bg-surface-variant/20 transition-colors cursor-pointer group min-h-[100px] relative">
+              <input type="file" id="media-file-input" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept="image/*,video/*"/>
+              <div id="media-placeholder" class="flex flex-col items-center">
+                <span class="material-symbols-outlined text-outline group-hover:text-primary text-[32px] mb-2">cloud_upload</span>
+                <span class="text-body-sm text-on-surface-variant text-center">Drag & drop media<br/>or click to browse</span>
+              </div>
+              <div id="media-preview" class="hidden flex items-center gap-3 w-full">
+                <img id="media-thumb" class="w-16 h-16 rounded object-cover border border-outline-variant" src="" alt=""/>
+                <div class="flex-1 min-w-0">
+                  <p id="media-filename" class="text-body-xs text-on-surface truncate"></p>
+                </div>
+                <button id="media-remove-btn" class="text-error hover:bg-error-container/30 rounded p-1 transition-colors">
+                  <span class="material-symbols-outlined text-[18px]">close</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Schedule Picker -->
+            <div class="flex gap-2">
+              <input id="schedule-date" type="date" class="flex-1 rounded border border-outline-variant bg-surface p-2 text-body-sm h-9 text-on-surface"/>
+              <input id="schedule-time" type="time" class="w-28 rounded border border-outline-variant bg-surface p-2 text-body-sm h-9 text-on-surface"/>
+            </div>
+            <p class="text-body-xs text-on-surface-variant -mt-2">
+              <span class="font-semibold">Suggested:</span> LI: Tue/Thu 8–10am · X: Mon–Fri 12–2pm
+            </p>
+
+            <!-- Actions -->
+            <div class="flex gap-2 mt-auto">
+              <button id="post-now-btn" class="flex-1 border border-primary text-primary bg-surface h-9 rounded text-body-sm font-semibold hover:bg-primary/5 transition-colors flex items-center justify-center gap-1">
+                <span class="material-symbols-outlined text-[16px]">send</span> Post Now
+              </button>
+              <button id="schedule-btn" class="flex-[2] bg-primary text-on-primary h-9 rounded text-body-sm font-semibold hover:opacity-90 transition-opacity flex items-center justify-center gap-1">
+                <span class="material-symbols-outlined text-[16px]">schedule</span> Schedule
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ TABS: Calendar / Published Log ============ -->
+      <div class="flex border-b border-outline-variant gap-1">
+        <button id="tab-calendar" class="px-4 py-2 text-body-sm font-semibold text-primary border-b-2 border-primary">Calendar</button>
+        <button id="tab-published" class="px-4 py-2 text-body-sm font-semibold text-on-surface-variant hover:text-on-surface border-b-2 border-transparent">Published Log</button>
+      </div>
+
+      <!-- ============ CONTENT CALENDAR ============ -->
+      <section id="calendar-section" class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm flex-1 flex flex-col min-h-[400px]">
+        <div class="p-4 border-b border-outline-variant flex justify-between items-center bg-surface-container-low rounded-t-lg">
+          <h2 class="font-headline-md text-headline-md text-on-surface flex items-center gap-2">
+            <span class="material-symbols-outlined">calendar_month</span>
+            Content Calendar
+          </h2>
+          <div class="flex items-center gap-4">
+            <span id="week-range-label" class="font-label-caps text-label-caps text-on-surface-variant"></span>
+            <div class="flex rounded border border-outline-variant overflow-hidden">
+              <button id="prev-week-btn" class="px-2 py-1 bg-surface hover:bg-surface-variant transition-colors border-r border-outline-variant">
+                <span class="material-symbols-outlined text-[18px]">chevron_left</span>
+              </button>
+              <button id="today-btn" class="px-3 py-1 bg-surface text-body-sm hover:bg-surface-variant transition-colors">Today</button>
+              <button id="next-week-btn" class="px-2 py-1 bg-surface hover:bg-surface-variant transition-colors border-l border-outline-variant">
+                <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <!-- Calendar Grid -->
+        <div class="flex-1 overflow-auto">
+          <div id="calendar-grid" class="grid grid-cols-7 min-w-[800px]">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ PUBLISHED LOG (hidden by default) ============ -->
+      <section id="published-section" class="hidden bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm flex-1 flex flex-col">
+        <div class="overflow-x-auto flex-1">
+          <table class="w-full text-left text-sm whitespace-nowrap">
+            <thead class="bg-surface-container-low border-b border-outline-variant sticky top-0">
+              <tr>
+                <th class="px-4 py-3 font-semibold text-on-surface-variant">Platform</th>
+                <th class="px-4 py-3 font-semibold text-on-surface-variant">Post Preview</th>
+                <th class="px-4 py-3 font-semibold text-on-surface-variant">Published At</th>
+                <th class="px-4 py-3 font-semibold text-on-surface-variant">Likes</th>
+                <th class="px-4 py-3 font-semibold text-on-surface-variant">Comments</th>
+                <th class="px-4 py-3 font-semibold text-on-surface-variant">Reach</th>
+                <th class="px-4 py-3 font-semibold text-on-surface-variant">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="published-body" class="divide-y divide-outline-variant">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ RIGHT SIDEBAR: Queue + Controls ============ -->
+    <aside class="w-[280px] flex flex-col gap-6 flex-shrink-0">
+      <!-- Queue Status Panel -->
+      <div class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm flex flex-col">
+        <div class="p-4 border-b border-outline-variant flex justify-between items-center">
+          <h3 class="text-[16px] font-semibold text-on-surface">Upcoming Queue</h3>
+          <span id="queue-count-badge" class="bg-secondary-container text-on-surface px-2 py-0.5 rounded-full text-label-caps font-label-caps">0</span>
+        </div>
+        <div id="queue-list" class="flex-1 overflow-y-auto p-3 flex flex-col gap-2 max-h-[400px]">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+      <!-- Scheduler Controls -->
+      <div class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4 flex flex-col gap-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-[16px] font-semibold text-on-surface">Scheduler Status</div>
+            <div id="scheduler-status-label" class="text-body-xs text-on-surface-variant">Currently active</div>
+          </div>
+          <button id="pause-toggle" class="w-10 h-6 bg-primary rounded-full relative cursor-pointer shadow-inner transition-colors">
+            <div id="pause-toggle-dot" class="w-4 h-4 bg-white rounded-full absolute right-1 top-1 shadow-sm transition-all"></div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Live Publish Log -->
+      <div id="live-log-panel" class="hidden bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm flex flex-col">
+        <div class="p-3 border-b border-outline-variant flex items-center gap-2">
+          <span class="material-symbols-outlined text-primary text-[18px] animate-spin">sync</span>
+          <h3 class="text-[14px] font-semibold text-on-surface">Publishing...</h3>
+        </div>
+        <div id="live-log-body" class="p-3 max-h-[200px] overflow-y-auto text-body-xs text-on-surface-variant space-y-1 font-mono-code">
+          <!-- Populated by SSE -->
+        </div>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<!-- Post Edit Modal -->
+<div id="edit-modal-backdrop" class="fixed inset-0 bg-black/30 z-50 hidden flex items-center justify-center">
+  <div id="edit-modal" class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-xl w-[560px] max-h-[80vh] overflow-y-auto">
+    <div class="p-6 border-b border-outline-variant flex justify-between items-center">
+      <h2 class="font-headline-md text-headline-md text-on-surface">Edit Post</h2>
+      <button id="edit-modal-close" class="text-on-surface-variant hover:text-on-surface"><span class="material-symbols-outlined">close</span></button>
+    </div>
+    <div class="p-6 space-y-4">
+      <div>
+        <label class="text-label-caps text-label-caps text-on-surface-variant block mb-2">PLATFORMS</label>
+        <div class="flex gap-4" id="edit-platforms-group">
+          <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" value="linkedin" class="edit-platform-cb rounded border-outline-variant text-primary h-4 w-4"/><span class="text-body-sm">LinkedIn</span></label>
+          <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" value="x" class="edit-platform-cb rounded border-outline-variant text-primary h-4 w-4"/><span class="text-body-sm">X</span></label>
+          <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" value="facebook" class="edit-platform-cb rounded border-outline-variant text-primary h-4 w-4"/><span class="text-body-sm">Facebook</span></label>
+          <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" value="instagram" class="edit-platform-cb rounded border-outline-variant text-primary h-4 w-4"/><span class="text-body-sm">Instagram</span></label>
+        </div>
+      </div>
+      <div>
+        <label class="text-label-caps text-label-caps text-on-surface-variant block mb-2">POST BODY</label>
+        <textarea id="edit-body" class="w-full rounded border border-outline-variant bg-surface p-3 text-body-sm text-on-surface focus:border-primary focus:ring-1 focus:ring-primary resize-none" rows="5"></textarea>
+      </div>
+      <div class="flex gap-2">
+        <div class="flex-1">
+          <label class="text-label-caps text-label-caps text-on-surface-variant block mb-2">DATE</label>
+          <input id="edit-date" type="date" class="w-full rounded border border-outline-variant bg-surface p-2 text-body-sm h-9"/>
+        </div>
+        <div class="w-32">
+          <label class="text-label-caps text-label-caps text-on-surface-variant block mb-2">TIME</label>
+          <input id="edit-time" type="time" class="w-full rounded border border-outline-variant bg-surface p-2 text-body-sm h-9"/>
+        </div>
+      </div>
+    </div>
+    <div class="p-6 border-t border-outline-variant flex justify-between">
+      <button id="edit-delete-btn" class="px-4 py-2 rounded text-error border border-error hover:bg-error-container/20 text-body-sm font-semibold transition-colors">Delete Post</button>
+      <div class="flex gap-2">
+        <button id="edit-publish-btn" class="px-4 py-2 rounded border border-primary text-primary hover:bg-primary/5 text-body-sm font-semibold transition-colors">Post Now</button>
+        <button id="edit-save-btn" class="px-4 py-2 rounded bg-primary text-on-primary text-body-sm font-semibold hover:opacity-90 transition-opacity">Update Schedule</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</main>
+<script src="/js/app.js"></script>
+<script src="/js/scheduler.js"></script>
+</body></html>

@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lead Discovery - Growth Engine</title>
+    <link rel="stylesheet" href="/css/style.css" />
+    <style>
+      .discovery-page {
+        display: grid;
+        gap: 22px;
+        padding: 28px;
+      }
+      .discovery-card {
+        padding: 22px;
+      }
+      .discovery-card h2,
+      .history-header h2 {
+        margin: 0;
+        color: var(--gtss-text);
+        font-size: 20px;
+      }
+      .discovery-form {
+        display: grid;
+        gap: 18px;
+        margin-top: 18px;
+      }
+      .field-grid {
+        display: grid;
+        grid-template-columns: 1fr 220px;
+        gap: 16px;
+      }
+      .field,
+      .filter-field {
+        display: grid;
+        gap: 8px;
+        color: var(--gtss-muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .field input,
+      .filter-field input,
+      .filter-field select {
+        min-height: 42px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        padding: 9px 11px;
+        background: #0b1220;
+        color: var(--gtss-text);
+        font: inherit;
+      }
+      .platform-row {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(140px, 1fr));
+        gap: 10px;
+      }
+      .platform-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 42px;
+        padding: 10px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        color: var(--gtss-text);
+        cursor: pointer;
+      }
+      .platform-option input {
+        accent-color: var(--gtss-primary);
+      }
+      .primary-button,
+      .secondary-button,
+      .danger-button {
+        min-height: 40px;
+        border: 0;
+        border-radius: var(--gtss-radius);
+        padding: 0 14px;
+        color: #ffffff;
+        font: inherit;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .primary-button {
+        background: var(--gtss-primary);
+      }
+      .secondary-button {
+        background: #334155;
+      }
+      .danger-button {
+        background: var(--gtss-danger);
+      }
+      .running-panel,
+      .result-summary {
+        display: none;
+        margin-top: 18px;
+      }
+      .running-panel.visible,
+      .result-summary.visible {
+        display: grid;
+        gap: 14px;
+      }
+      .spinner-line {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: var(--gtss-text);
+        font-weight: 800;
+      }
+      .spinner {
+        width: 22px;
+        height: 22px;
+        border: 3px solid #334155;
+        border-top-color: var(--gtss-primary);
+        border-radius: 999px;
+        animation: spin 900ms linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .live-log {
+        height: 200px;
+        overflow: auto;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        padding: 12px;
+        background: #020617;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 13px;
+      }
+      .log-info {
+        color: #94a3b8;
+      }
+      .log-success {
+        color: #22c55e;
+      }
+      .log-error {
+        color: #ef4444;
+      }
+      .log-warning {
+        color: #f59e0b;
+      }
+      .log-captcha {
+        color: #f97316;
+        font-weight: bold;
+      }
+      .results-header,
+      .bulk-bar,
+      .history-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .count-badge {
+        border-radius: 999px;
+        padding: 5px 10px;
+        background: rgb(59 130 246 / 18%);
+        color: var(--gtss-primary);
+        font-size: 13px;
+        font-weight: 900;
+      }
+      .filter-bar {
+        display: grid;
+        grid-template-columns: 180px 1fr 170px 170px auto;
+        gap: 12px;
+        margin: 18px 0;
+        align-items: end;
+      }
+      .bulk-bar {
+        display: none;
+        margin-bottom: 12px;
+        padding: 12px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        background: #0b1220;
+      }
+      .bulk-bar.visible {
+        display: flex;
+      }
+      .table-wrap {
+        overflow: auto;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 980px;
+      }
+      th,
+      td {
+        padding: 12px;
+        border-bottom: 1px solid var(--gtss-card-border);
+        text-align: left;
+        color: var(--gtss-text);
+        font-size: 14px;
+      }
+      th {
+        color: var(--gtss-muted);
+        font-size: 12px;
+        text-transform: uppercase;
+      }
+      .platform-badge {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 4px 8px;
+        font-size: 12px;
+        font-weight: 900;
+      }
+      .platform-linkedin {
+        background: rgb(10 102 194 / 20%);
+        color: #60a5fa;
+      }
+      .platform-x {
+        background: rgb(241 245 249 / 14%);
+        color: #f8fafc;
+      }
+      .platform-facebook {
+        background: rgb(24 119 242 / 20%);
+        color: #93c5fd;
+      }
+      .platform-instagram {
+        background: rgb(236 72 153 / 20%);
+        color: #f9a8d4;
+      }
+      .url-link {
+        max-width: 160px;
+        display: inline-block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: #93c5fd;
+        vertical-align: middle;
+      }
+      .row-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .row-button {
+        border: 1px solid var(--gtss-card-border);
+        border-radius: 6px;
+        padding: 6px 8px;
+        background: #0b1220;
+        color: var(--gtss-text);
+        cursor: pointer;
+      }
+      .row-button.danger {
+        color: #fecaca;
+      }
+      .empty-state {
+        display: none;
+        padding: 42px 16px;
+        text-align: center;
+        color: var(--gtss-muted);
+      }
+      .empty-state.visible {
+        display: block;
+      }
+      .search-icon {
+        display: block;
+        margin-bottom: 10px;
+        font-size: 32px;
+      }
+      .pagination {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 12px;
+        margin-top: 14px;
+        color: var(--gtss-muted);
+      }
+      .history-toggle {
+        width: 100%;
+        border: 0;
+        background: transparent;
+        color: var(--gtss-text);
+        text-align: left;
+        cursor: pointer;
+      }
+      .history-body {
+        display: none;
+        margin-top: 16px;
+      }
+      .history-body.visible {
+        display: block;
+      }
+      tr.fading {
+        opacity: 0;
+        transition: opacity 180ms ease;
+      }
+      @media (max-width: 900px) {
+        .discovery-page {
+          padding: 18px;
+        }
+        .field-grid,
+        .platform-row,
+        .filter-bar {
+          grid-template-columns: 1fr;
+        }
+        .primary-button {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body data-page-title="Lead Discovery">
+    <!-- SHELL -->
+    <main class="page-content">
+      <div class="discovery-page">
+        <section class="discovery-card gtss-card">
+          <h2>Start New Discovery Run</h2>
+          <form id="discovery-form" class="discovery-form">
+            <div class="field-grid">
+              <label class="field"
+                >Keyword
+                <input
+                  id="keyword-input"
+                  name="keyword"
+                  type="text"
+                  placeholder="e.g. restaurant owner Nairobi"
+                  required
+                />
+              </label>
+              <label class="field"
+                >Max leads to collect
+                <input
+                  id="max-leads-input"
+                  name="maxLeads"
+                  type="number"
+                  value="20"
+                  min="1"
+                  max="100"
+                />
+              </label>
+            </div>
+            <div
+              id="platform-row"
+              class="platform-row"
+              aria-label="Platforms"
+            ></div>
+            <button class="primary-button" type="submit">
+              Start Discovery
+            </button>
+          </form>
+          <div id="running-panel" class="running-panel">
+            <div class="spinner-line">
+              <span class="spinner" aria-hidden="true"></span
+              ><span id="running-text">Discovering leads...</span>
+            </div>
+            <div id="live-log" class="live-log" aria-live="polite"></div>
+            <button id="stop-button" class="danger-button" type="button">
+              Stop
+            </button>
+          </div>
+          <div id="result-summary" class="result-summary gtss-card">
+            <strong id="result-summary-text">Discovery complete.</strong>
+          </div>
+        </section>
+
+        <section class="discovery-card gtss-card">
+          <div class="results-header">
+            <h2>
+              Discovered Leads
+              <span id="total-count" class="count-badge">0</span>
+            </h2>
+          </div>
+          <div class="filter-bar">
+            <label class="filter-field"
+              >Platform
+              <select id="platform-filter">
+                <option value="">All</option>
+              </select>
+            </label>
+            <label class="filter-field"
+              >Keyword
+              <input
+                id="keyword-filter"
+                type="text"
+                placeholder="Filter source keyword"
+              />
+            </label>
+            <label class="filter-field"
+              >From
+              <input id="date-from-filter" type="date" />
+            </label>
+            <label class="filter-field"
+              >To
+              <input id="date-to-filter" type="date" />
+            </label>
+            <button id="apply-filters" class="secondary-button" type="button">
+              Apply Filters
+            </button>
+          </div>
+          <div id="bulk-bar" class="bulk-bar">
+            <span id="bulk-count">0 selected</span>
+            <div>
+              <button id="bulk-qualify" class="primary-button" type="button">
+                Qualify Selected (0)
+              </button>
+              <button id="bulk-dismiss" class="danger-button" type="button">
+                Dismiss Selected
+              </button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>
+                    <input
+                      id="select-all"
+                      type="checkbox"
+                      aria-label="Select all leads"
+                    />
+                  </th>
+                  <th>Name</th>
+                  <th>Role</th>
+                  <th>Company</th>
+                  <th>Location</th>
+                  <th>Platform</th>
+                  <th>Profile URL</th>
+                  <th>Discovered</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="results-body"></tbody>
+            </table>
+            <div id="empty-state" class="empty-state">
+              <span class="search-icon">⌕</span>
+              No leads discovered yet. Start a discovery run above.
+            </div>
+          </div>
+          <div class="pagination">
+            <button id="prev-page" class="secondary-button" type="button">
+              Previous
+            </button>
+            <span id="page-label">Page 1 of 1</span>
+            <button id="next-page" class="secondary-button" type="button">
+              Next
+            </button>
+          </div>
+        </section>
+
+        <section class="discovery-card gtss-card">
+          <button id="history-toggle" class="history-toggle" type="button">
+            <div class="history-header">
+              <h2 id="history-title">▼ Discovery History</h2>
+            </div>
+          </button>
+          <div id="history-body" class="history-body">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Keyword</th>
+                    <th>Platforms</th>
+                    <th>Leads Found</th>
+                    <th>Date</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="history-table-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script src="/js/app.js"></script>
+    <script src="/js/discovery.js"></script>
+  </body>
+</html>

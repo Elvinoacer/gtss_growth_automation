@@ -1,0 +1,10 @@
+npm rebuild better-sqlite3
+npm start
+
+
+or 
+
+rm -rf node_modules package-lock.json
+npm install
+npx playwright install chromium
+npm start

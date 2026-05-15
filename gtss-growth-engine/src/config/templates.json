@@ -1,0 +1,8 @@
+{
+  "linkedin_connect": "Hi {{lead_name}}, I noticed you run {{company}} — I work with restaurant owners in Kenya to help them manage orders and staff more efficiently. Would love to connect!",
+  "linkedin_dm": "Hi {{lead_name}},\n\nI came across your profile and was impressed by what you're building at {{company}}.\n\nI run GTSS — we help restaurants in Kenya streamline operations with affordable software. I think {{product}} could really help your team.\n\nWould you be open to a quick 15-min call this week?\n\nBest,\nElvin",
+  "x_dm": "Hey {{lead_name}}, love what you're doing at {{company}}. We help restaurants in Kenya run smoother with our ops software. Worth a quick chat?",
+  "instagram_dm": "Hey {{lead_name}} 👋 Your restaurant looks amazing! We help places like {{company}} manage orders and staff more efficiently. Mind if I share more?",
+  "facebook_dm": "Hi {{lead_name}}, I noticed you run {{company}} — we help restaurants across Kenya with operations software. Would love to tell you more!",
+  "follow_up": "Hi {{lead_name}}, just wanted to follow up on my previous message. I know things get busy — happy to chat whenever works for you!"
+}

@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Login | GTSS Growth Engine</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        color: #0f172a;
+        background: #0f172a;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .login-shell {
+        width: min(420px, 100%);
+      }
+
+      .brand {
+        margin-bottom: 28px;
+        text-align: center;
+        color: #ffffff;
+      }
+
+      .brand strong {
+        display: block;
+        font-size: 48px;
+        line-height: 1;
+        letter-spacing: 0;
+      }
+
+      .brand span {
+        display: block;
+        margin-top: 8px;
+        color: #cbd5e1;
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      .card {
+        width: 100%;
+        padding: 28px;
+        background: #ffffff;
+        border-radius: 8px;
+        box-shadow: 0 24px 60px rgb(0 0 0 / 26%);
+      }
+
+      h1 {
+        margin: 0 0 20px;
+        font-size: 24px;
+        line-height: 1.2;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      input {
+        width: 100%;
+        min-height: 46px;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        padding: 10px 12px;
+        font: inherit;
+      }
+
+      input:focus {
+        border-color: #2563eb;
+        outline: 3px solid rgb(37 99 235 / 18%);
+      }
+
+      button {
+        width: 100%;
+        min-height: 46px;
+        margin-top: 18px;
+        border: 0;
+        border-radius: 6px;
+        background: #2563eb;
+        color: #ffffff;
+        font: inherit;
+        font-weight: 800;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: #1d4ed8;
+      }
+
+      .error {
+        display: none;
+        margin-bottom: 16px;
+        padding: 10px 12px;
+        border-radius: 6px;
+        background: #fee2e2;
+        color: #991b1b;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .error.visible {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="login-shell">
+      <div class="brand" aria-label="GTSS Growth Engine">
+        <strong>GTSS</strong>
+        <span>Growth Engine</span>
+      </div>
+      <form class="card" method="post" action="/login">
+        <h1>Access Required</h1>
+        <div id="login-error" class="error" role="alert">Incorrect passphrase</div>
+        <label for="passphrase">Passphrase</label>
+        <input id="passphrase" name="passphrase" type="password" autocomplete="current-password" required autofocus>
+        <button type="submit">Enter</button>
+      </form>
+    </main>
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('error') === '1') {
+        document.getElementById('login-error').classList.add('visible');
+      }
+    </script>
+  </body>
+</html>

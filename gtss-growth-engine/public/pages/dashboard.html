@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Dashboard - GTSS Growth Engine</title>
+<meta name="description" content="GTSS Growth Engine analytics dashboard — track leads, outreach funnels, automation health, and content scheduling."/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          "primary":"#004ac6","on-primary":"#fff","primary-container":"#2563eb","on-primary-container":"#eeefff",
+          "secondary":"#515f74","secondary-container":"#d5e3fd",
+          "surface":"#f7f9fb","on-surface":"#191c1e","surface-variant":"#e0e3e5","on-surface-variant":"#434655",
+          "outline":"#737686","outline-variant":"#c3c6d7",
+          "error":"#ba1a1a","error-container":"#ffdad6",
+          "inverse-surface":"#2d3133","surface-container-lowest":"#ffffff",
+          "surface-container-low":"#f2f4f6","surface-container":"#eceef0",
+          "primary-fixed":"#dbe1ff","primary-fixed-dim":"#b4c5ff","surface-bright":"#f7f9fb"
+        },
+        spacing:{"sidebar-width":"260px","margin-page":"1.5rem"},
+        fontFamily:{"body-sm":["Inter"],"headline-md":["Inter"],"label-caps":["Inter"],"mono-code":["JetBrains Mono"]},
+        fontSize:{
+          "headline-md":["20px",{lineHeight:"28px",letterSpacing:"-0.01em",fontWeight:"600"}],
+          "label-caps":["11px",{lineHeight:"16px",letterSpacing:"0.05em",fontWeight:"600"}],
+          "body-sm":["14px",{lineHeight:"20px",fontWeight:"400"}],
+          "body-xs":["12px",{lineHeight:"16px",fontWeight:"400"}],
+          "mono-code":["12px",{lineHeight:"18px",fontWeight:"400"}]
+        }
+      }
+    }
+  }
+</script>
+<style>
+  .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24}
+  .icon-fill{font-variation-settings:'FILL' 1}
+  @keyframes pulse-in{0%{opacity:0;transform:translateY(8px)}100%{opacity:1;transform:translateY(0)}}
+  .animate-card{animation:pulse-in .45s ease-out both}
+  .animate-card:nth-child(2){animation-delay:.06s}
+  .animate-card:nth-child(3){animation-delay:.12s}
+  .animate-card:nth-child(4){animation-delay:.18s}
+  .animate-card:nth-child(5){animation-delay:.24s}
+  .animate-card:nth-child(6){animation-delay:.30s}
+</style>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body data-page-title="Dashboard">
+<main class="page-content">
+<!-- Sidebar -->
+<nav class="fixed left-0 top-0 h-full w-[260px] bg-inverse-surface border-r border-outline-variant flex flex-col py-6 z-20">
+  <div class="px-6 mb-8 flex items-center gap-3">
+    <div class="w-8 h-8 rounded bg-primary flex items-center justify-center text-on-primary font-bold">GE</div>
+    <div><h1 class="text-headline-md font-bold text-on-primary-container">Growth Engine</h1><p class="text-surface-variant text-body-xs opacity-70">GTSS Internal Ops</p></div>
+  </div>
+  <div class="flex flex-col flex-1 px-4 gap-1">
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-primary-fixed bg-primary-fixed-dim/20 font-bold border-l-4 border-primary" href="/"><span class="material-symbols-outlined text-[20px] icon-fill">dashboard</span>Dashboard</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/discovery"><span class="material-symbols-outlined text-[20px]">search</span>Lead Discovery</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/qualification"><span class="material-symbols-outlined text-[20px]">verified_user</span>Qualification</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/messages"><span class="material-symbols-outlined text-[20px]">chat</span>Messages</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/automation"><span class="material-symbols-outlined text-[20px]">smart_toy</span>Automation</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/crm"><span class="material-symbols-outlined text-[20px]">account_tree</span>CRM Pipeline</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/scheduler"><span class="material-symbols-outlined text-[20px]">calendar_month</span>Content Scheduler</a>
+    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/settings"><span class="material-symbols-outlined text-[20px]">settings</span>Settings</a>
+  </div>
+</nav>
+
+<!-- Main area -->
+<div class="ml-[260px] flex-1 flex flex-col h-screen overflow-hidden bg-surface">
+  <!-- Top bar -->
+  <header class="flex justify-between items-center h-16 px-margin-page border-b border-outline-variant bg-surface-container-lowest z-10 flex-shrink-0">
+    <span class="font-headline-md font-bold text-on-surface">Dashboard</span>
+    <div class="flex items-center gap-3">
+      <div class="relative">
+        <button id="export-btn" class="flex items-center gap-1 px-3 py-1.5 border border-outline-variant rounded text-body-sm text-on-surface-variant hover:bg-surface-variant transition-colors">
+          <span class="material-symbols-outlined text-[16px]">download</span> Export
+        </button>
+        <div id="export-dropdown" class="hidden absolute right-0 top-10 bg-surface-container-lowest border border-outline-variant rounded shadow-lg z-30 w-44 py-1">
+          <a href="/api/dashboard/export?dataType=leads" class="block px-4 py-2 text-body-sm hover:bg-surface-container-low">Leads CSV</a>
+          <a href="/api/dashboard/export?dataType=messages" class="block px-4 py-2 text-body-sm hover:bg-surface-container-low">Messages CSV</a>
+          <a href="/api/dashboard/export?dataType=touchpoints" class="block px-4 py-2 text-body-sm hover:bg-surface-container-low">Touchpoints CSV</a>
+          <a href="/api/dashboard/export?dataType=posts" class="block px-4 py-2 text-body-sm hover:bg-surface-container-low">Posts CSV</a>
+          <a href="/api/dashboard/export?dataType=all" class="block px-4 py-2 text-body-sm hover:bg-surface-container-low border-t border-outline-variant">All Data CSV</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Scrollable content -->
+  <main class="flex-1 p-margin-page overflow-y-auto space-y-6">
+
+    <!-- ══════ STAT CARDS ══════ -->
+    <div id="stat-cards" class="grid grid-cols-6 gap-4">
+      <div class="animate-card bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4">
+        <div class="text-body-xs text-on-surface-variant mb-1">Total Leads</div>
+        <div id="stat-total" class="text-2xl font-bold text-on-surface">—</div>
+        <div id="stat-delta" class="text-body-xs text-green-600 mt-1"></div>
+      </div>
+      <div class="animate-card bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4">
+        <div class="text-body-xs text-on-surface-variant mb-1">Qualified</div>
+        <div id="stat-qualified" class="text-2xl font-bold text-on-surface">—</div>
+        <div id="stat-qualified-pct" class="text-body-xs text-on-surface-variant mt-1"></div>
+      </div>
+      <div class="animate-card bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4">
+        <div class="text-body-xs text-on-surface-variant mb-1">Messages Sent</div>
+        <div id="stat-messaged" class="text-2xl font-bold text-on-surface">—</div>
+        <div id="stat-messaged-week" class="text-body-xs text-on-surface-variant mt-1"></div>
+      </div>
+      <div class="animate-card bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4">
+        <div class="text-body-xs text-on-surface-variant mb-1">Replies</div>
+        <div id="stat-replied" class="text-2xl font-bold text-on-surface">—</div>
+        <div id="stat-reply-rate" class="text-body-xs text-on-surface-variant mt-1"></div>
+      </div>
+      <div class="animate-card bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4">
+        <div class="text-body-xs text-on-surface-variant mb-1">Meetings Booked</div>
+        <div id="stat-meetings" class="text-2xl font-bold text-primary">—</div>
+      </div>
+      <div class="animate-card bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4">
+        <div class="text-body-xs text-on-surface-variant mb-1">Converted</div>
+        <div id="stat-converted" class="text-2xl font-bold text-green-600">—</div>
+      </div>
+    </div>
+
+    <!-- ══════ ROW 2: Funnel + Actions ══════ -->
+    <div class="grid grid-cols-3 gap-6">
+
+      <!-- Funnel Chart -->
+      <div class="col-span-2 bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-5">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="font-headline-md text-headline-md text-on-surface">Outreach Funnel</h2>
+          <div class="flex rounded border border-outline-variant overflow-hidden">
+            <button id="funnel-all-btn" class="px-3 py-1 text-body-xs bg-primary text-on-primary font-semibold">All Platforms</button>
+            <button id="funnel-platform-btn" class="px-3 py-1 text-body-xs bg-surface text-on-surface-variant hover:bg-surface-variant transition-colors">By Platform</button>
+          </div>
+        </div>
+        <div class="h-[260px]"><canvas id="funnel-chart"></canvas></div>
+      </div>
+
+      <!-- Daily Actions -->
+      <div class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-5 flex flex-col">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="font-headline-md text-[16px] font-semibold text-on-surface">Daily Actions</h2>
+          <button id="refresh-actions-btn" class="text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined text-[18px]">refresh</span></button>
+        </div>
+        <div id="actions-panel" class="flex-1 flex flex-col gap-3"><!-- JS --></div>
+      </div>
+    </div>
+
+    <!-- ══════ ROW 3: Replies + Upcoming + Sessions ══════ -->
+    <div class="grid grid-cols-3 gap-6">
+
+      <!-- Recent Replies -->
+      <div class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm flex flex-col">
+        <div class="p-4 border-b border-outline-variant flex justify-between items-center">
+          <h2 class="font-headline-md text-[16px] font-semibold text-on-surface">Recent Replies</h2>
+          <a href="/crm" class="text-primary text-body-xs font-semibold hover:underline">View All →</a>
+        </div>
+        <div id="replies-feed" class="flex-1 p-3 space-y-2 overflow-y-auto max-h-[320px]"><!-- JS --></div>
+      </div>
+
+      <!-- Upcoming Posts -->
+      <div class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm flex flex-col">
+        <div class="p-4 border-b border-outline-variant flex justify-between items-center">
+          <h2 class="font-headline-md text-[16px] font-semibold text-on-surface">Upcoming Posts</h2>
+          <a href="/scheduler" class="text-primary text-body-xs font-semibold hover:underline">Scheduler →</a>
+        </div>
+        <div id="upcoming-posts" class="flex-1 p-3 space-y-2 overflow-y-auto max-h-[320px]"><!-- JS --></div>
+      </div>
+
+      <!-- System Status -->
+      <div class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm flex flex-col">
+        <div class="p-4 border-b border-outline-variant">
+          <h2 class="font-headline-md text-[16px] font-semibold text-on-surface">Platform Sessions</h2>
+        </div>
+        <div id="sessions-panel" class="flex-1 p-3 space-y-2 overflow-y-auto"><!-- JS --></div>
+      </div>
+    </div>
+
+    <!-- ══════ ROW 4: Template Performance ══════ -->
+    <div class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm">
+      <div class="p-4 border-b border-outline-variant">
+        <h2 class="font-headline-md text-[16px] font-semibold text-on-surface">Template Performance</h2>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm">
+          <thead class="bg-surface-container-low border-b border-outline-variant">
+            <tr>
+              <th class="px-4 py-3 font-semibold text-on-surface-variant">Platform</th>
+              <th class="px-4 py-3 font-semibold text-on-surface-variant">Template</th>
+              <th class="px-4 py-3 font-semibold text-on-surface-variant">Sent</th>
+              <th class="px-4 py-3 font-semibold text-on-surface-variant">Replied</th>
+              <th class="px-4 py-3 font-semibold text-on-surface-variant">Acceptance Rate</th>
+            </tr>
+          </thead>
+          <tbody id="template-perf-body" class="divide-y divide-outline-variant"><!-- JS --></tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+</div>
+</main>
+<script src="/js/app.js"></script>
+<script src="/js/dashboard.js"></script>
+</body></html>

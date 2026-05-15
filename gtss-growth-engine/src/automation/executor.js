@@ -1,0 +1,387 @@
+const { getDb, isWithinLimit: dbIsWithinLimit, normalizeActionType } = require('../db/database');
+const { createBrowser, closeBrowser, humanDelay, detectCaptcha, checkSessionExpired, captureFailureArtifact } = require('./browserBase');
+const { isSessionValid } = require('./sessionManager');
+const { startJob, updateJobStatus, recordEvent } = require('./journal');
+const { reserveAction, releaseActionFingerprint } = require('./idempotency');
+const logger = require('../utils/logger');
+
+const STOP_FLAGS = new Map();
+let ACTIVE_JOB_ID = null;
+let RUN_QUEUE = Promise.resolve();
+
+function createEmitter(sseRes) {
+  return (type, message, data = {}) => {
+    if (!sseRes) return;
+    const payload = JSON.stringify({ type, message, timestamp: new Date().toISOString(), ...data });
+    sseRes.write(`data: ${payload}\n\n`);
+  };
+}
+
+function stopJob(jobId) {
+  if (STOP_FLAGS.has(jobId)) {
+    STOP_FLAGS.set(jobId, true);
+    return true;
+  }
+  return false;
+}
+
+function stopAllJobs() {
+  for (const jobId of STOP_FLAGS.keys()) {
+    STOP_FLAGS.set(jobId, true);
+  }
+}
+
+function emitState(emit, jobId, status, message, details = {}) {
+  updateJobStatus(jobId, status, details);
+  recordEvent({
+    jobId,
+    status,
+    platform: details.platform,
+    actionType: details.actionType,
+    target: details.target,
+    messageId: details.messageId,
+    leadId: details.leadId,
+    warningDetected: details.warningDetected,
+    details
+  });
+  emit('state', message || status, { status, ...details });
+}
+
+/**
+ * Robust check for daily limits.
+ */
+function isWithinLimit(platform, actionType) {
+  // Always fetch fresh limit from config to ensure we don't exceed even if settings change
+  return dbIsWithinLimit(platform, actionType);
+}
+
+function getQueuedActions() {
+  const db = getDb();
+  return db.prepare(`
+    SELECT m.id AS message_id, m.platform, m.body, m.variant, m.is_follow_up, m.lead_id,
+           l.name AS lead_name, l.profile_url, l.status AS lead_status
+    FROM messages m
+    JOIN leads l ON m.lead_id = l.id
+    WHERE m.status = 'approved' AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now'))
+    ORDER BY m.approved_at ASC
+  `).all();
+}
+
+function determineActionType(message) {
+  if (message.platform === 'linkedin' && !message.is_follow_up && message.lead_status === 'qualified') {
+    return 'connect';
+  }
+  return 'dm';
+}
+
+async function runAutomationAction(action, browserState, emit) {
+  const { platform } = action;
+  const actionType = determineActionType(action);
+  let automationModule;
+
+  try {
+    automationModule = require(`./${platform}`);
+  } catch (err) {
+    emit('error', `Automation module for ${platform} not implemented.`);
+    return { outcome: 'failed', reason: 'Module not implemented' };
+  }
+
+  const { page } = browserState;
+
+  if (actionType === 'connect' && automationModule.sendConnectionRequest) {
+    return await automationModule.sendConnectionRequest(page, action.profile_url, action.body, emit);
+  } else if (actionType === 'dm' && automationModule.sendDirectMessage) {
+    return await automationModule.sendDirectMessage(page, action.profile_url, action.body, emit);
+  } else {
+    emit('error', `Action ${actionType} not supported for ${platform}.`);
+    return { outcome: 'failed', reason: 'Unsupported action' };
+  }
+}
+
+function recordOutcome(action, actionType, outcomeObj) {
+  const db = getDb();
+  const { outcome, reason } = outcomeObj;
+  const normalizedActionType = normalizeActionType(actionType);
+
+  db.prepare(`
+    INSERT INTO daily_actions (platform, action_type, lead_id, outcome)
+    VALUES (?, ?, ?, ?)
+  `).run(action.platform, normalizedActionType, action.lead_id, outcome);
+
+  db.prepare(`
+    INSERT INTO touchpoints (lead_id, type, platform, message_id, outcome, notes)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(action.lead_id, normalizedActionType, action.platform, action.message_id, outcome, reason || null);
+
+  if (outcome === 'sent') {
+    db.prepare(`UPDATE messages SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .run(action.message_id);
+
+    const lead = db.prepare(`SELECT status FROM leads WHERE id = ?`).get(action.lead_id);
+    if (lead && ['discovered', 'qualified', 'deprioritized', 'scoring_failed'].includes(lead.status)) {
+       db.prepare(`UPDATE leads SET status = 'messaged', updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+         .run(action.lead_id);
+    }
+  } else if (outcome === 'failed' || outcome === 'limit_reached') {
+    db.prepare(`UPDATE messages SET status = 'failed' WHERE id = ?`).run(action.message_id);
+  } else if (outcome === 'skipped' || outcome === 'already_connected' || outcome === 'no_posts') {
+    db.prepare(`UPDATE messages SET status = 'skipped' WHERE id = ?`).run(action.message_id);
+  }
+}
+
+function parseDelayRange(value, fallback) {
+  if (!value) return fallback;
+  const parts = String(value).split(',').map((part) => Number(part.trim()));
+  if (parts.length !== 2 || parts.some((part) => Number.isNaN(part))) return fallback;
+  return { min: Math.min(parts[0], parts[1]), max: Math.max(parts[0], parts[1]) };
+}
+
+function getActionDelayRange(platform, actionType) {
+  const platformKey = `${platform}_${actionType}_DELAY_MS`.toUpperCase();
+  return parseDelayRange(
+    process.env[platformKey] || process.env.AUTOMATION_ACTION_DELAY_MS,
+    { min: 60_000, max: 180_000 }
+  );
+}
+
+async function closeBrowserState(browserState, platform) {
+  if (!browserState) return;
+  await closeBrowser(browserState.browser, platform, browserState.context, {
+    mode: browserState.mode,
+    tracePath: browserState.tracePath,
+    shouldCloseBrowser: browserState.shouldCloseBrowser,
+    lock: browserState.lock
+  });
+}
+
+async function processActionQueue(jobId, sseRes) {
+  const emit = createEmitter(sseRes);
+
+  if (ACTIVE_JOB_ID) {
+    emit('error', `Automation run ${ACTIVE_JOB_ID} is already active. Stop it before starting another run.`);
+    if (sseRes) sseRes.end();
+    return;
+  }
+
+  ACTIVE_JOB_ID = jobId;
+  STOP_FLAGS.set(jobId, false);
+  startJob(jobId, { source: 'automation_queue' });
+
+  emit('info', `Starting automation run (Job ID: ${jobId})`);
+  emitState(emit, jobId, 'PENDING', 'Automation run queued.');
+
+  try {
+    const queue = getQueuedActions();
+    emit('info', `Found ${queue.length} actions in queue.`);
+
+    if (queue.length === 0) {
+      emitState(emit, jobId, 'COMPLETED', 'Queue is empty.', { queueLength: 0 });
+      emit('done', 'Queue is empty.');
+      return;
+    }
+
+    let successes = 0;
+    let failures = 0;
+    let skipped = 0;
+
+    for (const action of queue) {
+      if (STOP_FLAGS.get(jobId)) {
+        emit('warn', 'Automation stopped by user.');
+        emitState(emit, jobId, 'MANUAL_INTERVENTION_REQUIRED', 'Automation stopped by user.');
+        break;
+      }
+
+      const { platform } = action;
+      const actionType = determineActionType(action);
+      const eventBase = {
+        platform,
+        actionType,
+        target: action.profile_url,
+        messageId: action.message_id,
+        leadId: action.lead_id
+      };
+
+      // 1. Double check limits right before action
+      if (!isWithinLimit(platform, actionType)) {
+        emit('warn', `Daily limit reached for ${platform} ${actionType}. Skipping.`);
+        emitState(emit, jobId, 'RATE_LIMITED', `Daily limit reached for ${platform} ${actionType}.`, eventBase);
+        recordOutcome(action, actionType, { outcome: 'skipped', reason: 'Daily limit reached' });
+        skipped++;
+        continue;
+      }
+
+      if (!isSessionValid(platform)) {
+        emit('error', `No valid session for ${platform}. Please re-auth.`);
+        emitState(emit, jobId, 'MANUAL_INTERVENTION_REQUIRED', `No valid session for ${platform}.`, eventBase);
+        failures++;
+        continue;
+      }
+
+      const reservation = reserveAction(action, actionType);
+      if (!reservation.reserved) {
+        emit('warn', `Duplicate ${platform} ${actionType} skipped: ${reservation.reason}`);
+        emitState(emit, jobId, 'COMPLETED', 'Duplicate action skipped.', { ...eventBase, fingerprint: reservation.fingerprint, reason: reservation.reason });
+        recordOutcome(action, actionType, { outcome: 'skipped', reason: reservation.reason });
+        skipped++;
+        continue;
+      }
+
+      let browserState = null;
+      let actionAttempted = false;
+      try {
+        emitState(emit, jobId, 'STARTING_BROWSER', `Starting browser for ${platform}.`, { ...eventBase, fingerprint: reservation.fingerprint });
+        browserState = await createBrowser(platform);
+        
+        emitState(emit, jobId, 'AUTH_CHECK', `Checking ${platform} session.`, { ...eventBase, fingerprint: reservation.fingerprint });
+        await browserState.page.goto(`https://www.${platform}.com`, { waitUntil: 'domcontentloaded' });
+        
+        // Session Check
+        if (await checkSessionExpired(browserState.page, platform, emit)) {
+          emit('error', `Session expired for ${platform}. Stopping automation for this platform.`);
+          emitState(emit, jobId, 'MANUAL_INTERVENTION_REQUIRED', `Session expired for ${platform}.`, { ...eventBase, fingerprint: reservation.fingerprint });
+          releaseActionFingerprint(reservation.fingerprint);
+          recordOutcome(action, actionType, { outcome: 'failed', reason: 'Session expired' });
+          failures++;
+          break; 
+        }
+
+        if (await detectCaptcha(browserState.page)) {
+           emit('captcha', `CAPTCHA on ${platform} home. Pausing.`, { platform });
+           emitState(emit, jobId, 'CAPTCHA_REQUIRED', `CAPTCHA on ${platform} home.`, { ...eventBase, fingerprint: reservation.fingerprint, warningDetected: true });
+           releaseActionFingerprint(reservation.fingerprint);
+           break;
+        }
+
+        emitState(emit, jobId, 'RUNNING', `Running ${platform} ${actionType}.`, { ...eventBase, fingerprint: reservation.fingerprint });
+        actionAttempted = true;
+        const outcomeObj = await runAutomationAction(action, browserState, emit);
+        
+        // Post-action session check
+        emitState(emit, jobId, 'VERIFYING', `Verifying ${platform} ${actionType}.`, { ...eventBase, fingerprint: reservation.fingerprint });
+        await checkSessionExpired(browserState.page, platform, emit);
+
+        if (outcomeObj.outcome === 'failed') {
+          const screenshot = await captureFailureArtifact(browserState.page, platform, `${actionType}-${action.message_id}-${outcomeObj.reason || 'failed'}`);
+          if (screenshot) {
+            outcomeObj.reason = `${outcomeObj.reason || 'Failed'} | screenshot: ${screenshot}`;
+          }
+        }
+
+        recordOutcome(action, actionType, outcomeObj);
+        recordEvent({
+          jobId,
+          ...eventBase,
+          status: outcomeObj.outcome === 'sent' ? 'COMPLETED' : 'FAILED',
+          warningDetected: /warning|captcha|limit|blocked|session/i.test(outcomeObj.reason || ''),
+          details: { outcome: outcomeObj.outcome, reason: outcomeObj.reason, fingerprint: reservation.fingerprint }
+        });
+
+        if (outcomeObj.outcome === 'sent') successes++;
+        else if (['skipped', 'already_connected', 'no_posts'].includes(outcomeObj.outcome)) {
+          releaseActionFingerprint(reservation.fingerprint);
+          skipped++;
+        } else failures++;
+
+      } catch (err) {
+        logger.error('AUTOMATION', `Error on action ${action.message_id}`, err);
+        emit('error', `Unexpected error: ${err.message}`);
+        if (browserState && browserState.page) {
+          await captureFailureArtifact(browserState.page, platform, `${actionType}-${action.message_id}-exception`);
+        }
+        emitState(emit, jobId, 'FAILED', `Action failed: ${err.message}`, { ...eventBase, fingerprint: reservation.fingerprint });
+        if (!actionAttempted) {
+          releaseActionFingerprint(reservation.fingerprint);
+        }
+        recordOutcome(action, actionType, { outcome: 'failed', reason: err.message });
+        failures++;
+      } finally {
+        await closeBrowserState(browserState, platform);
+      }
+
+      if (queue.indexOf(action) < queue.length - 1 && !STOP_FLAGS.get(jobId)) {
+        const delay = getActionDelayRange(platform, actionType);
+        emitState(emit, jobId, 'COOLDOWN', 'Cooling down before next action.', { ...eventBase, minDelayMs: delay.min, maxDelayMs: delay.max });
+        emit('info', `Cooling down before next action (${Math.round(delay.min / 1000)}-${Math.round(delay.max / 1000)}s).`);
+        await humanDelay(delay.min, delay.max);
+      }
+    }
+
+    emitState(emit, jobId, failures > 0 ? 'FAILED' : 'COMPLETED', 'Automation run completed.', { successes, failures, skipped });
+    emit('done', 'Automation run completed.', { successes, failures, skipped });
+
+  } catch (error) {
+    logger.error('AUTOMATION', 'Executor failure', error);
+    emitState(emit, jobId, 'FAILED', `Executor error: ${error.message}`, { error: error.message });
+    emit('error', `Executor error: ${error.message}`);
+  } finally {
+    ACTIVE_JOB_ID = null;
+    STOP_FLAGS.delete(jobId);
+    if (sseRes) sseRes.end();
+  }
+}
+
+function enqueueActionQueue(jobId, sseRes) {
+  const run = () => processActionQueue(jobId, sseRes);
+  const queuedRun = RUN_QUEUE.then(run, run);
+  RUN_QUEUE = queuedRun.catch((error) => {
+    logger.error('AUTOMATION', 'Queued automation run failed', error);
+  });
+  return queuedRun;
+}
+
+async function authenticatePlatform(platform) {
+  logger.info('AUTH', `Starting manual auth for ${platform}`);
+
+  const browserState = await createBrowser(platform, { headless: false });
+  const { page } = browserState;
+
+  let loginUrl = `https://www.${platform}.com/login`;
+  if (platform === 'linkedin') loginUrl = 'https://www.linkedin.com/login';
+  else if (platform === 'x') loginUrl = 'https://x.com/i/flow/login';
+
+  await page.goto(loginUrl);
+
+  return new Promise((resolve, reject) => {
+    let checkInterval;
+    const timeout = setTimeout(async () => {
+      clearInterval(checkInterval);
+      try { await closeBrowserState(browserState, platform); } catch(e){}
+      reject(new Error('Auth timeout (5 mins)'));
+    }, 5 * 60 * 1000);
+
+    checkInterval = setInterval(async () => {
+      try {
+        if (page.isClosed()) {
+           clearInterval(checkInterval);
+           clearTimeout(timeout);
+           reject(new Error('Browser closed'));
+           return;
+        }
+
+        const url = page.url();
+        let isLoggedIn = false;
+        if (platform === 'linkedin' && url.includes('/feed')) isLoggedIn = true;
+        if (platform === 'x' && url.includes('/home')) isLoggedIn = true;
+        if (platform === 'facebook' && url === 'https://www.facebook.com/') isLoggedIn = true;
+        if (platform === 'instagram' && url === 'https://www.instagram.com/') isLoggedIn = true;
+
+        if (isLoggedIn) {
+          clearInterval(checkInterval);
+          clearTimeout(timeout);
+          await closeBrowserState(browserState, platform);
+          resolve(true);
+        }
+      } catch (err) {}
+    }, 3000);
+  });
+}
+
+module.exports = {
+  processActionQueue,
+  enqueueActionQueue,
+  stopJob,
+  stopAllJobs,
+  authenticatePlatform,
+  getQueuedActions,
+  isWithinLimit
+};

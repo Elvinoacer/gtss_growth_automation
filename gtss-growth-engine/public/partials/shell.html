@@ -1,0 +1,46 @@
+<aside class="gtss-sidebar" id="gtss-sidebar" aria-label="Primary navigation">
+  <div class="gtss-sidebar__brand">
+    <div class="gtss-logo">GTSS</div>
+    <div class="gtss-brand-label">Growth Engine</div>
+  </div>
+
+  <nav class="gtss-nav" aria-label="Sections">
+    <a class="gtss-nav__link" href="/" data-route="/" title="Dashboard"><span>▣</span><strong>Dashboard</strong></a>
+    <a class="gtss-nav__link" href="/discovery" data-route="/discovery" title="Lead Discovery"><span>⌕</span><strong>Lead Discovery</strong></a>
+    <a class="gtss-nav__link" href="/qualification" data-route="/qualification" title="Qualification"><span>✓</span><strong>Qualification</strong></a>
+    <a class="gtss-nav__link" href="/messages" data-route="/messages" title="Messages"><span>✉</span><strong>Messages</strong></a>
+    <a class="gtss-nav__link" href="/automation" data-route="/automation" title="Automation"><span>⚙</span><strong>Automation</strong></a>
+    <a class="gtss-nav__link" href="/crm" data-route="/crm" title="CRM Pipeline"><span>◇</span><strong>CRM Pipeline</strong></a>
+    <a class="gtss-nav__link" href="/scheduler" data-route="/scheduler" title="Content Scheduler"><span>◴</span><strong>Content Scheduler</strong></a>
+    <a class="gtss-nav__link" href="/settings" data-route="/settings" title="Settings"><span>☷</span><strong>Settings</strong></a>
+  </nav>
+
+  <div class="gtss-session-status" aria-label="Platform session status">
+    <div class="gtss-session-row"><span class="gtss-status-dot" data-platform-dot="linkedin"></span><span>LinkedIn</span></div>
+    <div class="gtss-session-row"><span class="gtss-status-dot" data-platform-dot="x"></span><span>X</span></div>
+    <div class="gtss-session-row"><span class="gtss-status-dot" data-platform-dot="facebook"></span><span>Facebook</span></div>
+    <div class="gtss-session-row"><span class="gtss-status-dot" data-platform-dot="instagram"></span><span>Instagram</span></div>
+  </div>
+
+  <button class="gtss-sidebar-toggle" id="gtss-sidebar-toggle" type="button" aria-label="Toggle sidebar">☰</button>
+</aside>
+
+<header class="gtss-topbar" id="gtss-topbar">
+  <h1 class="gtss-page-title" id="gtss-page-title">Dashboard</h1>
+  <div class="gtss-action-badge" id="gtss-action-badge">Actions today: 0 / 0 limit</div>
+  <div class="gtss-topbar__right">
+    <button class="gtss-bell" id="gtss-notification-button" type="button" aria-label="Notifications">
+      🔔
+      <span class="gtss-unread-count" id="gtss-unread-count">0</span>
+    </button>
+    <form method="post" action="/logout">
+      <button class="gtss-logout" type="submit">Logout</button>
+    </form>
+  </div>
+  <div class="gtss-notification-dropdown" id="gtss-notification-dropdown">
+    <div class="gtss-notification-item">
+      <strong>Recent replies</strong>
+      <span>No unread replies yet.</span>
+    </div>
+  </div>
+</header>
