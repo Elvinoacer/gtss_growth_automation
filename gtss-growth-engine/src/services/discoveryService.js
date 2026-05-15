@@ -280,8 +280,8 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
 
       try {
         const found = await withTimeout(
-          platformDiscoveryMap[platform](keyword, count, emit),
-          Number(process.env.DISCOVERY_PLATFORM_TIMEOUT_MS || 90_000),
+          platformDiscoveryMap[platform](keyword, count, emit, jobId),
+          Number(process.env.DISCOVERY_PLATFORM_TIMEOUT_MS || 300_000),
           `${platform} discovery`,
         );
         found.forEach((p) => {
@@ -335,7 +335,7 @@ function insertLeads(profiles) {
 
 // Minimal platform discovery mocks/impls for brevity, keeping existing logic
 const platformDiscoveryMap = {
-  linkedin: async (kw, max, emit) => {
+  linkedin: async (kw, max, emit, jobId) => {
     const browserState = await createBrowserContext("linkedin");
     const page = browserState.page;
     try {
@@ -373,37 +373,82 @@ const platformDiscoveryMap = {
         return [];
       }
 
-      await page
-        .locator(
-          'a[href*="/in/"], li.reusable-search__result-container, [data-view-name="search-entity-result-universal-template"]',
-        )
-        .first()
-        .waitFor({ state: "visible", timeout: 15000 })
-        .catch(() => {
-          emit({
-            type: "warn",
-            platform: "linkedin",
-            message:
-              "No LinkedIn result selector became visible before timeout; attempting extraction anyway.",
-          });
+      let allLeads = [];
+      let newLeadsCount = 0;
+      let pageNum = 1;
+      const db = getDb();
+      
+      while (newLeadsCount < max && !isJobStopped(jobId)) {
+        emit({
+          type: "info",
+          platform: "linkedin",
+          message: `Extracting LinkedIn search results (Page ${pageNum})...`,
         });
 
-      emit({
-        type: "info",
-        platform: "linkedin",
-        message: "Extracting LinkedIn search results...",
-      });
-      const { selector, leads } = await withTimeout(
-        extractLinkedInSearchResults(page, max),
-        30_000,
-        "LinkedIn result extraction",
-      );
-      emit({
-        type: "info",
-        platform: "linkedin",
-        message: `Extracted ${leads.length} LinkedIn search results${selector ? ` using ${selector}` : ""}.`,
-      });
-      return leads;
+        await page
+          .locator(
+            'a[href*="/in/"], li.reusable-search__result-container, [data-view-name="search-entity-result-universal-template"]',
+          )
+          .first()
+          .waitFor({ state: "visible", timeout: 15000 })
+          .catch(() => {
+            emit({
+              type: "warn",
+              platform: "linkedin",
+              message:
+                "No LinkedIn result selector became visible before timeout; attempting extraction anyway.",
+            });
+          });
+
+        const { selector, leads } = await withTimeout(
+          extractLinkedInSearchResults(page, 100), // Get all available on this page
+          30_000,
+          "LinkedIn result extraction",
+        );
+        
+        let foundNew = 0;
+        for (const lead of leads) {
+          // Skip if already found in this run
+          if (allLeads.some(l => l.profile_url === lead.profile_url)) continue;
+          
+          allLeads.push(lead);
+          
+          // Check DB to count if it's truly new
+          const existing = db.prepare('SELECT 1 FROM leads WHERE profile_url = ?').get(lead.profile_url);
+          if (!existing) {
+             foundNew++;
+             newLeadsCount++;
+          }
+          
+          if (newLeadsCount >= max) break;
+        }
+
+        emit({
+          type: "info",
+          platform: "linkedin",
+          message: `Extracted ${leads.length} leads from page ${pageNum} (${foundNew} new). Total new so far: ${newLeadsCount}/${max}.`,
+        });
+
+        if (newLeadsCount >= max || leads.length === 0) {
+           break;
+        }
+
+        // Scroll to bottom to expose Next button
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await delay(2000);
+        
+        const nextButton = page.locator('button[aria-label="Next"]').first();
+        if (await nextButton.isVisible().catch(() => false) && !(await nextButton.isDisabled().catch(() => false))) {
+           emit({ type: "info", platform: "linkedin", message: "Clicking Next page..." });
+           await nextButton.click();
+           pageNum++;
+           await delay(5000); // Wait for AJAX page load
+        } else {
+           emit({ type: "info", platform: "linkedin", message: "No more pages available." });
+           break;
+        }
+      }
+      return allLeads;
     } catch (error) {
       await captureFailureArtifact(page, "linkedin", "discovery-linkedin");
       throw error;
