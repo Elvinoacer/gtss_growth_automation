@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS touchpoints (
   type TEXT NOT NULL, -- connection, dm, follow, like, comment, reply
   platform TEXT,
   message_id INTEGER REFERENCES messages(id),
-  outcome TEXT, -- sent, failed, skipped, not_connected, session_required, unknown, limit_reached
+  outcome TEXT, -- sent, failed, skipped, not_connected, premium_required, session_required, unknown, limit_reached
   sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   notes TEXT
 );
@@ -38,10 +38,11 @@ CREATE TABLE IF NOT EXISTS messages (
   approved_at DATETIME,
   sent_at DATETIME,
   is_follow_up INTEGER DEFAULT 0,
-  status TEXT DEFAULT 'pending', -- pending, approved, sent, skipped
+  status TEXT DEFAULT 'pending', -- pending, approved, blocked, sent, skipped
   snooze_until DATETIME,
   retry_count INTEGER DEFAULT 0,
   last_error TEXT,
+  blocked_reason TEXT,
   generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

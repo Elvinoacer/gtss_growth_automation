@@ -55,21 +55,53 @@ function isWithinLimit(platform, actionType) {
   return dbIsWithinLimit(platform, actionType);
 }
 
-function getQueuedActions() {
+function getQueuedActions(options = {}) {
   const db = getDb();
+  const includeBlocked = options.includeBlocked === true;
   return db.prepare(`
     SELECT m.id AS message_id, m.platform, m.body, m.variant, m.is_follow_up, m.lead_id,
+           m.status, m.snooze_until, m.retry_count, m.last_error, m.blocked_reason,
            l.name AS lead_name, l.profile_url, l.status AS lead_status
     FROM messages m
     JOIN leads l ON m.lead_id = l.id
-    WHERE m.status = 'approved' AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now'))
-    ORDER BY m.approved_at ASC
-  `).all();
+    WHERE (
+      (m.status = 'approved' AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now')))
+      ${includeBlocked ? "OR m.status = 'blocked'" : ""}
+    )
+    ORDER BY
+      CASE WHEN m.status = 'blocked' THEN 1 ELSE 0 END,
+      m.approved_at ASC
+  `).all().map((action) => ({
+    ...action,
+    action_type: determineActionType(action),
+    runnable: action.status === 'approved'
+  }));
+}
+
+function getSettingValue(key) {
+  return getDb().prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value;
+}
+
+function isTruthyConfig(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+function getLinkedInOutreachMode() {
+  const configured =
+    process.env.LINKEDIN_OUTREACH_MODE ||
+    (isTruthyConfig(process.env.LINKEDIN_DIRECT_DM_FIRST) ? 'dm_first' : null) ||
+    getSettingValue('linkedin_outreach_mode');
+
+  if (configured === 'dm_only' || configured === 'dm_first') return configured;
+  return 'connect_first';
 }
 
 function determineActionType(message) {
   if (message.platform !== 'linkedin') return 'dm';
   if (message.is_follow_up) return 'dm';
+
+  const outreachMode = getLinkedInOutreachMode();
+  if (outreachMode === 'dm_only' || outreachMode === 'dm_first') return 'dm';
 
   // Check if a connection request was already sent to this lead
   const db = getDb();
@@ -175,6 +207,15 @@ function recordOutcome(action, actionType, outcomeObj) {
       SET snooze_until = datetime('now', '+24 hours')
       WHERE id = ?
     `).run(action.message_id);
+  } else if (outcome === 'premium_required') {
+    db.prepare(`
+      UPDATE messages
+      SET status = 'blocked',
+          blocked_reason = 'premium_required',
+          last_error = ?,
+          snooze_until = NULL
+      WHERE id = ?
+    `).run(reason, action.message_id);
   } else if (outcome === 'session_required') {
     db.prepare(`
       UPDATE messages
@@ -440,7 +481,7 @@ async function processActionQueue(jobId, sseRes) {
         });
 
         if (outcomeObj.outcome === 'sent') successes++;
-        else if (['skipped', 'already_connected', 'no_posts', 'not_connected', 'session_required'].includes(outcomeObj.outcome)) {
+        else if (['skipped', 'already_connected', 'no_posts', 'not_connected', 'premium_required', 'session_required'].includes(outcomeObj.outcome)) {
           releaseActionFingerprint(reservation.fingerprint);
           skipped++;
         } else {
@@ -547,5 +588,7 @@ module.exports = {
   stopAllJobs,
   authenticatePlatform,
   getQueuedActions,
-  isWithinLimit
+  isWithinLimit,
+  determineActionType,
+  getLinkedInOutreachMode
 };

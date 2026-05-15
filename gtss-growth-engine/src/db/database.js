@@ -40,6 +40,9 @@ function initializeSchema(database) {
     database.exec("ALTER TABLE messages ADD COLUMN last_error TEXT");
   } catch (_) {}
   try {
+    database.exec("ALTER TABLE messages ADD COLUMN blocked_reason TEXT");
+  } catch (_) {}
+  try {
     database.exec(`
       CREATE TABLE IF NOT EXISTS automation_jobs (
         id TEXT PRIMARY KEY,

@@ -72,7 +72,7 @@ router.get("/api/automation/limits", (req, res) => {
 // Get queued actions
 router.get("/api/automation/queue", (req, res) => {
   try {
-    const queue = getQueuedActions();
+    const queue = getQueuedActions({ includeBlocked: true });
     res.json(queue);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -159,6 +159,29 @@ router.patch("/api/automation/queue/:messageId/skip", (req, res) => {
     db.prepare(`UPDATE messages SET status = 'skipped' WHERE id = ?`).run(
       req.params.messageId,
     );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch("/api/automation/queue/:messageId/retry", (req, res) => {
+  try {
+    const db = getDb();
+    const result = db.prepare(`
+      UPDATE messages
+      SET status = 'approved',
+          blocked_reason = NULL,
+          last_error = NULL,
+          snooze_until = NULL
+      WHERE id = ?
+        AND status = 'blocked'
+    `).run(req.params.messageId);
+
+    if (result.changes === 0) {
+      return res.status(404).json({ error: "Blocked message not found" });
+    }
+
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

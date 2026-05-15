@@ -127,21 +127,38 @@
     if (emptyState) emptyState.classList.remove('visible');
 
     queueBody.innerHTML = queue.map((action) => {
-      const actionType = action.platform === 'linkedin' && !action.is_follow_up && action.lead_status === 'qualified' ? 'Connect' : 'DM';
+      const leadName = escapeHtml(action.lead_name || 'Unknown');
+      const platform = escapeHtml(action.platform || '');
+      const actionType = action.action_type === 'connect' ? 'Connect' : 'DM';
+      const isBlocked = action.status === 'blocked';
+      const isPremiumBlocked = action.blocked_reason === 'premium_required';
+      const statusLabel = isPremiumBlocked
+        ? 'Premium required'
+        : isBlocked
+          ? 'Blocked'
+          : 'Queued';
+      const statusDetail = action.last_error ? `<div class="text-xs text-on-surface-variant mt-1 max-w-[260px]">${escapeHtml(action.last_error)}</div>` : '';
+      const dotClass = isBlocked ? 'bg-error border-error' : 'bg-outline border-outline-variant';
       
       return `
-        <tr class="h-table-row-height border-b border-outline-variant/50 hover:bg-surface-variant/10 transition-colors group" data-id="${action.message_id}">
-          <td class="px-4 py-3 align-top font-medium">${action.lead_name || 'Unknown'}</td>
-          <td class="px-4 py-3 align-top text-on-surface-variant capitalize">${action.platform}</td>
+        <tr class="h-table-row-height border-b border-outline-variant/50 hover:bg-surface-variant/10 transition-colors group" data-id="${action.message_id}" data-status="${action.status || 'approved'}">
+          <td class="px-4 py-3 align-top font-medium">${leadName}</td>
+          <td class="px-4 py-3 align-top text-on-surface-variant capitalize">${platform}</td>
           <td class="px-4 py-3 align-top">${actionType}</td>
           <td class="px-4 py-3 align-top status-cell">
               <div class="flex items-center gap-2">
-                  <span class="w-2 h-2 rounded-full bg-outline inline-block border border-outline-variant"></span>
-                  <span class="text-on-surface-variant">Queued</span>
+                  <span class="w-2 h-2 rounded-full ${dotClass} inline-block border"></span>
+                  <span class="${isBlocked ? 'text-error' : 'text-on-surface-variant'}">${statusLabel}</span>
               </div>
+              ${statusDetail}
           </td>
           <td class="px-4 py-3 align-top text-right">
               <div class="opacity-0 group-hover:opacity-100 transition-opacity flex justify-end gap-1">
+                  ${isBlocked ? `
+                  <button class="p-1 text-secondary hover:text-surface-tint rounded transition-colors retry-btn" data-id="${action.message_id}" title="Retry">
+                      <span class="material-symbols-outlined text-[18px]">replay</span>
+                  </button>
+                  ` : ''}
                   <button class="p-1 text-secondary hover:text-surface-tint rounded transition-colors skip-btn" data-id="${action.message_id}" title="Skip">
                       <span class="material-symbols-outlined text-[18px]">skip_next</span>
                   </button>
@@ -150,6 +167,15 @@
         </tr>
       `;
     }).join('');
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   // ----------------------------------------------------------------
@@ -256,6 +282,19 @@
   // ----------------------------------------------------------------
 
   queueBody.addEventListener('click', async (e) => {
+    const retryBtn = e.target.closest('.retry-btn');
+    if (retryBtn) {
+      const id = retryBtn.dataset.id;
+      try {
+        await fetchJSON(`/api/automation/queue/${id}/retry`, { method: 'PATCH' });
+        showToast('Action returned to queue', 'success');
+        await loadQueue();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+      return;
+    }
+
     const skipBtn = e.target.closest('.skip-btn');
     if (!skipBtn) return;
 

@@ -2,17 +2,35 @@ const { humanDelay, humanScroll } = require('./browserBase');
 const logger = require('../utils/logger');
 
 const SELECTORS = {
+  profileHeader: [
+    'main section:has(h1.text-heading-xlarge)',
+    'main section:has(.pv-text-details__left-panel)',
+    'main section:has(.pv-top-card__photo-wrapper)',
+    'main .pv-top-card',
+    'main .ph5.pb5:has(h1)'
+  ],
   connect: [
     'button[aria-label*="Invite"][aria-label*="connect"]',
     'button[aria-label*="connect" i]',
     'button:has-text("Connect")',
+    '[role="button"]:has-text("Connect")',
+    '.artdeco-button:has-text("Connect")',
     '[data-control-name="connect"]',
     '.artdeco-dropdown__content button:has-text("Connect")'
   ],
   message: [
     'button:has-text("Message")',
     'button[aria-label*="Message"]',
+    '[role="button"]:has-text("Message")',
+    '.artdeco-button:has-text("Message")',
+    'a:has-text("Message")',
+    'a[href*="/messaging"]',
+    '[aria-label*="Message"]',
     '[data-control-name="message"]'
+  ],
+  follow: [
+    'button:has-text("Follow")',
+    'button[aria-label*="Follow"]'
   ],
   pending: [
     'button:has-text("Pending")',
@@ -21,6 +39,26 @@ const SELECTORS = {
   more: [
     'button[aria-label="More actions"]',
     'button[aria-label*="More"]'
+  ],
+  actionDropdown: [
+    '.artdeco-dropdown__content',
+    '.artdeco-dropdown__content-inner',
+    '[role="menu"]'
+  ],
+  modal: [
+    '[role="dialog"]',
+    '.artdeco-modal',
+    '.send-invite'
+  ],
+  premiumDialog: [
+    '[role="dialog"]:has-text("Grow Your Business with Premium")',
+    '[role="dialog"]:has-text("With Premium, you can message anyone")',
+    '.artdeco-modal:has-text("Premium")'
+  ],
+  modalClose: [
+    'button[aria-label="Dismiss"]',
+    'button[aria-label="Close"]',
+    'button:has-text("×")'
   ],
   addNote: [
     'button:has-text("Add a note")',
@@ -45,6 +83,12 @@ const SELECTORS = {
     '[contenteditable="true"][role="textbox"]',
     '[role="textbox"]',
     '[contenteditable="true"]'
+  ],
+  dmOverlay: [
+    '.msg-overlay-conversation-bubble',
+    '.msg-convo-wrapper',
+    '.msg-form',
+    '[role="dialog"]:has([contenteditable="true"])'
   ],
   dmSend: [
     'button.msg-form__send-button[aria-label]',
@@ -73,8 +117,129 @@ async function firstVisible(page, selectors, timeout = 1500) {
   return null;
 }
 
+async function firstVisibleIn(scope, selectors, timeout = 1500) {
+  for (const selector of selectors) {
+    const locator = scope.locator(selector).first();
+    try {
+      await locator.waitFor({ state: 'visible', timeout });
+      return { locator, selector };
+    } catch (_) {
+      // Try the next fallback selector.
+    }
+  }
+  return null;
+}
+
+async function getProfileHeader(page) {
+  for (const selector of SELECTORS.profileHeader) {
+    const locator = page.locator(selector).first();
+    try {
+      await locator.waitFor({ state: 'visible', timeout: 3000 });
+      const hasProfileName = await locator
+        .locator('h1, .text-heading-xlarge')
+        .first()
+        .isVisible({ timeout: 500 })
+        .catch(() => false);
+      if (!hasProfileName) continue;
+      return { locator, selector };
+    } catch (_) {
+      // Try the next profile container shape.
+    }
+  }
+  return null;
+}
+
+async function firstVisibleOnProfile(page, selectors, timeout = 1500) {
+  const headerMatch = await getProfileHeader(page);
+  if (headerMatch) {
+    const scopedMatch = await firstVisibleIn(headerMatch.locator, selectors, timeout);
+    if (scopedMatch) {
+      return { ...scopedMatch, selector: `${headerMatch.selector} >> ${scopedMatch.selector}` };
+    }
+  }
+
+  const mainAreaMatch = await firstVisibleInMainProfileArea(page, selectors, timeout);
+  if (mainAreaMatch) return mainAreaMatch;
+
+  return null;
+}
+
+async function firstVisibleInMainProfileArea(page, selectors, timeout = 1500) {
+  const viewport = page.viewportSize() || await page.evaluate(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight
+  })).catch(() => ({ width: 1366, height: 768 }));
+  const maxX = Math.max(700, viewport.width * 0.68);
+  const maxY = Math.max(700, viewport.height * 0.9);
+
+  for (const selector of selectors) {
+    const locator = page.locator(`main ${selector}`);
+    const count = await locator.count().catch(() => 0);
+
+    for (let i = 0; i < count; i++) {
+      const candidate = locator.nth(i);
+      try {
+        await candidate.waitFor({ state: 'visible', timeout });
+        const box = await candidate.boundingBox();
+        if (!box) continue;
+
+        const isMainProfileAction =
+          box.x >= 0 &&
+          box.x < maxX &&
+          box.y >= 80 &&
+          box.y < maxY;
+
+        if (isMainProfileAction) {
+          return { locator: candidate, selector: `main ${selector} [main-profile-area #${i}]` };
+        }
+      } catch (_) {
+        // Try the next matching element.
+      }
+    }
+  }
+
+  return null;
+}
+
+async function firstVisibleOverlay(page, overlaySelectors, selectors, timeout = 1500) {
+  const overlay = await firstVisible(page, overlaySelectors, timeout);
+  if (!overlay) return null;
+
+  const match = await firstVisibleIn(overlay.locator, selectors, timeout);
+  if (!match) return null;
+
+  return { ...match, selector: `${overlay.selector} >> ${match.selector}` };
+}
+
+async function closeOverlay(page, overlayMatch) {
+  if (!overlayMatch) return;
+  const closeMatch = await firstVisibleIn(overlayMatch.locator, SELECTORS.modalClose, 1000);
+  if (closeMatch) {
+    await closeMatch.locator.click().catch(() => {});
+  }
+}
+
+async function detectPremiumRequired(page) {
+  const premiumMatch = await firstVisible(page, SELECTORS.premiumDialog, 1500);
+  if (!premiumMatch) return null;
+
+  const text = await premiumMatch.locator.innerText({ timeout: 1000 }).catch(() => '');
+  await closeOverlay(page, premiumMatch);
+  return {
+    outcome: 'premium_required',
+    reason: text.includes('message anyone')
+      ? 'LinkedIn Premium required to message this profile'
+      : 'LinkedIn Premium upsell shown instead of message composer'
+  };
+}
+
 async function isAnyVisible(page, selectors) {
   const match = await firstVisible(page, selectors, 500);
+  return Boolean(match);
+}
+
+async function isAnyVisibleOnProfile(page, selectors) {
+  const match = await firstVisibleOnProfile(page, selectors, 500);
   return Boolean(match);
 }
 
@@ -104,8 +269,11 @@ function messageSnippet(message) {
     .slice(0, 80);
 }
 
-async function verifyDmSent(page, editorSelector, message) {
+async function verifyDmSent(page, editorTarget, message) {
   const snippet = messageSnippet(message);
+  const editorLocator = typeof editorTarget === 'string'
+    ? page.locator(editorTarget).first()
+    : editorTarget;
 
   // Poll up to 8 seconds for the message to appear or the composer to clear
   const POLL_INTERVAL = 800;
@@ -124,8 +292,7 @@ async function verifyDmSent(page, editorSelector, message) {
       return { verified: true, reason: 'Message visible in thread' };
     }
 
-    const editorText = await page
-      .locator(editorSelector).first()
+    const editorText = await editorLocator
       .evaluate(el => (el.textContent || el.innerText || '').trim(), undefined, { timeout: 1000 })
       .catch(() => '');
 
@@ -177,6 +344,22 @@ async function typeIntoFirstVisible(page, selectors, text) {
   return match.selector;
 }
 
+async function typeIntoFirstVisibleIn(page, scope, selectors, text) {
+  const match = await firstVisibleIn(scope, selectors, 2000);
+  if (!match) {
+    throw new Error(`No visible input found for selectors: ${selectors.join(', ')}`);
+  }
+
+  await match.locator.focus();
+  for (let i = 0; i < text.length; i++) {
+    await page.keyboard.type(text[i]);
+    const delay = Math.floor(Math.random() * 100) + 50;
+    await humanDelay(delay, delay + 20);
+  }
+
+  return match.selector;
+}
+
 /**
  * Perform a LinkedIn connection request with an optional note.
  */
@@ -185,35 +368,36 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
     emit('info', `Navigating to ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: 'domcontentloaded' });
     await humanDelay(3000, 5000);
-    await humanScroll(page);
+    await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+    await humanDelay(500, 1000);
 
     emit('info', 'Page loaded. Locating Connect action...');
     
-    const messageBtnVisible = await isAnyVisible(page, SELECTORS.message);
-    const isPending = await isAnyVisible(page, SELECTORS.pending);
+    const messageBtnVisible = await isAnyVisibleOnProfile(page, SELECTORS.message);
+    const isPending = await isAnyVisibleOnProfile(page, SELECTORS.pending);
     
     if (isPending) {
       emit('warn', 'Connection request is already pending.');
       return { outcome: 'already_connected' };
     }
 
-    let connectMatch = await firstVisible(page, SELECTORS.connect);
+    let connectMatch = await firstVisibleOnProfile(page, SELECTORS.connect);
 
     // Sometimes Connect is hidden under a "More" menu
     if (!connectMatch) {
       emit('info', 'Connect action not immediately visible. Checking More menu...');
-      const moreMatch = await firstVisible(page, SELECTORS.more, 1000);
+      const moreMatch = await firstVisibleOnProfile(page, SELECTORS.more, 1000);
       if (moreMatch) {
         await moreMatch.locator.click();
         await humanDelay(1000, 2000);
-        connectMatch = await firstVisible(page, SELECTORS.connect, 2000);
+        connectMatch = await firstVisibleOverlay(page, SELECTORS.actionDropdown, SELECTORS.connect, 2000);
       }
     }
 
     if (!connectMatch) {
       emit('warn', 'Could not find Connect action. Maybe already connected or followed?');
       if (messageBtnVisible) {
-        return { outcome: 'already_connected' };
+        return { outcome: 'not_connected', reason: 'Profile has Message but no Connect action in the main profile header' };
       }
       return { outcome: 'failed', reason: 'Button not found' };
     }
@@ -224,14 +408,21 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
 
     // If there's a message, look for "Add a note"
     if (message) {
-      const addNoteMatch = await firstVisible(page, SELECTORS.addNote, 2000);
+      const modalMatch = await firstVisible(page, SELECTORS.modal, 3000);
+      const addNoteMatch = modalMatch
+        ? await firstVisibleIn(modalMatch.locator, SELECTORS.addNote, 2000)
+        : null;
       if (addNoteMatch) {
         emit('info', 'Adding connection note...');
         await addNoteMatch.locator.click();
         await humanDelay(1000, 2000);
 
         emit('info', 'Typing message...');
-        await typeIntoFirstVisible(page, SELECTORS.noteTextarea, message);
+        const noteModalMatch = await firstVisible(page, SELECTORS.modal, 3000);
+        if (!noteModalMatch) {
+          throw new Error('Connection note modal not visible');
+        }
+        await typeIntoFirstVisibleIn(page, noteModalMatch.locator, SELECTORS.noteTextarea, message);
         await humanDelay(1000, 2000);
       } else {
         emit('warn', 'Add-note option not found. This request may send without a note.');
@@ -239,7 +430,7 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
     }
 
     // Look for the "Send" button (can be "Send" or "Send without a note")
-    const sendMatch = await firstVisible(page, SELECTORS.modalSend, 3000);
+    const sendMatch = await firstVisibleOverlay(page, SELECTORS.modal, SELECTORS.modalSend, 3000);
     if (sendMatch && !(await sendMatch.locator.isDisabled().catch(() => false))) {
       emit('info', `Clicking Send (${sendMatch.selector})...`);
       await sendMatch.locator.click();
@@ -251,7 +442,7 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
         return { outcome: 'failed', reason: `LinkedIn warning: ${warning}` };
       }
       
-      const nowPending = await isAnyVisible(page, SELECTORS.pending);
+      const nowPending = await isAnyVisibleOnProfile(page, SELECTORS.pending);
       if (nowPending) {
         emit('info', 'Connection request moved to pending.');
         return { outcome: 'sent' };
@@ -286,9 +477,10 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     emit('info', `Navigating to ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: 'domcontentloaded' });
     await humanDelay(3000, 5000);
-    await humanScroll(page);
+    await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+    await humanDelay(500, 1000);
 
-    const messageMatch = await firstVisible(page, SELECTORS.message, 3000);
+    const messageMatch = await firstVisibleOnProfile(page, SELECTORS.message, 3000);
     if (!messageMatch) {
        emit('warn', 'Could not find "Message" button. Ensure you are connected 1st-degree.');
        return { outcome: 'not_connected', reason: 'Message button not visible - connection may not be accepted yet' };
@@ -298,13 +490,28 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     await messageMatch.locator.click();
     await humanDelay(2000, 3000);
 
-    await page.locator('.msg-overlay-conversation-bubble, .msg-form__contenteditable, [contenteditable="true"]')
+    const premiumRequired = await detectPremiumRequired(page);
+    if (premiumRequired) {
+      emit('warn', premiumRequired.reason);
+      return premiumRequired;
+    }
+
+    await page.locator('.msg-overlay-conversation-bubble, .msg-form, .msg-form__contenteditable, [contenteditable="true"]')
       .first()
       .waitFor({ state: 'visible', timeout: 8000 })
       .catch(() => {});
 
+    const premiumAfterWait = await detectPremiumRequired(page);
+    if (premiumAfterWait) {
+      emit('warn', premiumAfterWait.reason);
+      return premiumAfterWait;
+    }
+
     // The messaging overlay should pop up. Find the editor.
-    const editorMatch = await firstVisible(page, SELECTORS.dmEditor, 5000);
+    const dmOverlayMatch = await firstVisible(page, SELECTORS.dmOverlay, 5000);
+    const editorMatch = dmOverlayMatch
+      ? await firstVisibleIn(dmOverlayMatch.locator, SELECTORS.dmEditor, 5000)
+      : null;
     if (!editorMatch) {
        emit('error', 'Could not find message textarea in the chat overlay.');
        return { outcome: 'failed', reason: 'Textarea not found' };
@@ -315,11 +522,13 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     await humanDelay(1000, 2000);
 
     // Find the Send button
-    const sendMatch = await firstVisible(page, SELECTORS.dmSend, 3000);
+    const sendMatch = dmOverlayMatch
+      ? await firstVisibleIn(dmOverlayMatch.locator, SELECTORS.dmSend, 3000)
+      : null;
     if (sendMatch && !(await sendMatch.locator.isDisabled().catch(() => false))) {
        emit('info', `Clicking Send (${sendMatch.selector})...`);
        await sendMatch.locator.click();
-       const verification = await verifyDmSent(page, editorMatch.selector, message);
+       const verification = await verifyDmSent(page, editorMatch.locator, message);
        if (!verification.verified) {
          emit('error', `DM send could not be verified: ${verification.reason}`);
          return { outcome: verification.unknown ? 'unknown' : 'failed', reason: verification.reason };
@@ -330,7 +539,7 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
        const sendShortcut = process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter';
        emit('info', `Pressing ${sendShortcut} to send...`);
        await page.keyboard.press(sendShortcut);
-       const verification = await verifyDmSent(page, editorMatch.selector, message);
+       const verification = await verifyDmSent(page, editorMatch.locator, message);
        if (!verification.verified) {
          emit('error', `DM send via Enter could not be verified: ${verification.reason}`);
          return { outcome: verification.unknown ? 'unknown' : 'failed', reason: verification.reason };
