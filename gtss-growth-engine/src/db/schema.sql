@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS messages (
   is_follow_up INTEGER DEFAULT 0,
   status TEXT DEFAULT 'pending', -- pending, approved, sent, skipped
   snooze_until DATETIME,
+  retry_count INTEGER DEFAULT 0,
+  last_error TEXT,
   generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

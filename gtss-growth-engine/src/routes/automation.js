@@ -101,19 +101,24 @@ router.get("/api/automation/history", (req, res) => {
   }
 });
 
+// Store pending executor calls, keyed by jobId
+const pendingExecutors = new Map();
+
 // Run automation queue
 router.post("/api/automation/run", (req, res) => {
   const jobId = crypto.randomUUID();
-
-  // Return job ID immediately
   res.json({ jobId });
 
-  // We'll pick up the SSE stream connection shortly, but for now we wait
-  // 1 second before starting the executor to give the client time to connect
+  // Mark as pending — executor will be triggered when SSE connects
+  pendingExecutors.set(jobId, true);
+
+  // Safety fallback: if SSE never connects within 5s, run headless
   setTimeout(() => {
-    const sseRes = activeStreams.get(jobId);
-    enqueueActionQueue(jobId, sseRes).catch(console.error);
-  }, 1000);
+    if (pendingExecutors.has(jobId)) {
+      pendingExecutors.delete(jobId);
+      enqueueActionQueue(jobId, null).catch(console.error);
+    }
+  }, 5000);
 });
 
 // SSE stream endpoint
@@ -128,9 +133,15 @@ router.get("/api/automation/stream/:jobId", (req, res) => {
 
   activeStreams.set(jobId, res);
 
+  // If executor is pending, start it now that SSE is connected
+  if (pendingExecutors.has(jobId)) {
+    pendingExecutors.delete(jobId);
+    enqueueActionQueue(jobId, res).catch(console.error);
+  }
+
   req.on("close", () => {
     activeStreams.delete(jobId);
-    stopJob(jobId);
+    // Automation continues — user can reconnect or it completes on its own
   });
 });
 

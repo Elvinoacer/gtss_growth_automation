@@ -91,7 +91,7 @@ async function callGemini(prompt) {
     throw new Error("GEMINI_API_KEY is not set in environment");
   }
 
-  const primaryModel = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+  const primaryModel = process.env.GEMINI_MODEL || "gemini-2.0-flash";
   const modelsToTry = [...new Set([primaryModel, "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"])];
 
   let lastError;
@@ -119,6 +119,10 @@ async function callGemini(prompt) {
     if (!response.ok) {
       lastError = new Error(`Gemini API error ${response.status}: ${response.text}`);
       lastError.status = response.status;
+      if (response.status === 404 || response.status === 429) {
+        logger.warn("GEMINI", `${response.status} for model ${model}, trying next`);
+        continue;
+      }
       throw lastError;
     }
 

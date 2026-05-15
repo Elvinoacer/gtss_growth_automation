@@ -149,21 +149,24 @@ function markSessionInvalid(platform) {
  * Returns true if the session file exists AND last_active is within 24 hours.
  */
 function isSessionValid(platform) {
-  const filePath = sessionPath(platform);
   const db = getDb();
   const row = db.prepare(
-    `SELECT last_active FROM platform_sessions
-     WHERE platform = ? AND is_valid = 1`
+    `SELECT last_active, is_valid FROM platform_sessions WHERE platform = ?`
   ).get(platform);
 
-  if (!row || !row.last_active) {
-    return fs.existsSync(filePath);
+  // No DB record at all — check for a legacy session file
+  if (!row) {
+    return fs.existsSync(sessionPath(platform));
   }
 
-  const lastActive = new Date(row.last_active);
-  const hoursSince = (Date.now() - lastActive.getTime()) / (1000 * 60 * 60);
-  const maxAgeHours = Number(process.env.SESSION_MAX_AGE_HOURS || 24 * 30);
-  return hoursSince < maxAgeHours || fs.existsSync(filePath);
+  // DB says explicitly invalid
+  if (!row.is_valid) return false;
+
+  if (!row.last_active) return false;
+
+  const hoursSince = (Date.now() - new Date(row.last_active).getTime()) / 3_600_000;
+  const maxAgeHours = Number(process.env.SESSION_MAX_AGE_HOURS || 720);
+  return hoursSince < maxAgeHours;
 }
 
 module.exports = {

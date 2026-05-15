@@ -263,6 +263,7 @@ router.patch("/api/messages/:id/approve", (req, res) => {
 
   const msg = db.prepare("SELECT * FROM messages WHERE id = ?").get(id);
   if (!msg) return res.status(404).json({ error: "Message not found" });
+  if (msg.status !== 'pending') return res.status(400).json({ error: "Only pending messages can be approved" });
 
   db.prepare(
     `UPDATE messages

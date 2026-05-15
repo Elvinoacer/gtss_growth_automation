@@ -114,7 +114,8 @@ function isWithinLimit(platform, actionType) {
 }
 
 async function createBrowserContext(platform) {
-  return createBrowser(platform, { headless: false });
+  const allowHeadless = process.env.ALLOW_HEADLESS_SOCIAL === "true";
+  return createBrowser(platform, { headless: allowHeadless });
 }
 
 async function closeBrowserContext(platform, browserState) {
@@ -269,10 +270,9 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
       if (rawProfiles.length >= maxLeads) break;
 
       // Limit Check
-      if (!isWithinLimit(platform, "likes")) {
-        // Use likes or another proxy for discovery if needed, or just allow discovery
-        // Discovery doesn't strictly have a "limit" in the table yet besides browser logic,
-        // but let's assume we want to respect some limit if defined.
+      if (!isWithinLimit(platform, "visits")) {
+        emit({ type: "warn", platform, message: `Daily visit limit reached for ${platform}. Skipping.` });
+        continue;
       }
 
       const count = Math.min(perPlatform, maxLeads - rawProfiles.length);

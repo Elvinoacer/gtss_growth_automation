@@ -68,10 +68,18 @@ function getQueuedActions() {
 }
 
 function determineActionType(message) {
-  if (message.platform === 'linkedin' && !message.is_follow_up && message.lead_status === 'qualified') {
-    return 'connect';
-  }
-  return 'dm';
+  if (message.platform !== 'linkedin') return 'dm';
+  if (message.is_follow_up) return 'dm';
+
+  // Check if a connection request was already sent to this lead
+  const db = getDb();
+  const priorConnect = db.prepare(`
+    SELECT id FROM touchpoints
+    WHERE lead_id = ? AND type = 'connections' AND outcome = 'sent'
+    LIMIT 1
+  `).get(message.lead_id);
+
+  return priorConnect ? 'dm' : 'connect';
 }
 
 async function runAutomationAction(action, browserState, emit) {
@@ -89,6 +97,11 @@ async function runAutomationAction(action, browserState, emit) {
   const { page } = browserState;
 
   if (actionType === 'connect' && automationModule.sendConnectionRequest) {
+    if (automationModule.likeRecentPost) {
+      emit('info', 'Warming up: liking a recent post...');
+      await automationModule.likeRecentPost(page, action.profile_url, emit);
+      await humanDelay(3000, 6000);
+    }
     return await automationModule.sendConnectionRequest(page, action.profile_url, action.body, emit);
   } else if (actionType === 'dm' && automationModule.sendDirectMessage) {
     return await automationModule.sendDirectMessage(page, action.profile_url, action.body, emit);
@@ -122,7 +135,16 @@ function recordOutcome(action, actionType, outcomeObj) {
        db.prepare(`UPDATE leads SET status = 'messaged', updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
          .run(action.lead_id);
     }
-  } else if (outcome === 'failed' || outcome === 'limit_reached') {
+  } else if (outcome === 'failed') {
+    db.prepare(`
+      UPDATE messages
+      SET retry_count = retry_count + 1,
+          last_error = ?,
+          status = CASE WHEN retry_count >= 2 THEN 'failed' ELSE 'approved' END,
+          snooze_until = datetime('now', '+1 hour')
+      WHERE id = ?
+    `).run(reason, action.message_id);
+  } else if (outcome === 'limit_reached') {
     db.prepare(`UPDATE messages SET status = 'failed' WHERE id = ?`).run(action.message_id);
   } else if (outcome === 'skipped' || outcome === 'already_connected' || outcome === 'no_posts') {
     db.prepare(`UPDATE messages SET status = 'skipped' WHERE id = ?`).run(action.message_id);

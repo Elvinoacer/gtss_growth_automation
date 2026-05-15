@@ -3,9 +3,9 @@ const logger = require('../utils/logger');
 
 const SELECTORS = {
   connect: [
+    'button[aria-label*="Invite"][aria-label*="connect"]',
+    'button[aria-label*="connect" i]',
     'button:has-text("Connect")',
-    'button[aria-label*="Invite"]',
-    'button[aria-label*="connect"]',
     '[data-control-name="connect"]',
     '.artdeco-dropdown__content button:has-text("Connect")'
   ],
@@ -116,15 +116,20 @@ async function verifyDmSent(page, editorSelector, message) {
 /**
  * Type a string character by character with human-like delays
  */
-async function typeLikeHuman(page, selector, text) {
-  // Focus the element first
-  await page.focus(selector);
-  
+async function typeLikeHuman(page, locatorOrSelector, text) {
+  // Accept both a locator object and a CSS selector string
+  const locator = typeof locatorOrSelector === 'string'
+    ? page.locator(locatorOrSelector).first()
+    : locatorOrSelector;
+
+  await locator.scrollIntoViewIfNeeded();
+  await locator.click(); // Places cursor in contenteditable
+  await humanDelay(300, 600);
+
   for (let i = 0; i < text.length; i++) {
     await page.keyboard.type(text[i]);
-    // Random delay between 50 and 150ms between keypresses
     const delay = Math.floor(Math.random() * 100) + 50;
-    await humanDelay(delay, delay + 20); // slight variation
+    await humanDelay(delay, delay + 20);
   }
 }
 
@@ -273,7 +278,7 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     }
 
     emit('info', 'Typing DM...');
-    await typeLikeHuman(page, editorMatch.selector, message);
+    await typeLikeHuman(page, editorMatch.locator, message);
     await humanDelay(1000, 2000);
 
     // Find the Send button

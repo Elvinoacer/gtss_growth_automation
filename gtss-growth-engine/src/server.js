@@ -72,6 +72,8 @@ function performStartupChecks() {
   }
 }
 
+const { startBackgroundJobs } = require('./jobs/backgroundJobs');
+
 function startBackgroundJobsWorker() {
   if (
     process.env.NODE_ENV === "test" ||
@@ -81,34 +83,11 @@ function startBackgroundJobsWorker() {
     return null;
   }
 
-  const child = fork(BACKGROUND_JOBS_WORKER, [], {
-    env: process.env,
-    stdio: ["inherit", "inherit", "inherit", "ipc"],
-  });
+  startBackgroundJobs(); // Run inline, no fork
 
-  child.on("exit", (code, signal) => {
-    backgroundJobsProcess = null;
-    if (!shuttingDown) {
-      logger.warn("SERVER", "Background automation worker exited", {
-        code,
-        signal,
-      });
-    }
-  });
+  logger.info("SERVER", "Background automation worker started inline");
 
-  child.on("error", (error) => {
-    logger.error(
-      "SERVER",
-      "Background automation worker failed to start",
-      error,
-    );
-  });
-
-  logger.info("SERVER", "Background automation worker started", {
-    pid: child.pid,
-  });
-
-  return child;
+  return null;
 }
 
 // Run checks before everything else

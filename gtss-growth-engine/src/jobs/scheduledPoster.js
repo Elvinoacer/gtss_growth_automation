@@ -3,6 +3,8 @@ const { getDb } = require("../db/database");
 const { publishPost } = require("../services/schedulerService");
 const logger = require("../utils/logger");
 
+let isPublishing = false;
+
 // Initializes the cron job to publish scheduled posts.
 // Runs every minute: "* * * * *"
 function initScheduledPoster() {
@@ -11,9 +13,15 @@ function initScheduledPoster() {
   cron.schedule(
     "* * * * *",
     async () => {
-      const db = getDb();
+      if (isPublishing) {
+        logger.debug("Scheduled poster already running, skipping tick.");
+        return;
+      }
+      isPublishing = true;
+      try {
+        const db = getDb();
 
-      // Check if scheduler is paused
+        // Check if scheduler is paused
       const pausedRow = db
         .prepare("SELECT value FROM settings WHERE key = 'scheduler_paused'")
         .get();
@@ -63,6 +71,9 @@ function initScheduledPoster() {
             post.id,
           );
         }
+      }
+      } finally {
+        isPublishing = false;
       }
     },
     {

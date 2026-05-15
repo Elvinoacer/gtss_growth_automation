@@ -56,6 +56,7 @@ function initSSE(url, onMessage) {
     source.onerror = () => {
       source.close();
       if (!closed) {
+        showToast('Connection lost. Attempting to reconnect...', 'warning');
         retryTimer = window.setTimeout(connect, 3000);
       }
     };
