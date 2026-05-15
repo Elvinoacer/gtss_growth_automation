@@ -433,18 +433,72 @@ const platformDiscoveryMap = {
            break;
         }
 
-        // Scroll to bottom to expose Next button
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        // Store first lead URL to verify page transition later
+        const firstLeadUrl = leads[0]?.profile_url;
+
+        // Scroll down in increments to trigger lazy loading of pagination
+        await page.evaluate(async () => {
+          for (let i = 0; i < 3; i++) {
+            window.scrollBy(0, window.innerHeight);
+            await new Promise(r => setTimeout(r, 500));
+          }
+          window.scrollTo(0, document.body.scrollHeight);
+        });
         await delay(2000);
         
-        const nextButton = page.locator('button[aria-label="Next"]').first();
-        if (await nextButton.isVisible().catch(() => false) && !(await nextButton.isDisabled().catch(() => false))) {
-           emit({ type: "info", platform: "linkedin", message: "Clicking Next page..." });
-           await nextButton.click();
+        // Try multiple selectors for the Next button
+        const nextButtonSelectors = [
+          'button.artdeco-pagination__button--next:not([disabled])',
+          'button[aria-label="Next"]:not([disabled])',
+          'button:has-text("Next"):not([disabled])'
+        ];
+        
+        let nextBtn = null;
+        for (const selector of nextButtonSelectors) {
+          const loc = page.locator(selector).first();
+          if (await loc.isVisible().catch(() => false)) {
+            nextBtn = loc;
+            break;
+          }
+        }
+
+        if (nextBtn) {
+           emit({ type: "info", platform: "linkedin", message: `Clicking Next page (current page ${pageNum})...` });
+           
+           // Ensure it's in view
+           await nextBtn.scrollIntoViewIfNeeded().catch(() => {});
+           await nextBtn.click({ timeout: 5000 }).catch(async () => {
+             // Fallback: force click via evaluate if normal click fails
+             await page.evaluate((sel) => {
+               const btn = document.querySelector(sel);
+               if (btn) btn.click();
+             }, await nextBtn.evaluate(node => {
+               // Get a simple selector for the evaluate call
+               return node.className ? `.${node.className.split(' ').join('.')}` : 'button.artdeco-pagination__button--next';
+             }).catch(() => 'button.artdeco-pagination__button--next'));
+           });
+
            pageNum++;
-           await delay(5000); // Wait for AJAX page load
+           
+           // Wait for the page content to actually change
+           // We wait for the first lead of the previous page to disappear or for a new list to appear
+           emit({ type: "info", platform: "linkedin", message: "Waiting for next page results to load..." });
+           
+           if (firstLeadUrl) {
+             const profileSnippet = firstLeadUrl.split('/in/')[1]?.split('/')[0];
+             if (profileSnippet) {
+               // Wait for the old result to vanish or a timeout
+               await page.waitForFunction((oldSnippet) => {
+                 return !document.body.innerText.includes(oldSnippet);
+               }, profileSnippet, { timeout: 10000 }).catch(() => {
+                 emit({ type: "warn", platform: "linkedin", message: "Page transition check timed out; content might still be loading." });
+               });
+             }
+           }
+           
+           await delay(3000); // Base safety delay for AJAX
         } else {
-           emit({ type: "info", platform: "linkedin", message: "No more pages available." });
+           emit({ type: "info", platform: "linkedin", message: "No 'Next' button found or it is disabled. Ending search." });
            break;
         }
       }
