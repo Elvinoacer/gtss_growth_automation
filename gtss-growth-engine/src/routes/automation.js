@@ -72,7 +72,7 @@ router.get("/api/automation/limits", (req, res) => {
 // Get queued actions
 router.get("/api/automation/queue", (req, res) => {
   try {
-    const queue = getQueuedActions({ includeBlocked: true });
+    const queue = getQueuedActions({ includeBlocked: true, includeWaiting: true });
     res.json(queue);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -175,11 +175,11 @@ router.patch("/api/automation/queue/:messageId/retry", (req, res) => {
           last_error = NULL,
           snooze_until = NULL
       WHERE id = ?
-        AND status = 'blocked'
+        AND status IN ('approved', 'blocked')
     `).run(req.params.messageId);
 
     if (result.changes === 0) {
-      return res.status(404).json({ error: "Blocked message not found" });
+      return res.status(404).json({ error: "Queue message not found" });
     }
 
     res.json({ success: true });

@@ -58,23 +58,33 @@ function isWithinLimit(platform, actionType) {
 function getQueuedActions(options = {}) {
   const db = getDb();
   const includeBlocked = options.includeBlocked === true;
+  const includeWaiting = options.includeWaiting === true;
   return db.prepare(`
     SELECT m.id AS message_id, m.platform, m.body, m.variant, m.is_follow_up, m.lead_id,
            m.status, m.snooze_until, m.retry_count, m.last_error, m.blocked_reason,
+           CASE
+             WHEN m.status = 'approved' AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now')) THEN 1
+             ELSE 0
+           END AS runnable,
            l.name AS lead_name, l.profile_url, l.status AS lead_status
     FROM messages m
     JOIN leads l ON m.lead_id = l.id
     WHERE (
-      (m.status = 'approved' AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now')))
+      (m.status = 'approved' ${includeWaiting ? "" : "AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now'))"})
       ${includeBlocked ? "OR m.status = 'blocked'" : ""}
     )
     ORDER BY
-      CASE WHEN m.status = 'blocked' THEN 1 ELSE 0 END,
+      CASE
+        WHEN m.status = 'approved' AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now')) THEN 0
+        WHEN m.status = 'approved' THEN 1
+        WHEN m.status = 'blocked' THEN 2
+        ELSE 3
+      END,
       m.approved_at ASC
   `).all().map((action) => ({
     ...action,
     action_type: determineActionType(action),
-    runnable: action.status === 'approved'
+    runnable: Boolean(action.runnable)
   }));
 }
 

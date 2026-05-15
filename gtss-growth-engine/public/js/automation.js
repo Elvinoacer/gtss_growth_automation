@@ -131,14 +131,19 @@
       const platform = escapeHtml(action.platform || '');
       const actionType = action.action_type === 'connect' ? 'Connect' : 'DM';
       const isBlocked = action.status === 'blocked';
+      const isWaiting = action.status === 'approved' && !action.runnable;
       const isPremiumBlocked = action.blocked_reason === 'premium_required';
       const statusLabel = isPremiumBlocked
         ? 'Premium required'
         : isBlocked
           ? 'Blocked'
-          : 'Queued';
-      const statusDetail = action.last_error ? `<div class="text-xs text-on-surface-variant mt-1 max-w-[260px]">${escapeHtml(action.last_error)}</div>` : '';
-      const dotClass = isBlocked ? 'bg-error border-error' : 'bg-outline border-outline-variant';
+          : isWaiting
+            ? 'Waiting'
+            : 'Queued';
+      const waitDetail = isWaiting && action.snooze_until ? `Retry after ${formatDateTime(action.snooze_until)}` : '';
+      const detailParts = [waitDetail, action.last_error].filter(Boolean).map(escapeHtml);
+      const statusDetail = detailParts.length ? `<div class="text-xs text-on-surface-variant mt-1 max-w-[260px]">${detailParts.join('<br>')}</div>` : '';
+      const dotClass = isBlocked ? 'bg-error border-error' : isWaiting ? 'bg-secondary border-secondary' : 'bg-outline border-outline-variant';
       
       return `
         <tr class="h-table-row-height border-b border-outline-variant/50 hover:bg-surface-variant/10 transition-colors group" data-id="${action.message_id}" data-status="${action.status || 'approved'}">
@@ -154,7 +159,7 @@
           </td>
           <td class="px-4 py-3 align-top text-right">
               <div class="opacity-0 group-hover:opacity-100 transition-opacity flex justify-end gap-1">
-                  ${isBlocked ? `
+                  ${isBlocked || isWaiting ? `
                   <button class="p-1 text-secondary hover:text-surface-tint rounded transition-colors retry-btn" data-id="${action.message_id}" title="Retry">
                       <span class="material-symbols-outlined text-[18px]">replay</span>
                   </button>
@@ -176,6 +181,17 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  function formatDateTime(value) {
+    const parsed = new Date(String(value).replace(' ', 'T'));
+    if (Number.isNaN(parsed.getTime())) return value;
+    return parsed.toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
   }
 
   // ----------------------------------------------------------------
