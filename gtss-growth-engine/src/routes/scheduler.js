@@ -33,9 +33,15 @@ const storage = multer.diskStorage({
   },
 });
 const ALLOWED_MIMES = new Set([
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-  'video/mp4', 'video/quicktime', 'video/x-msvideo',
-  'video/x-matroska', 'video/x-m4v',
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "video/mp4",
+  "video/quicktime",
+  "video/x-msvideo",
+  "video/x-matroska",
+  "video/x-m4v",
 ]);
 
 const upload = multer({
@@ -329,6 +335,63 @@ router.post("/api/scheduler/posts/:id/publish-now", (req, res) => {
       closeJobStream(jobId);
     }
   }, 500);
+});
+
+router.get("/api/scheduler/posts/:id/retry-info", (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const db = getDb();
+    const post = db
+      .prepare(
+        `SELECT id, status, retry_count, next_retry_at, last_error, scheduled_at, published_at, media_path
+         FROM posts
+         WHERE id = ?`,
+      )
+      .get(id);
+
+    if (!post) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    res.json({ retryInfo: post });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post("/api/scheduler/posts/:id/retry", (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const db = getDb();
+    const post = db.prepare("SELECT * FROM posts WHERE id = ?").get(id);
+
+    if (!post) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    if (post.status !== "failed") {
+      return res.status(400).json({
+        error: `Post is not in failed state (current: ${post.status})`,
+      });
+    }
+
+    const scheduledAt = new Date().toISOString();
+    db.prepare(
+      `UPDATE posts
+       SET status = 'scheduled',
+           retry_count = 0,
+           next_retry_at = NULL,
+           last_error = NULL,
+           scheduled_at = ?
+       WHERE id = ?`,
+    ).run(scheduledAt, id);
+
+    res.json({ success: true, message: "Post queued for immediate retry." });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // SSE stream

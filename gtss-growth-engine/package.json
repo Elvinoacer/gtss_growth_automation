@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "migrate:retry-columns": "node scripts/migrate-retry-columns.js"
   },
   "keywords": [
     "growth",

@@ -34,13 +34,26 @@ function initializeSchema(database) {
     /* column exists */
   }
   try {
-    database.exec("ALTER TABLE messages ADD COLUMN retry_count INTEGER DEFAULT 0");
+    database.exec(
+      "ALTER TABLE messages ADD COLUMN retry_count INTEGER DEFAULT 0",
+    );
   } catch (_) {}
   try {
     database.exec("ALTER TABLE messages ADD COLUMN last_error TEXT");
   } catch (_) {}
   try {
     database.exec("ALTER TABLE messages ADD COLUMN blocked_reason TEXT");
+  } catch (_) {}
+  try {
+    database.exec(
+      "ALTER TABLE posts ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+    );
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE posts ADD COLUMN next_retry_at TEXT");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE posts ADD COLUMN last_error TEXT");
   } catch (_) {}
   try {
     database.exec(`

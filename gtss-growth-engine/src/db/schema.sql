@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS posts (
   likes INTEGER DEFAULT 0,
   comments INTEGER DEFAULT 0,
   reach INTEGER DEFAULT 0,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  next_retry_at TEXT,
+  last_error TEXT,
   status TEXT DEFAULT 'scheduled', -- scheduled, published, failed, draft
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

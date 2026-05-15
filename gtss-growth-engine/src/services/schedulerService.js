@@ -1,3 +1,4 @@
+const fs = require("fs");
 const { getDb } = require("../db/database");
 const {
   createBrowser,
@@ -89,11 +90,141 @@ async function firstVisibleLocator(page, selectors, timeoutMs = 5000) {
   return null;
 }
 
+async function dismissBlockingOverlays(page) {
+  const dismissSelectors = [
+    'button[aria-label="Dismiss"]',
+    'button[aria-label="Close"]',
+    'button[aria-label="Cancel"]',
+    '.artdeco-modal button[aria-label="Dismiss"]',
+    '.artdeco-modal button[aria-label="Close"]',
+  ];
+
+  for (const selector of dismissSelectors) {
+    const buttons = page.locator(selector);
+    const count = await buttons.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      await buttons
+        .nth(index)
+        .click({ timeout: 2000 })
+        .catch(() => {});
+    }
+  }
+
+  const dmBubbleSelectors = [
+    '.msg-overlay-bubble-header__controls button[aria-label*="Close" i]',
+    '.msg-overlay-bubble-header__controls button[aria-label*="Minimise" i]',
+    '.msg-overlay-bubble-header__controls button[aria-label*="Minimize" i]',
+    '.msg-overlay-bubble-header__controls button[aria-label*="Dismiss" i]',
+  ];
+
+  for (const selector of dmBubbleSelectors) {
+    const buttons = page.locator(selector);
+    const count = await buttons.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      await buttons
+        .nth(index)
+        .click({ timeout: 2000 })
+        .catch(() => {});
+    }
+  }
+
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.keyboard.press("Escape").catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 600));
+}
+
+async function waitForShareDialog(page, timeoutMs = 10000) {
+  const dialogSelectors = [
+    '[data-test-id="share-to-feed-modal"]',
+    '[aria-label="Create a post"]',
+    ".share-creation-modal__content",
+    ".share-box-feed-entry__modal",
+    ".share-modal__container",
+    'div[role="dialog"]:has(.ql-editor)',
+    'div[role="dialog"]:has([contenteditable="true"])',
+    ".artdeco-modal:has(.ql-editor)",
+    '.artdeco-modal:has([contenteditable="true"])',
+  ];
+
+  const dialog = await firstVisibleLocator(page, dialogSelectors, timeoutMs);
+  if (!dialog) {
+    throw new Error(
+      'LinkedIn share dialog never appeared after clicking "Start a post".',
+    );
+  }
+
+  return dialog;
+}
+
+async function typeTextWithFallback(editor, text) {
+  try {
+    await editor.click({ timeout: 8000 });
+    for (const char of text) {
+      await editor.type(char, { delay: Math.random() * 60 + 20 });
+    }
+    return;
+  } catch (error) {
+    await editor.evaluate((node, value) => {
+      const element = node;
+      const textValue = String(value);
+
+      element.focus();
+
+      if (typeof element.value === "string") {
+        const descriptor = Object.getOwnPropertyDescriptor(
+          Object.getPrototypeOf(element),
+          "value",
+        );
+        if (descriptor && descriptor.set) {
+          descriptor.set.call(element, textValue);
+        } else {
+          element.value = textValue;
+        }
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+        return;
+      }
+
+      element.textContent = textValue;
+      element.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertText",
+          data: textValue,
+        }),
+      );
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }, text);
+  }
+}
+
+async function deleteMediaFile(mediaPath) {
+  if (!mediaPath) return;
+
+  try {
+    await fs.promises.unlink(mediaPath);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      logger.warn("Could not delete media file after publish", {
+        path: mediaPath,
+        error: error.message,
+      });
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Platform-specific posting logic
 // ---------------------------------------------------------------------------
 
 async function postToLinkedIn(page, body, mediaPath, emit) {
+  emit({
+    type: "info",
+    platform: "linkedin",
+    message: "Navigating to LinkedIn feed...",
+  });
+
   await page.goto("https://www.linkedin.com/feed/", {
     waitUntil: "domcontentloaded",
     timeout: 30000,
@@ -106,52 +237,97 @@ async function postToLinkedIn(page, body, mediaPath, emit) {
     );
   }
 
-  // Click "Start a post" button
-  const startPostBtn = await firstVisibleLocator(
-    page,
-    [
-      '[aria-label="Start a post"]',
-      'p:has-text("Start a post")',
-      'span:has-text("Start a post")',
-      'button:has-text("Start a post")',
-      ".share-box-feed-entry__trigger",
-    ],
+  await dismissBlockingOverlays(page);
+
+  const startPostSelectors = [
+    '[aria-label="Start a post"]',
+    'p:has-text("Start a post")',
+    'span:has-text("Start a post")',
+    'button:has-text("Start a post")',
+    ".share-box-feed-entry__trigger",
+  ];
+  const dialogSelectors = [
+    '[data-test-id="share-to-feed-modal"]',
+    '[aria-label="Create a post"]',
+    ".share-creation-modal__content",
+    ".share-box-feed-entry__modal",
+    ".share-modal__container",
+    'div[role="dialog"]:has(.ql-editor)',
+    'div[role="dialog"]:has([contenteditable="true"])',
+    ".artdeco-modal:has(.ql-editor)",
+    '.artdeco-modal:has([contenteditable="true"])',
+  ];
+  const editorSelectors = [
+    '.ql-editor[contenteditable="true"]',
+    'div[role="textbox"][contenteditable="true"]',
+    'div[role="textbox"]',
+    '[contenteditable="true"]',
+  ];
+
+  let dialogScope = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const startPostBtn = await firstVisibleLocator(
+      page,
+      startPostSelectors,
+      8000,
+    );
+
+    if (!startPostBtn) {
+      throw new Error(
+        'Could not find a visible LinkedIn "Start a post" button.',
+      );
+    }
+
+    await startPostBtn.locator.scrollIntoViewIfNeeded().catch(() => {});
+    await startPostBtn.locator.click({ timeout: 8000 });
+    await humanDelay(1500, 3000);
+
+    try {
+      dialogScope = await waitForShareDialog(page, 8000);
+      break;
+    } catch (error) {
+      emit({
+        type: "warning",
+        platform: "linkedin",
+        message: `LinkedIn compose dialog did not open on attempt ${attempt}.`,
+      });
+
+      if (attempt === 3) {
+        throw error;
+      }
+
+      await dismissBlockingOverlays(page);
+    }
+  }
+
+  const editor = await firstVisibleLocator(
+    dialogScope.locator,
+    editorSelectors,
     8000,
   );
 
-  if (!startPostBtn) {
-    throw new Error('Could not find a visible LinkedIn "Start a post" button.');
+  if (!editor) {
+    throw new Error(
+      "Could not locate the LinkedIn compose editor inside the share dialog.",
+    );
   }
 
-  await startPostBtn.locator.scrollIntoViewIfNeeded().catch(() => {});
-  await startPostBtn.locator.click();
-  await humanDelay(1500, 3000);
-
-  // Type into the compose editor
-  const editor = page.locator(
-    '.ql-editor[contenteditable="true"], div[role="textbox"], [contenteditable="true"]',
-  );
-  await editor.first().click();
-  await humanDelay(500, 1000);
-
-  // Type character by character with human delays
-  for (const char of body) {
-    await editor.first().type(char, { delay: Math.random() * 60 + 20 });
-  }
+  await typeTextWithFallback(editor.locator, body);
   await humanDelay(1000, 2000);
 
   // Upload media if provided
   if (mediaPath) {
-    const mediaBtn = await firstVisibleLocator(
-      page,
-      [
-        'button[aria-label="Add media"]',
-        'button[aria-label="Add a photo"]',
-        'button[aria-label="Add media to your post"]',
-        'button[aria-label*="media" i]',
-      ],
-      3000,
-    );
+    const mediaSelectors = [
+      'button[aria-label="Add media"]',
+      'button[aria-label="Add a photo"]',
+      'button[aria-label="Add media to your post"]',
+      'button[aria-label*="media" i]',
+      'button[aria-label*="photo" i]',
+    ];
+
+    const mediaBtn =
+      (await firstVisibleLocator(dialogScope.locator, mediaSelectors, 4000)) ||
+      (await firstVisibleLocator(page, mediaSelectors, 3000));
 
     if (mediaBtn) {
       try {
@@ -208,25 +384,45 @@ async function postToLinkedIn(page, body, mediaPath, emit) {
   }
 
   // Click Post button
-  const postBtn = await firstVisibleLocator(
-    page,
-    [
-      "button.share-actions__primary-action",
-      'button[aria-label*="Post"]',
-      'button[aria-label*="Share"]',
-      'button:has-text("Post")',
-      'button:has-text("Share")',
-    ],
-    12000,
-  );
+  const postSelectors = [
+    "button.share-actions__primary-action",
+    'button[aria-label*="Post"]',
+    'button[aria-label*="Share"]',
+    'button:has-text("Post")',
+    'button:has-text("Share")',
+  ];
+
+  const postBtn =
+    (await firstVisibleLocator(dialogScope.locator, postSelectors, 8000)) ||
+    (await firstVisibleLocator(page, postSelectors, 6000));
 
   if (!postBtn) {
     throw new Error("Could not find a visible LinkedIn Post button.");
   }
 
   await postBtn.locator.scrollIntoViewIfNeeded().catch(() => {});
-  await postBtn.locator.click();
-  await humanDelay(3000, 5000);
+  await postBtn.locator.click({ timeout: 10000 });
+
+  try {
+    await dialogScope.locator.waitFor({ state: "hidden", timeout: 15000 });
+  } catch (error) {
+    const errorToast = await page
+      .locator('.artdeco-toast-item--error, [data-test-id="toast-error"]')
+      .first()
+      .isVisible({ timeout: 3000 })
+      .catch(() => false);
+
+    if (errorToast) {
+      const toastText = await page
+        .locator('.artdeco-toast-item--error, [data-test-id="toast-error"]')
+        .first()
+        .innerText({ timeout: 2000 })
+        .catch(() => "LinkedIn returned an error toast.");
+      throw new Error(`LinkedIn showed an error after posting: ${toastText}`);
+    }
+  }
+
+  await humanDelay(2000, 3000);
 
   return true;
 }
@@ -499,7 +695,6 @@ async function publishPost(postId, emit, browserOptions = {}) {
   if (!post) throw new Error(`Post ${postId} not found`);
 
   // ── Media pre-flight ──────────────────────────────────────────────────────
-  const fs = require("fs");
   if (post.media_path) {
     if (!fs.existsSync(post.media_path)) {
       emit({
@@ -622,17 +817,10 @@ async function publishPost(postId, emit, browserOptions = {}) {
   }
 
   // Cleanup uploaded media file
-  if (post.media_path) {
-    fs.unlink(post.media_path, (err) => {
-      if (err)
-        logger.warn("Could not delete media file after publish", {
-          path: post.media_path,
-        });
-      else
-        logger.info("Deleted media file after publish", {
-          path: post.media_path,
-        });
-    });
+  if (post.media_path && failed.length === 0) {
+    await deleteMediaFile(post.media_path);
+  } else if (post.media_path && failed.length > 0) {
+    logger.info("Keeping media file for retry", { path: post.media_path });
   }
 
   return { success: succeeded, failed };
