@@ -1,4 +1,5 @@
 const fs = require("fs");
+const path = require("path");
 const { getDb } = require("../db/database");
 const {
   createBrowser,
@@ -67,6 +68,8 @@ const POST_CHAR_LIMITS = {
   facebook: 63206,
   instagram: 2200,
 };
+
+const UPLOADS_DIR = path.resolve(__dirname, "..", "..", "public", "uploads");
 
 async function firstVisibleLocator(page, selectors, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
@@ -151,6 +154,29 @@ function normalizeLinkedInText(text) {
     .trim();
 
   return normalized;
+}
+
+function resolveMediaFilePath(mediaPath) {
+  if (!mediaPath) return null;
+
+  const candidates = [];
+  if (path.isAbsolute(mediaPath)) {
+    candidates.push(path.resolve(mediaPath));
+    candidates.push(
+      path.resolve(__dirname, "..", "..", "public", `.${mediaPath}`),
+    );
+  } else if (mediaPath.startsWith("/uploads/")) {
+    candidates.push(
+      path.resolve(__dirname, "..", "..", "public", `.${mediaPath}`),
+    );
+  } else if (mediaPath.startsWith("uploads/")) {
+    candidates.push(path.resolve(__dirname, "..", "..", "public", mediaPath));
+  } else {
+    candidates.push(path.resolve(mediaPath));
+    candidates.push(path.resolve(UPLOADS_DIR, path.basename(mediaPath)));
+  }
+
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
 async function dismissBlockingOverlays(page) {
@@ -769,13 +795,15 @@ async function publishPost(postId, emit, browserOptions = {}) {
 
   // ── Media pre-flight ──────────────────────────────────────────────────────
   if (post.media_path) {
-    if (!fs.existsSync(post.media_path)) {
+    const resolvedMediaPath = resolveMediaFilePath(post.media_path);
+    if (!resolvedMediaPath) {
       emit({
         type: "error",
         message: `Media file not found on disk: ${post.media_path}. Post will be published without media.`,
       });
       post.media_path = null;
     } else {
+      post.media_path = resolvedMediaPath;
       const ALLOWED_EXT = /\.(jpe?g|png|gif|webp|mp4|mov|avi|mkv|m4v)$/i;
       if (!ALLOWED_EXT.test(post.media_path)) {
         emit({

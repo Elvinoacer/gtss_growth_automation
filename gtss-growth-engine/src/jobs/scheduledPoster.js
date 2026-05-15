@@ -61,17 +61,18 @@ function initScheduledPoster() {
              FROM posts
              WHERE (
                status = 'scheduled'
-               AND scheduled_at <= ?
+               AND scheduled_at IS NOT NULL
+               AND datetime(scheduled_at) <= datetime('now')
              )
              OR (
                status = 'failed'
                AND retry_count < ?
                AND next_retry_at IS NOT NULL
-               AND next_retry_at <= ?
+               AND datetime(next_retry_at) <= datetime('now')
              )
-             ORDER BY COALESCE(next_retry_at, scheduled_at) ASC`,
+             ORDER BY datetime(COALESCE(next_retry_at, scheduled_at)) ASC`,
           )
-          .all(now, MAX_RETRIES, now);
+          .all(MAX_RETRIES);
 
         if (duePosts.length === 0) return;
 

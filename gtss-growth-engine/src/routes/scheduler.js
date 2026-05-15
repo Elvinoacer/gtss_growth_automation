@@ -56,6 +56,57 @@ const upload = multer({
   },
 });
 
+function normalizeScheduledAt(value) {
+  const scheduledDate = new Date(value);
+  if (Number.isNaN(scheduledDate.getTime())) {
+    throw new Error(`Invalid scheduledAt value: ${value}`);
+  }
+
+  return scheduledDate.toISOString();
+}
+
+function normalizeMediaPath(mediaPath) {
+  if (mediaPath == null || mediaPath === "") {
+    return null;
+  }
+
+  if (typeof mediaPath !== "string") {
+    throw new Error("mediaPath must be a string when provided");
+  }
+
+  const trimmed = mediaPath.trim();
+  if (!trimmed) return null;
+
+  const candidates = [];
+
+  if (path.isAbsolute(trimmed)) {
+    candidates.push(path.resolve(trimmed));
+  } else if (trimmed.startsWith("/uploads/")) {
+    candidates.push(
+      path.resolve(__dirname, "..", "..", "public", `.${trimmed}`),
+    );
+  } else if (trimmed.startsWith("uploads/")) {
+    candidates.push(path.resolve(__dirname, "..", "..", "public", trimmed));
+  } else {
+    candidates.push(path.resolve(trimmed));
+    candidates.push(path.resolve(UPLOADS_DIR, path.basename(trimmed)));
+  }
+
+  const resolved = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!resolved) {
+    throw new Error(`Media file not found on disk: ${trimmed}`);
+  }
+
+  if (
+    !resolved.startsWith(`${UPLOADS_DIR}${path.sep}`) &&
+    resolved !== UPLOADS_DIR
+  ) {
+    throw new Error("Media file must live inside the uploads directory");
+  }
+
+  return resolved;
+}
+
 // ---------------------------------------------------------------------------
 // Page Route
 // ---------------------------------------------------------------------------
@@ -98,6 +149,8 @@ router.post("/api/scheduler/posts", async (req, res) => {
     const db = getDb();
 
     if (publishNow) {
+      const normalizedMediaPath = normalizeMediaPath(mediaPath);
+
       // Insert as draft, then publish immediately
       const result = db
         .prepare(
@@ -106,7 +159,7 @@ router.post("/api/scheduler/posts", async (req, res) => {
         VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'draft')
       `,
         )
-        .run(JSON.stringify(platforms), body, mediaPath || null);
+        .run(JSON.stringify(platforms), body, normalizedMediaPath);
 
       const postId = result.lastInsertRowid;
       const jobId = crypto.randomUUID();
@@ -138,6 +191,9 @@ router.post("/api/scheduler/posts", async (req, res) => {
           .json({ error: "scheduledAt is required for scheduled posts" });
       }
 
+      const normalizedScheduledAt = normalizeScheduledAt(scheduledAt);
+      const normalizedMediaPath = normalizeMediaPath(mediaPath);
+
       const result = db
         .prepare(
           `
@@ -145,7 +201,12 @@ router.post("/api/scheduler/posts", async (req, res) => {
         VALUES (?, ?, ?, ?, 'scheduled')
       `,
         )
-        .run(JSON.stringify(platforms), body, mediaPath || null, scheduledAt);
+        .run(
+          JSON.stringify(platforms),
+          body,
+          normalizedMediaPath,
+          normalizedScheduledAt,
+        );
 
       const post = db
         .prepare("SELECT * FROM posts WHERE id = ?")
@@ -154,7 +215,14 @@ router.post("/api/scheduler/posts", async (req, res) => {
     }
   } catch (error) {
     logger.error("Error creating post", { error: error.message });
-    res.status(500).json({ error: error.message });
+    const isValidationError =
+      error.message.includes("Invalid scheduledAt value") ||
+      error.message.includes("Media file not found on disk") ||
+      error.message.includes(
+        "Media file must live inside the uploads directory",
+      ) ||
+      error.message.includes("mediaPath must be a string");
+    res.status(isValidationError ? 400 : 500).json({ error: error.message });
   }
 });
 
@@ -190,11 +258,12 @@ router.get("/api/scheduler/posts", (req, res) => {
       sunday.setDate(monday.getDate() + 6);
       sunday.setHours(23, 59, 59, 999);
 
-      sql += " AND scheduled_at >= ? AND scheduled_at <= ?";
+      sql +=
+        " AND datetime(scheduled_at) >= datetime(?) AND datetime(scheduled_at) <= datetime(?)";
       params.push(monday.toISOString(), sunday.toISOString());
     }
 
-    sql += " ORDER BY scheduled_at ASC";
+    sql += " ORDER BY datetime(COALESCE(scheduled_at, published_at)) ASC";
 
     // Pagination for log view
     if (pageNum && !week) {
@@ -216,7 +285,14 @@ router.get("/api/scheduler/posts", (req, res) => {
 
     res.json(posts);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    const isValidationError =
+      error.message.includes("Invalid scheduledAt value") ||
+      error.message.includes("Media file not found on disk") ||
+      error.message.includes(
+        "Media file must live inside the uploads directory",
+      ) ||
+      error.message.includes("mediaPath must be a string");
+    res.status(isValidationError ? 400 : 500).json({ error: error.message });
   }
 });
 
@@ -253,11 +329,11 @@ router.patch("/api/scheduler/posts/:id", (req, res) => {
     }
     if (mediaPath !== undefined) {
       updates.push("media_path = ?");
-      params.push(mediaPath);
+      params.push(mediaPath == null ? null : normalizeMediaPath(mediaPath));
     }
     if (scheduledAt) {
       updates.push("scheduled_at = ?");
-      params.push(scheduledAt);
+      params.push(normalizeScheduledAt(scheduledAt));
     }
 
     if (updates.length === 0) return res.json({ success: true });
