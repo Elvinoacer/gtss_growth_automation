@@ -42,7 +42,9 @@ const SELECTORS = {
     '[contenteditable="true"][aria-label*="Write" i]',
     '[contenteditable="true"][data-placeholder]',
     '.msg-overlay-conversation-bubble [contenteditable="true"]',
-    '[contenteditable="true"][role="textbox"]'
+    '[contenteditable="true"][role="textbox"]',
+    '[role="textbox"]',
+    '[contenteditable="true"]'
   ],
   dmSend: [
     'button.msg-form__send-button[aria-label]',
@@ -136,9 +138,7 @@ async function verifyDmSent(page, editorSelector, message) {
     if (warning) return { verified: false, reason: `LinkedIn warning: ${warning}` };
   }
 
-  // Still ambiguous — treat as success to avoid double-sends and let the
-  // reply-checker catch any real delivery failures later
-  return { verified: true, reason: 'Send assumed (composer timeout — no warning detected)' };
+  return { verified: false, unknown: true, reason: 'Send verification ambiguous - message not visible and composer did not clear' };
 }
 
 /**
@@ -322,20 +322,20 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
        const verification = await verifyDmSent(page, editorMatch.selector, message);
        if (!verification.verified) {
          emit('error', `DM send could not be verified: ${verification.reason}`);
-         return { outcome: 'failed', reason: verification.reason };
+         return { outcome: verification.unknown ? 'unknown' : 'failed', reason: verification.reason };
        }
        emit('info', `DM sent successfully (${verification.reason}).`);
        return { outcome: 'sent' };
     } else {
-       // Could try pressing Enter if the button isn't visible/enabled normally
-       emit('info', 'Pressing Enter to send...');
-       await page.keyboard.press('Enter');
+       const sendShortcut = process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter';
+       emit('info', `Pressing ${sendShortcut} to send...`);
+       await page.keyboard.press(sendShortcut);
        const verification = await verifyDmSent(page, editorMatch.selector, message);
        if (!verification.verified) {
          emit('error', `DM send via Enter could not be verified: ${verification.reason}`);
-         return { outcome: 'failed', reason: verification.reason };
+         return { outcome: verification.unknown ? 'unknown' : 'failed', reason: verification.reason };
        }
-       emit('info', `DM sent via Enter key (${verification.reason}).`);
+       emit('info', `DM sent via keyboard shortcut (${verification.reason}).`);
        return { outcome: 'sent' };
     }
 

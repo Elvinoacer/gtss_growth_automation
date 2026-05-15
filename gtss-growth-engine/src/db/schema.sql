@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS touchpoints (
   type TEXT NOT NULL, -- connection, dm, follow, like, comment, reply
   platform TEXT,
   message_id INTEGER REFERENCES messages(id),
-  outcome TEXT, -- sent, failed, skipped, not_connected, limit_reached
+  outcome TEXT, -- sent, failed, skipped, not_connected, session_required, unknown, limit_reached
   sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   notes TEXT
 );

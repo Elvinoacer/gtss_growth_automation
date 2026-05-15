@@ -1,5 +1,5 @@
 const { getDb, isWithinLimit: dbIsWithinLimit, normalizeActionType } = require('../db/database');
-const { createBrowser, closeBrowser, humanDelay, detectCaptcha, checkSessionExpired, captureFailureArtifact } = require('./browserBase');
+const { createBrowser, closeBrowser, humanDelay, detectCaptcha, checkSessionState, AUTH_STATES, captureFailureArtifact } = require('./browserBase');
 const { isSessionValid } = require('./sessionManager');
 const { startJob, updateJobStatus, recordEvent } = require('./journal');
 const { reserveAction, releaseActionFingerprint } = require('./idempotency');
@@ -175,6 +175,21 @@ function recordOutcome(action, actionType, outcomeObj) {
       SET snooze_until = datetime('now', '+24 hours')
       WHERE id = ?
     `).run(action.message_id);
+  } else if (outcome === 'session_required') {
+    db.prepare(`
+      UPDATE messages
+      SET last_error = ?,
+          snooze_until = datetime('now', '+1 hour')
+      WHERE id = ?
+    `).run(reason, action.message_id);
+  } else if (outcome === 'unknown') {
+    db.prepare(`
+      UPDATE messages
+      SET last_error = ?,
+          status = 'approved',
+          snooze_until = datetime('now', '+1 hour')
+      WHERE id = ?
+    `).run(reason, action.message_id);
   } else if (outcome === 'limit_reached') {
     // Snooze until next day instead of permanently failing
     db.prepare(`
@@ -218,6 +233,73 @@ async function closeBrowserState(browserState, platform) {
     shouldCloseBrowser: browserState.shouldCloseBrowser,
     lock: browserState.lock
   });
+}
+
+function getSessionCheckUrl(platform) {
+  if (platform === 'linkedin') return 'https://www.linkedin.com/feed/';
+  if (platform === 'x') return 'https://x.com/home';
+  return `https://www.${platform}.com`;
+}
+
+async function openSessionCheckPage(page, platform) {
+  const url = getSessionCheckUrl(platform);
+  const waitUntil = platform === 'linkedin' ? 'networkidle' : 'domcontentloaded';
+
+  await page.goto(url, { waitUntil, timeout: 60000 }).catch(async (error) => {
+    logger.warn('AUTOMATION', `Session check navigation did not fully settle for ${platform}`, {
+      error: error.message,
+      url
+    });
+    if (!page.isClosed() && page.url() !== url) {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+    }
+  });
+
+  if (platform === 'linkedin') {
+    await humanDelay(5000, 8000);
+  }
+}
+
+function maxSessionRecoveryAttempts() {
+  const configured = Number(process.env.MAX_SESSION_RECOVERY_ATTEMPTS || 2);
+  return Number.isFinite(configured) && configured >= 0 ? configured : 2;
+}
+
+async function createValidatedBrowser(platform, emit) {
+  const attempts = maxSessionRecoveryAttempts() + 1;
+  let lastState = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    let browserState = null;
+    try {
+      browserState = await createBrowser(platform);
+      await openSessionCheckPage(browserState.page, platform);
+
+      lastState = await checkSessionState(browserState.page, platform, emit, {
+        label: `session-check-attempt-${attempt}`,
+      });
+
+      if (lastState.state === AUTH_STATES.AUTHENTICATED) {
+        return { browserState, authState: lastState };
+      }
+
+      if (attempt < attempts) {
+        emit('warn', `${platform} auth check returned ${lastState.state}; retrying session recovery (${attempt}/${attempts - 1}).`, {
+          platform,
+          authState: lastState.state,
+          reason: lastState.reason,
+        });
+        await browserState.page.reload({ waitUntil: platform === 'linkedin' ? 'networkidle' : 'domcontentloaded', timeout: 60000 }).catch(() => {});
+        await humanDelay(5000, 8000);
+      }
+    } finally {
+      if (browserState && (!lastState || lastState.state !== AUTH_STATES.AUTHENTICATED)) {
+        await closeBrowserState(browserState, platform);
+      }
+    }
+  }
+
+  return { browserState: null, authState: lastState };
 }
 
 async function processActionQueue(jobId, sseRes) {
@@ -301,19 +383,28 @@ async function processActionQueue(jobId, sseRes) {
       let browserState = null;
       try {
         emitState(emit, jobId, 'STARTING_BROWSER', `Starting browser for ${platform}.`, { ...eventBase, fingerprint: reservation.fingerprint });
-        browserState = await createBrowser(platform);
-        
         emitState(emit, jobId, 'AUTH_CHECK', `Checking ${platform} session.`, { ...eventBase, fingerprint: reservation.fingerprint });
-        await browserState.page.goto(`https://www.${platform}.com`, { waitUntil: 'domcontentloaded' });
-        
-        // Session Check
-        if (await checkSessionExpired(browserState.page, platform, emit)) {
-          emit('error', `Session expired for ${platform}. Stopping automation for this platform.`);
-          emitState(emit, jobId, 'MANUAL_INTERVENTION_REQUIRED', `Session expired for ${platform}.`, { ...eventBase, fingerprint: reservation.fingerprint });
+        const validated = await createValidatedBrowser(platform, emit);
+        browserState = validated.browserState;
+
+        if (!browserState) {
+          const authState = validated.authState || { state: AUTH_STATES.UNKNOWN_STATE, reason: 'Session validation failed before producing a state' };
+          emit('error', `${platform} session is not automation-ready: ${authState.state}. ${authState.reason}`);
+          emitState(emit, jobId, authState.state, `${platform} session is not automation-ready.`, {
+            ...eventBase,
+            fingerprint: reservation.fingerprint,
+            authState: authState.state,
+            reason: authState.reason,
+            screenshotPath: authState.screenshotPath,
+            htmlPath: authState.htmlPath,
+          });
           releaseActionFingerprint(reservation.fingerprint);
-          recordOutcome(action, actionType, { outcome: 'failed', reason: 'Session expired' });
+          recordOutcome(action, actionType, {
+            outcome: 'session_required',
+            reason: `${authState.state}: ${authState.reason}`,
+          });
           failures++;
-          break; 
+          continue;
         }
 
         if (await detectCaptcha(browserState.page)) {
@@ -328,7 +419,9 @@ async function processActionQueue(jobId, sseRes) {
         
         // Post-action session check
         emitState(emit, jobId, 'VERIFYING', `Verifying ${platform} ${actionType}.`, { ...eventBase, fingerprint: reservation.fingerprint });
-        await checkSessionExpired(browserState.page, platform, emit);
+        await checkSessionState(browserState.page, platform, emit, {
+          label: `post-action-session-${actionType}-${action.message_id}`,
+        });
 
         if (outcomeObj.outcome === 'failed') {
           const screenshot = await captureFailureArtifact(browserState.page, platform, `${actionType}-${action.message_id}-${outcomeObj.reason || 'failed'}`);
@@ -347,7 +440,7 @@ async function processActionQueue(jobId, sseRes) {
         });
 
         if (outcomeObj.outcome === 'sent') successes++;
-        else if (['skipped', 'already_connected', 'no_posts', 'not_connected'].includes(outcomeObj.outcome)) {
+        else if (['skipped', 'already_connected', 'no_posts', 'not_connected', 'session_required'].includes(outcomeObj.outcome)) {
           releaseActionFingerprint(reservation.fingerprint);
           skipped++;
         } else {
