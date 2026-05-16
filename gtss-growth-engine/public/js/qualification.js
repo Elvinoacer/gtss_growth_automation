@@ -23,12 +23,26 @@
   const statQualified = document.getElementById("stat-qualified");
   const statDeprioritized = document.getElementById("stat-deprioritized");
   const statOverridden = document.getElementById("stat-overridden");
+  const statScoringFailed = document.getElementById("stat-scoring-failed");
   const tabPending = document.getElementById("tab-pending");
   const tabApproved = document.getElementById("tab-approved");
   const tabRejected = document.getElementById("tab-rejected");
   const tabOverridden = document.getElementById("tab-overridden");
+  const tabScoringFailed = document.getElementById("tab-scoring-failed");
 
   const runAllBtn = document.getElementById("run-all-btn");
+  const manualActionsMenu = document.getElementById("manual-actions-menu");
+  const manualActionsTrigger = document.getElementById(
+    "manual-actions-trigger",
+  );
+  const manualActionsDropdown = document.getElementById(
+    "manual-actions-dropdown",
+  );
+  const manualQualifyAllBtn = document.getElementById("manual-qualify-all-btn");
+  const manualQualifySelectedBtn = document.getElementById(
+    "manual-qualify-selected-btn",
+  );
+  const retryFailedBtn = document.getElementById("retry-failed-btn");
   const progressPanel = document.getElementById("progress-panel");
   const progressFill = document.getElementById("progress-fill");
   const progressText = document.getElementById("progress-text");
@@ -64,6 +78,7 @@
   const drawerScoreInput = document.getElementById("drawer-score-input");
   const drawerSaveScore = document.getElementById("drawer-save-score");
   const drawerNotes = document.getElementById("drawer-notes");
+  const drawerManualQualify = document.getElementById("drawer-manual-qualify");
   const drawerApprove = document.getElementById("drawer-approve");
   const drawerReject = document.getElementById("drawer-reject");
   const drawerSkip = document.getElementById("drawer-skip");
@@ -113,10 +128,16 @@
       statQualified.textContent = stats.qualified;
       statDeprioritized.textContent = stats.deprioritized;
       statOverridden.textContent = stats.overridden;
+      if (statScoringFailed) {
+        statScoringFailed.textContent = stats.scoring_failed || 0;
+      }
       tabPending.textContent = stats.pending;
       tabApproved.textContent = stats.qualified;
       tabRejected.textContent = stats.deprioritized;
       tabOverridden.textContent = stats.overridden;
+      if (tabScoringFailed) {
+        tabScoringFailed.textContent = stats.scoring_failed || 0;
+      }
     } catch (err) {
       console.error("Failed to load stats", err);
     }
@@ -174,6 +195,10 @@
           lead.lead_score != null ? scoreColorClass(lead.lead_score) : "";
         const reasonFull = escapeHtml(lead.score_reason || "");
         const reasonShort = escapeHtml(truncate(lead.score_reason, 60));
+        const approveLabel =
+          lead.status === "scoring_failed" ? "Qualify" : "Approve";
+        const approveTitle =
+          lead.status === "scoring_failed" ? "Qualify manually" : "Approve";
 
         return `<tr data-lead-id="${lead.id}">
         <td><input type="checkbox" class="lead-checkbox" data-id="${lead.id}" ${checked} aria-label="Select lead"></td>
@@ -190,7 +215,7 @@
         <td><span class="status-pill ${statusClass(lead.status)}">${lead.status || "discovered"}</span></td>
         <td>
           <div class="row-actions">
-            <button class="row-button approve" data-action="approve" data-id="${lead.id}" title="Approve">✓</button>
+            <button class="row-button approve" data-action="approve" data-id="${lead.id}" title="${approveTitle}">${approveLabel}</button>
             <button class="row-button reject" data-action="reject" data-id="${lead.id}" title="Reject">✕</button>
             <button class="row-button override" data-action="override" data-id="${lead.id}" title="Override Score">✎</button>
           </div>
@@ -215,6 +240,78 @@
     } else {
       bulkBar.classList.remove("visible");
     }
+
+    if (manualQualifySelectedBtn) {
+      const countLabel =
+        manualQualifySelectedBtn.querySelector(".selected-count");
+      if (count > 0) {
+        manualQualifySelectedBtn.hidden = false;
+        if (countLabel) countLabel.textContent = count;
+      } else {
+        manualQualifySelectedBtn.hidden = true;
+        if (countLabel) countLabel.textContent = "0";
+      }
+    }
+  }
+
+  function closeManualActionsMenu() {
+    if (manualActionsDropdown) {
+      manualActionsDropdown.hidden = true;
+    }
+  }
+
+  function toggleManualActionsMenu() {
+    if (!manualActionsDropdown) return;
+    manualActionsDropdown.hidden = !manualActionsDropdown.hidden;
+  }
+
+  function attachQualificationStream(
+    jobId,
+    doneLabel = "Qualification complete!",
+  ) {
+    activeSSE = initSSE(`/api/qualification/stream/${jobId}`, (event) => {
+      if (!event) return;
+
+      if (event.type === "progress") {
+        const pct =
+          event.total > 0
+            ? Math.round((event.processed / event.total) * 100)
+            : 0;
+        progressFill.style.width = `${pct}%`;
+        progressText.textContent = `${event.processed} / ${event.total} leads scored`;
+      }
+
+      if (event.type === "scored") {
+        loadLeads();
+      }
+
+      if (event.type === "done") {
+        progressFill.style.width = "100%";
+        progressLabelText.textContent = doneLabel;
+        progressText.textContent = `${event.result.processed} processed — ${event.result.qualified} qualified, ${event.result.deprioritized} deprioritized`;
+        showToast(
+          `Qualification complete: ${event.result.qualified} qualified`,
+          "success",
+        );
+
+        if (activeSSE) {
+          activeSSE.close();
+          activeSSE = null;
+        }
+
+        runAllBtn.disabled = false;
+        loadStats();
+        loadLeads();
+
+        setTimeout(() => {
+          progressPanel.classList.remove("visible");
+        }, 5000);
+      }
+
+      if (event.type === "error") {
+        showToast(`Error: ${event.message}`, "error");
+      }
+    });
   }
 
   // ----------------------------------------------------------------
@@ -242,50 +339,7 @@
         return;
       }
 
-      activeSSE = initSSE(`/api/qualification/stream/${jobId}`, (event) => {
-        if (!event) return;
-
-        if (event.type === "progress") {
-          const pct =
-            event.total > 0
-              ? Math.round((event.processed / event.total) * 100)
-              : 0;
-          progressFill.style.width = `${pct}%`;
-          progressText.textContent = `${event.processed} / ${event.total} leads scored`;
-        }
-
-        if (event.type === "scored") {
-          // Refresh table row if visible
-          loadLeads();
-        }
-
-        if (event.type === "done") {
-          progressFill.style.width = "100%";
-          progressLabelText.textContent = "Qualification complete!";
-          progressText.textContent = `${event.result.processed} processed — ${event.result.qualified} qualified, ${event.result.deprioritized} deprioritized`;
-          showToast(
-            `Qualification complete: ${event.result.qualified} qualified`,
-            "success",
-          );
-
-          if (activeSSE) {
-            activeSSE.close();
-            activeSSE = null;
-          }
-
-          runAllBtn.disabled = false;
-          loadStats();
-          loadLeads();
-
-          setTimeout(() => {
-            progressPanel.classList.remove("visible");
-          }, 5000);
-        }
-
-        if (event.type === "error") {
-          showToast(`Error: ${event.message}`, "error");
-        }
-      });
+      attachQualificationStream(jobId, "Qualification complete!");
     } catch (err) {
       showToast(err.message, "error");
       progressPanel.classList.remove("visible");
@@ -351,6 +405,57 @@
     }
   }
 
+  async function manualQualifyLeads(payload, successMessage) {
+    try {
+      const result = await fetchJSON(
+        "/api/qualification/leads/bulk/manual-qualify",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
+
+      if (!result.updated) {
+        showToast(result.message || "No leads matched", "info");
+        return;
+      }
+
+      showToast(successMessage(result.updated), "success");
+      selectedIds.clear();
+      updateBulkBar();
+      await loadStats();
+      await loadLeads();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  }
+
+  async function retryFailedLeads() {
+    try {
+      const res = await fetchJSON("/api/qualification/retry-failed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!res.jobId) {
+        showToast(res.message || "No failed leads to retry", "info");
+        return;
+      }
+
+      runAllBtn.disabled = true;
+      progressPanel.classList.add("visible");
+      progressFill.style.width = "0%";
+      progressText.textContent = "Starting...";
+      progressLabelText.textContent = "Retrying AI on failed leads...";
+      attachQualificationStream(res.jobId, "Retry complete!");
+    } catch (err) {
+      showToast(err.message, "error");
+      progressPanel.classList.remove("visible");
+      runAllBtn.disabled = false;
+    }
+  }
+
   // ----------------------------------------------------------------
   // Drawer
   // ----------------------------------------------------------------
@@ -389,6 +494,14 @@
       lead.score_reason || "No AI reasoning available yet.";
     drawerScoreInput.value = lead.lead_score || 0;
     drawerNotes.value = lead.notes || "";
+
+    const showManualQualify = ["discovered", "scoring_failed"].includes(
+      lead.status,
+    );
+    if (drawerManualQualify) {
+      drawerManualQualify.style.display = showManualQualify ? "" : "none";
+    }
+    drawerApprove.style.display = showManualQualify ? "none" : "";
 
     drawerOverlay.classList.add("open");
     drawer.classList.add("open");
@@ -452,6 +565,48 @@
 
   // Run all
   runAllBtn.addEventListener("click", runQualification);
+
+  if (manualActionsTrigger && manualActionsDropdown) {
+    manualActionsTrigger.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleManualActionsMenu();
+    });
+
+    document.addEventListener("click", (e) => {
+      if (manualActionsMenu && !manualActionsMenu.contains(e.target)) {
+        closeManualActionsMenu();
+      }
+    });
+  }
+
+  manualQualifyAllBtn.addEventListener("click", async () => {
+    closeManualActionsMenu();
+    const confirmed = confirm(
+      "Mark all discovered and AI-failed leads as qualified without using AI?",
+    );
+    if (!confirmed) return;
+
+    await manualQualifyLeads(
+      { all_pending: true },
+      (updated) => `${updated} leads marked as qualified`,
+    );
+  });
+
+  manualQualifySelectedBtn.addEventListener("click", async () => {
+    closeManualActionsMenu();
+    if (selectedIds.size === 0) return;
+    const ids = [...selectedIds];
+
+    await manualQualifyLeads(
+      { leadIds: ids },
+      (updated) => `${updated} selected leads marked as qualified`,
+    );
+  });
+
+  retryFailedBtn.addEventListener("click", async () => {
+    closeManualActionsMenu();
+    await retryFailedLeads();
+  });
 
   // Select all
   selectAll.addEventListener("change", () => {
@@ -570,6 +725,15 @@
     }
   });
 
+  if (drawerManualQualify) {
+    drawerManualQualify.addEventListener("click", () => {
+      if (openDrawerLead) {
+        updateLeadStatus(openDrawerLead.id, "qualified");
+        closeDrawer();
+      }
+    });
+  }
+
   drawerReject.addEventListener("click", () => {
     if (openDrawerLead) {
       updateLeadStatus(openDrawerLead.id, "deprioritized");
@@ -604,6 +768,7 @@
       "pending",
       "approved",
       "rejected",
+      "scoring_failed",
       "overridden",
     ];
     if (validFilters.includes(hash)) {

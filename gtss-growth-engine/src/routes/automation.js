@@ -9,8 +9,11 @@ const {
   getQueuedActions,
 } = require("../automation/executor");
 const { getPlatformKeys } = require("../services/platformCatalog");
-const { createActionFingerprint, releaseActionFingerprint } = require('../automation/idempotency');
-const { determineActionType } = require('../automation/executor');
+const {
+  createActionFingerprint,
+  releaseActionFingerprint,
+} = require("../automation/idempotency");
+const { determineActionType } = require("../automation/executor");
 
 const router = express.Router();
 
@@ -74,8 +77,51 @@ router.get("/api/automation/limits", (req, res) => {
 // Get queued actions
 router.get("/api/automation/queue", (req, res) => {
   try {
-    const queue = getQueuedActions({ includeBlocked: true, includeWaiting: true });
+    const queue = getQueuedActions({
+      includeBlocked: true,
+      includeWaiting: true,
+    });
     res.json(queue);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get("/api/automation/queue/summary", (req, res) => {
+  try {
+    const queue = getQueuedActions({
+      includeBlocked: true,
+      includeWaiting: true,
+    });
+    const summary = queue.reduce(
+      (accumulator, action) => {
+        if (action.status === "blocked") {
+          accumulator.blocked += 1;
+        } else if (action.status === "approved" && action.runnable) {
+          accumulator.runnable += 1;
+        } else if (action.status === "approved") {
+          accumulator.waiting += 1;
+        }
+
+        if (action.fail_category) {
+          const existing = accumulator.byCategory.find(
+            (entry) => entry.fail_category === action.fail_category,
+          );
+          if (existing) existing.count += 1;
+          else
+            accumulator.byCategory.push({
+              fail_category: action.fail_category,
+              count: 1,
+            });
+        }
+
+        return accumulator;
+      },
+      { runnable: 0, waiting: 0, blocked: 0, byCategory: [] },
+    );
+
+    summary.total = queue.length;
+    res.json(summary);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -167,41 +213,133 @@ router.patch("/api/automation/queue/:messageId/skip", (req, res) => {
   }
 });
 
-router.patch('/api/automation/queue/:messageId/retry', (req, res) => {
+router.patch("/api/automation/queue/:messageId/retry", (req, res) => {
   try {
     const db = getDb();
-    const msg = db.prepare(`
+    const msg = db
+      .prepare(
+        `
       SELECT m.*, l.profile_url
       FROM messages m
       JOIN leads l ON l.id = m.lead_id
       WHERE m.id = ?
-    `).get(req.params.messageId);
+    `,
+      )
+      .get(req.params.messageId);
 
-    if (!msg) return res.status(404).json({ error: 'Queue message not found' });
+    if (!msg) return res.status(404).json({ error: "Queue message not found" });
+
+    if (!["approved", "blocked", "skipped", "sent"].includes(msg.status)) {
+      return res
+        .status(400)
+        .json({ error: `Cannot retry message with status '${msg.status}'` });
+    }
 
     // Clear the fingerprint so this action is not treated as a duplicate
     const actionType = determineActionType(msg);
     const fingerprint = createActionFingerprint(
-      { platform: msg.platform, profile_url: msg.profile_url, lead_id: msg.lead_id, message_id: msg.id },
-      actionType
+      {
+        platform: msg.platform,
+        profile_url: msg.profile_url,
+        lead_id: msg.lead_id,
+        message_id: msg.id,
+      },
+      actionType,
     );
     releaseActionFingerprint(fingerprint);
 
-    const result = db.prepare(`
+    const result = db
+      .prepare(
+        `
       UPDATE messages
       SET status = 'approved',
           blocked_reason = NULL,
+          fail_category = NULL,
           last_error = NULL,
-          snooze_until = NULL
+          snooze_until = NULL,
+          retry_count = 0
       WHERE id = ?
-        AND status IN ('approved', 'blocked', 'skipped', 'sent')
-    `).run(req.params.messageId);
-
-    if (result.changes === 0) {
-      return res.status(404).json({ error: 'Queue message not found or already pending' });
-    }
+    `,
+      )
+      .run(req.params.messageId);
 
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/automation/queue/retry-all", (req, res) => {
+  try {
+    const db = getDb();
+    const { mode = "all", category = null } = req.body || {};
+    const filters = [];
+    const params = [];
+
+    if (mode === "blocked") {
+      filters.push("m.status = 'blocked'");
+    } else if (mode === "waiting") {
+      filters.push("m.status = 'approved'");
+      filters.push("m.snooze_until IS NOT NULL");
+      filters.push("datetime(m.snooze_until) > datetime('now')");
+    } else {
+      filters.push(
+        "(m.status = 'blocked' OR (m.status = 'approved' AND m.snooze_until IS NOT NULL AND datetime(m.snooze_until) > datetime('now')))",
+      );
+    }
+
+    if (category) {
+      filters.push("m.fail_category = ?");
+      params.push(category);
+    }
+
+    const rows = db
+      .prepare(
+        `SELECT m.id, m.platform, m.lead_id, m.status, m.fail_category, l.profile_url
+               , m.is_follow_up
+         FROM messages m
+         JOIN leads l ON l.id = m.lead_id
+         WHERE ${filters.join(" AND ")}
+         ORDER BY m.generated_at DESC`,
+      )
+      .all(...params);
+
+    if (rows.length === 0) {
+      return res.json({ success: true, updated: 0 });
+    }
+
+    const update = db.prepare(`
+      UPDATE messages
+      SET status = 'approved',
+          blocked_reason = NULL,
+          fail_category = NULL,
+          last_error = NULL,
+          snooze_until = NULL,
+          retry_count = 0
+      WHERE id = ?
+    `);
+
+    const transaction = db.transaction((items) => {
+      let updated = 0;
+      for (const item of items) {
+        const actionType = determineActionType(item);
+        const fingerprint = createActionFingerprint(
+          {
+            platform: item.platform,
+            profile_url: item.profile_url,
+            lead_id: item.lead_id,
+            message_id: item.id,
+          },
+          actionType,
+        );
+        releaseActionFingerprint(fingerprint);
+        updated += update.run(item.id).changes;
+      }
+      return updated;
+    });
+
+    const updated = transaction(rows);
+    res.json({ success: true, updated });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

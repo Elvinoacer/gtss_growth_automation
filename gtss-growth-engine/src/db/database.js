@@ -45,6 +45,9 @@ function initializeSchema(database) {
     database.exec("ALTER TABLE messages ADD COLUMN blocked_reason TEXT");
   } catch (_) {}
   try {
+    database.exec("ALTER TABLE messages ADD COLUMN fail_category TEXT");
+  } catch (_) {}
+  try {
     database.exec(
       "ALTER TABLE posts ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
     );

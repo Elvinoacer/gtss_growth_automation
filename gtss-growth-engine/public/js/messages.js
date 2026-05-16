@@ -36,6 +36,12 @@
   const statSent = document.getElementById("stat-sent");
   const statSkipped = document.getElementById("stat-skipped");
   const statFollowups = document.getElementById("stat-followups");
+  const statUnscoredQualified = document.getElementById(
+    "stat-unscored-qualified",
+  );
+  const unscoredQualifiedNote = document.getElementById(
+    "unscored-qualified-note",
+  );
   const tabPending = document.getElementById("tab-pending");
   const tabApprovedCount = document.getElementById("tab-approved");
   const tabSent = document.getElementById("tab-sent");
@@ -174,12 +180,21 @@
       statSent.textContent = stats.sent;
       statSkipped.textContent = stats.skipped;
       statFollowups.textContent = stats.followUps;
+      if (statUnscoredQualified) {
+        statUnscoredQualified.textContent = stats.unscored_qualified || 0;
+      }
       tabPending.textContent = stats.pending;
       tabApprovedCount.textContent = stats.approved;
       tabSent.textContent = stats.sent;
       tabFollowups.textContent = stats.followUps;
 
       if (stats.charLimits) charLimits = stats.charLimits;
+      if (unscoredQualifiedNote) {
+        unscoredQualifiedNote.textContent =
+          stats.unscored_qualified > 0
+            ? `${stats.unscored_qualified} qualified lead(s) still have no AI score and will be included in Generate All.`
+            : "All qualified leads already have AI scores.";
+      }
     } catch (err) {
       console.error("Failed to load stats", err);
     }

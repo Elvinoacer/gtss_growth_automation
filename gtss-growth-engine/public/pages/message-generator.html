@@ -23,7 +23,7 @@
       /* ---------- Stat Row ---------- */
       .stat-grid {
         display: grid;
-        grid-template-columns: repeat(5, 1fr);
+        grid-template-columns: repeat(6, 1fr);
         gap: 14px;
       }
       .stat-card {
@@ -71,6 +71,9 @@
       }
       .stat-dot.followup {
         background: #a78bfa;
+      }
+      .stat-dot.unscored {
+        background: #8b5cf6;
       }
       .stat-value {
         font-size: 28px;
@@ -751,6 +754,12 @@
             </div>
             <div class="stat-value" id="stat-followups">—</div>
           </div>
+          <div class="stat-card">
+            <div class="stat-label">
+              <span class="stat-dot unscored"></span> Unscored Qualified
+            </div>
+            <div class="stat-value" id="stat-unscored-qualified">—</div>
+          </div>
         </section>
 
         <!-- ============ ACTIONS ============ -->
@@ -760,6 +769,17 @@
           <button id="generate-all-btn" class="btn btn-primary" type="button">
             ⚡ Generate for All Qualified Leads
           </button>
+          <p
+            id="unscored-qualified-note"
+            style="
+              margin: 0;
+              color: var(--gtss-muted);
+              font-size: 13px;
+              font-weight: 700;
+            "
+          >
+            Loading qualification summary...
+          </p>
         </section>
 
         <!-- ============ PROGRESS ============ -->

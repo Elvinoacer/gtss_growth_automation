@@ -1,13 +1,13 @@
-const express = require('express');
-const { renderPage } = require('./pageRenderer');
-const { getDb } = require('../db/database');
-const { isValidStatusTransition } = require('../utils/validation');
+const express = require("express");
+const { renderPage } = require("./pageRenderer");
+const { getDb } = require("../db/database");
+const { isValidStatusTransition } = require("../utils/validation");
 const {
   scoreLeadsBatch,
   registerJobStream,
   emitJobEvent,
-  closeJobStream
-} = require('../services/qualificationService');
+  closeJobStream,
+} = require("../services/qualificationService");
 
 const router = express.Router();
 
@@ -15,11 +15,12 @@ const router = express.Router();
 // Page render
 // ---------------------------------------------------------------------------
 
-router.get('/qualification', (req, res) => {
+router.get("/qualification", (req, res) => {
   renderPage(res, {
-    title: 'Qualification',
-    primaryHeading: 'Score opportunities',
-    primaryCopy: 'Review prospect fit, intent signals, company context, and next best actions.'
+    title: "Qualification",
+    primaryHeading: "Score opportunities",
+    primaryCopy:
+      "Review prospect fit, intent signals, company context, and next best actions.",
   });
 });
 
@@ -29,33 +30,39 @@ router.get('/qualification', (req, res) => {
 
 let nextJobId = 1;
 
-router.post('/api/qualification/run', (req, res) => {
+router.post("/api/qualification/run", (req, res) => {
   const db = getDb();
   let leadIds = [];
 
-  if (req.body.leadIds && Array.isArray(req.body.leadIds) && req.body.leadIds.length > 0) {
-    leadIds = [...new Set(req.body.leadIds.map(Number).filter(Number.isInteger))];
+  if (
+    req.body.leadIds &&
+    Array.isArray(req.body.leadIds) &&
+    req.body.leadIds.length > 0
+  ) {
+    leadIds = [
+      ...new Set(req.body.leadIds.map(Number).filter(Number.isInteger)),
+    ];
   } else {
     // Qualify all pending leads (discovered or null score)
     const rows = db
       .prepare(
         `SELECT id FROM leads
          WHERE status = 'discovered' OR lead_score IS NULL
-         ORDER BY created_at DESC`
+         ORDER BY created_at DESC`,
       )
       .all();
     leadIds = rows.map((row) => row.id);
   }
 
   if (leadIds.length === 0) {
-    return res.json({ jobId: null, message: 'No leads to qualify' });
+    return res.json({ jobId: null, message: "No leads to qualify" });
   }
 
   const jobId = `qual-${nextJobId++}`;
 
   setImmediate(() => {
     scoreLeadsBatch(leadIds, jobId).catch((error) => {
-      emitJobEvent(jobId, { type: 'error', jobId, message: error.message });
+      emitJobEvent(jobId, { type: "error", jobId, message: error.message });
       closeJobStream(jobId);
     });
   });
@@ -67,12 +74,12 @@ router.post('/api/qualification/run', (req, res) => {
 // API: SSE stream
 // ---------------------------------------------------------------------------
 
-router.get('/api/qualification/stream/:jobId', (req, res) => {
+router.get("/api/qualification/stream/:jobId", (req, res) => {
   res.set({
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no'
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
   });
   res.flushHeaders();
   registerJobStream(req.params.jobId, res);
@@ -82,7 +89,7 @@ router.get('/api/qualification/stream/:jobId', (req, res) => {
 // API: list leads with scores
 // ---------------------------------------------------------------------------
 
-router.get('/api/qualification/leads', (req, res) => {
+router.get("/api/qualification/leads", (req, res) => {
   const db = getDb();
   const page = Math.max(Number(req.query.page) || 1, 1);
   const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
@@ -90,37 +97,39 @@ router.get('/api/qualification/leads', (req, res) => {
   const where = [];
   const params = {};
 
-  const status = req.query.status || 'all';
-  if (status === 'pending') {
+  const status = req.query.status || "all";
+  if (status === "pending") {
     where.push("(status = 'discovered' OR lead_score IS NULL)");
-  } else if (status === 'qualified' || status === 'approved') {
+  } else if (status === "qualified" || status === "approved") {
     where.push("status = 'qualified'");
-  } else if (status === 'deprioritized' || status === 'rejected') {
+  } else if (status === "deprioritized" || status === "rejected") {
     where.push("status = 'deprioritized'");
-  } else if (status === 'dismissed') {
+  } else if (status === "dismissed") {
     where.push("status = 'dismissed'");
-  } else if (status === 'overridden') {
+  } else if (status === "scoring_failed") {
+    where.push("status = 'scoring_failed'");
+  } else if (status === "overridden") {
     where.push("score_reason LIKE '%[manually overridden]%'");
   }
 
   if (req.query.platform) {
-    where.push('platform = @platform');
+    where.push("platform = @platform");
     params.platform = req.query.platform;
   }
 
-  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
 
   // Sort
-  let orderSql = 'ORDER BY lead_score DESC NULLS LAST, created_at DESC';
-  const sort = req.query.sort || '';
-  if (sort === 'score_asc') {
-    orderSql = 'ORDER BY lead_score ASC NULLS LAST, created_at DESC';
-  } else if (sort === 'name_asc') {
-    orderSql = 'ORDER BY name ASC, created_at DESC';
-  } else if (sort === 'platform') {
-    orderSql = 'ORDER BY platform ASC, created_at DESC';
-  } else if (sort === 'date') {
-    orderSql = 'ORDER BY created_at DESC';
+  let orderSql = "ORDER BY lead_score DESC NULLS LAST, created_at DESC";
+  const sort = req.query.sort || "";
+  if (sort === "score_asc") {
+    orderSql = "ORDER BY lead_score ASC NULLS LAST, created_at DESC";
+  } else if (sort === "name_asc") {
+    orderSql = "ORDER BY name ASC, created_at DESC";
+  } else if (sort === "platform") {
+    orderSql = "ORDER BY platform ASC, created_at DESC";
+  } else if (sort === "date") {
+    orderSql = "ORDER BY created_at DESC";
   }
 
   const total = db
@@ -129,7 +138,7 @@ router.get('/api/qualification/leads', (req, res) => {
 
   const leads = db
     .prepare(
-      `SELECT * FROM leads ${whereSql} ${orderSql} LIMIT @limit OFFSET @offset`
+      `SELECT * FROM leads ${whereSql} ${orderSql} LIMIT @limit OFFSET @offset`,
     )
     .all({ ...params, limit, offset });
 
@@ -140,11 +149,13 @@ router.get('/api/qualification/leads', (req, res) => {
 // API: lead stats (counts by status)
 // ---------------------------------------------------------------------------
 
-router.get('/api/qualification/stats', (req, res) => {
+router.get("/api/qualification/stats", (req, res) => {
   const db = getDb();
 
   const pending = db
-    .prepare("SELECT COUNT(*) AS c FROM leads WHERE status = 'discovered' OR lead_score IS NULL")
+    .prepare(
+      "SELECT COUNT(*) AS c FROM leads WHERE status = 'discovered' OR lead_score IS NULL",
+    )
     .get().c;
 
   const qualified = db
@@ -156,36 +167,44 @@ router.get('/api/qualification/stats', (req, res) => {
     .get().c;
 
   const overridden = db
-    .prepare("SELECT COUNT(*) AS c FROM leads WHERE score_reason LIKE '%[manually overridden]%'")
+    .prepare(
+      "SELECT COUNT(*) AS c FROM leads WHERE score_reason LIKE '%[manually overridden]%'",
+    )
     .get().c;
 
-  res.json({ pending, qualified, deprioritized, overridden });
+  const scoring_failed = db
+    .prepare("SELECT COUNT(*) AS c FROM leads WHERE status = 'scoring_failed'")
+    .get().c;
+
+  res.json({ pending, qualified, deprioritized, overridden, scoring_failed });
 });
 
 // ---------------------------------------------------------------------------
 // API: override score
 // ---------------------------------------------------------------------------
 
-router.patch('/api/qualification/leads/:id/score', (req, res) => {
+router.patch("/api/qualification/leads/:id/score", (req, res) => {
   const db = getDb();
   const id = Number(req.params.id);
   const score = Math.max(0, Math.min(100, Number(req.body.score) || 0));
 
-  const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const lead = db.prepare("SELECT * FROM leads WHERE id = ?").get(id);
   if (!lead) {
-    return res.status(404).json({ error: 'Lead not found' });
+    return res.status(404).json({ error: "Lead not found" });
   }
 
-  const status = score >= 50 ? 'qualified' : 'deprioritized';
-  const reason = (lead.score_reason || '').replace(' [manually overridden]', '') + ' [manually overridden]';
+  const status = score >= 50 ? "qualified" : "deprioritized";
+  const reason =
+    (lead.score_reason || "").replace(" [manually overridden]", "") +
+    " [manually overridden]";
 
   db.prepare(
     `UPDATE leads
      SET lead_score = ?, score_reason = ?, status = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
+     WHERE id = ?`,
   ).run(score, reason, status, id);
 
-  const updated = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const updated = db.prepare("SELECT * FROM leads WHERE id = ?").get(id);
   res.json(updated);
 });
 
@@ -193,52 +212,156 @@ router.patch('/api/qualification/leads/:id/score', (req, res) => {
 // API: update lead status
 // ---------------------------------------------------------------------------
 
-router.patch('/api/qualification/leads/:id/status', (req, res) => {
+router.patch("/api/qualification/leads/:id/status", (req, res) => {
   const db = getDb();
   const id = Number(req.params.id);
-  const validStatuses = ['qualified', 'deprioritized', 'dismissed'];
+  const validStatuses = ["qualified", "deprioritized", "dismissed"];
   const newStatus = req.body.status;
 
   if (!validStatuses.includes(newStatus)) {
-    return res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
+    return res
+      .status(400)
+      .json({
+        error: `Invalid status. Must be one of: ${validStatuses.join(", ")}`,
+      });
   }
 
-  const lead = db.prepare('SELECT status FROM leads WHERE id = ?').get(id);
+  const lead = db.prepare("SELECT status FROM leads WHERE id = ?").get(id);
   if (!lead) {
-    return res.status(404).json({ error: 'Lead not found' });
+    return res.status(404).json({ error: "Lead not found" });
   }
 
   if (!isValidStatusTransition(lead.status, newStatus)) {
-    return res.status(400).json({ error: `Invalid status transition from ${lead.status} to ${newStatus}` });
+    return res
+      .status(400)
+      .json({
+        error: `Invalid status transition from ${lead.status} to ${newStatus}`,
+      });
   }
 
   const result = db
-    .prepare('UPDATE leads SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .prepare(
+      "UPDATE leads SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    )
     .run(newStatus, id);
 
   if (result.changes === 0) {
-    return res.status(404).json({ error: 'Lead not found' });
+    return res.status(404).json({ error: "Lead not found" });
   }
 
-  const updated = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+  const updated = db.prepare("SELECT * FROM leads WHERE id = ?").get(id);
   res.json(updated);
+});
+
+router.post("/api/qualification/leads/bulk/manual-qualify", (req, res) => {
+  const db = getDb();
+  const { leadIds, all_pending } = req.body || {};
+
+  let ids = [];
+
+  if (all_pending) {
+    const rows = db
+      .prepare(
+        `SELECT id FROM leads
+         WHERE status IN ('discovered', 'scoring_failed') OR lead_score IS NULL`,
+      )
+      .all();
+    ids = rows.map((row) => row.id);
+  } else if (Array.isArray(leadIds) && leadIds.length > 0) {
+    ids = [...new Set(leadIds.map(Number).filter(Number.isInteger))];
+  } else {
+    return res
+      .status(400)
+      .json({ error: "Provide leadIds or all_pending: true" });
+  }
+
+  if (ids.length === 0) {
+    return res.json({ updated: 0, message: "No leads matched" });
+  }
+
+  const placeholders = ids.map(() => "?").join(",");
+  const candidates = db
+    .prepare(
+      `SELECT id, status, score_reason FROM leads WHERE id IN (${placeholders})`,
+    )
+    .all(...ids)
+    .filter((lead) => ["discovered", "scoring_failed"].includes(lead.status));
+
+  const update = db.prepare(
+    `UPDATE leads
+     SET status = 'qualified',
+         score_reason = CASE
+           WHEN score_reason IS NULL OR TRIM(score_reason) = '' THEN '[manually qualified]'
+           WHEN score_reason LIKE '%[manually qualified]%' THEN score_reason
+           ELSE score_reason || ' [manually qualified]'
+         END,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND status IN ('discovered', 'scoring_failed')`,
+  );
+
+  const transaction = db.transaction((rows) => {
+    let updated = 0;
+    for (const row of rows) {
+      updated += update.run(row.id).changes;
+    }
+    return updated;
+  });
+
+  const updated = transaction(candidates);
+  res.json({ updated });
+});
+
+router.post("/api/qualification/retry-failed", (req, res) => {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      "SELECT id FROM leads WHERE status = 'scoring_failed' ORDER BY updated_at DESC",
+    )
+    .all();
+
+  if (rows.length === 0) {
+    return res.json({ jobId: null, message: "No failed leads to retry" });
+  }
+
+  const leadIds = rows.map((row) => row.id);
+  const placeholders = leadIds.map(() => "?").join(",");
+
+  db.prepare(
+    `UPDATE leads
+     SET status = 'discovered',
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id IN (${placeholders})`,
+  ).run(...leadIds);
+
+  const jobId = `qual-${nextJobId++}`;
+
+  setImmediate(() => {
+    scoreLeadsBatch(leadIds, jobId).catch((error) => {
+      emitJobEvent(jobId, { type: "error", jobId, message: error.message });
+      closeJobStream(jobId);
+    });
+  });
+
+  return res.status(202).json({ jobId });
 });
 
 // ---------------------------------------------------------------------------
 // API: update lead notes
 // ---------------------------------------------------------------------------
 
-router.patch('/api/leads/:id/notes', (req, res) => {
+router.patch("/api/leads/:id/notes", (req, res) => {
   const db = getDb();
   const id = Number(req.params.id);
-  const notes = req.body.notes || '';
+  const notes = req.body.notes || "";
 
   const result = db
-    .prepare('UPDATE leads SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .prepare(
+      "UPDATE leads SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    )
     .run(notes, id);
 
   if (result.changes === 0) {
-    return res.status(404).json({ error: 'Lead not found' });
+    return res.status(404).json({ error: "Lead not found" });
   }
 
   res.json({ id, notes });
@@ -248,34 +371,42 @@ router.patch('/api/leads/:id/notes', (req, res) => {
 // API: bulk status update
 // ---------------------------------------------------------------------------
 
-router.patch('/api/qualification/leads/bulk/status', (req, res) => {
+router.patch("/api/qualification/leads/bulk/status", (req, res) => {
   const db = getDb();
   const { leadIds, status } = req.body;
-  const validStatuses = ['qualified', 'deprioritized', 'dismissed'];
+  const validStatuses = ["qualified", "deprioritized", "dismissed"];
 
   if (!validStatuses.includes(status)) {
-    return res.status(400).json({ error: 'Invalid status' });
+    return res.status(400).json({ error: "Invalid status" });
   }
 
   if (!Array.isArray(leadIds) || leadIds.length === 0) {
-    return res.status(400).json({ error: 'leadIds required' });
+    return res.status(400).json({ error: "leadIds required" });
   }
 
   const ids = [...new Set(leadIds.map(Number).filter(Number.isInteger))];
   if (ids.length === 0) {
-    return res.status(400).json({ error: 'valid leadIds required' });
+    return res.status(400).json({ error: "valid leadIds required" });
   }
 
   const leads = db
-    .prepare(`SELECT id, status FROM leads WHERE id IN (${ids.map(() => '?').join(',')})`)
+    .prepare(
+      `SELECT id, status FROM leads WHERE id IN (${ids.map(() => "?").join(",")})`,
+    )
     .all(...ids);
-  const invalid = leads.find((lead) => !isValidStatusTransition(lead.status, status));
+  const invalid = leads.find(
+    (lead) => !isValidStatusTransition(lead.status, status),
+  );
   if (invalid) {
-    return res.status(400).json({ error: `Invalid status transition from ${invalid.status} to ${status}` });
+    return res
+      .status(400)
+      .json({
+        error: `Invalid status transition from ${invalid.status} to ${status}`,
+      });
   }
 
   const update = db.prepare(
-    'UPDATE leads SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+    "UPDATE leads SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
   );
 
   const transaction = db.transaction((ids) => {

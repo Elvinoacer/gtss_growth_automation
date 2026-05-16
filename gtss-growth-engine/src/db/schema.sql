@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS messages (
   retry_count INTEGER DEFAULT 0,
   last_error TEXT,
   blocked_reason TEXT,
+  fail_category TEXT,
   generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

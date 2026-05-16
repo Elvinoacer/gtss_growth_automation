@@ -221,6 +221,12 @@ router.get("/api/messages/stats", (req, res) => {
     .prepare("SELECT COUNT(*) AS c FROM messages WHERE status = 'skipped'")
     .get().c;
 
+  const unscoredQualified = db
+    .prepare(
+      "SELECT COUNT(*) AS c FROM leads WHERE status = 'qualified' AND lead_score IS NULL",
+    )
+    .get().c;
+
   // Follow-ups due: leads messaged ≥ N days ago with no reply
   const followUpDays = (() => {
     const row = db
@@ -248,6 +254,7 @@ router.get("/api/messages/stats", (req, res) => {
     sent,
     skipped,
     followUps,
+    unscored_qualified: unscoredQualified,
     charLimits: CHAR_LIMITS,
   });
 });
@@ -263,7 +270,10 @@ router.patch("/api/messages/:id/approve", (req, res) => {
 
   const msg = db.prepare("SELECT * FROM messages WHERE id = ?").get(id);
   if (!msg) return res.status(404).json({ error: "Message not found" });
-  if (msg.status !== 'pending') return res.status(400).json({ error: "Only pending messages can be approved" });
+  if (msg.status !== "pending")
+    return res
+      .status(400)
+      .json({ error: "Only pending messages can be approved" });
 
   db.prepare(
     `UPDATE messages
