@@ -1,6 +1,9 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const { renderPage } = require('./pageRenderer');
 const { getDb } = require('../db/database');
+const { keywordsFilePath } = require('../config/pipelineConfig');
 const {
   discoverLeads,
   listDiscoverySources,
@@ -246,5 +249,99 @@ function parseJsonArray(value) {
     return [];
   }
 }
+
+// ---------------------------------------------------------------------------
+// Keyword Management
+// ---------------------------------------------------------------------------
+
+function resolveKeywordsPath() {
+  return path.resolve(keywordsFilePath());
+}
+
+function readKeywordsFile() {
+  const filePath = resolveKeywordsPath();
+  try {
+    if (!fs.existsSync(filePath)) {
+      return { version: 1, keywords: [], platforms: ['linkedin', 'facebook'], maxLeadsPerKeyword: 10 };
+    }
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (err) {
+    return { version: 1, keywords: [], platforms: ['linkedin', 'facebook'], maxLeadsPerKeyword: 10 };
+  }
+}
+
+function writeKeywordsFile(data) {
+  const filePath = resolveKeywordsPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf8');
+}
+
+// GET /api/discovery/keywords — returns keywords.json contents
+router.get('/keywords', (req, res) => {
+  res.json(readKeywordsFile());
+});
+
+// POST /api/discovery/keywords — replaces full keywords config
+router.post('/keywords', (req, res) => {
+  const { keywords, platforms, maxLeadsPerKeyword } = req.body;
+
+  if (!Array.isArray(keywords) || keywords.length === 0) {
+    return res.status(400).json({ error: 'keywords must be a non-empty array' });
+  }
+
+  const sanitizedKeywords = keywords
+    .map(k => String(k || '').trim())
+    .filter(Boolean);
+
+  if (sanitizedKeywords.length === 0) {
+    return res.status(400).json({ error: 'At least one non-empty keyword is required' });
+  }
+
+  const config = readKeywordsFile();
+  config.keywords = sanitizedKeywords;
+  if (Array.isArray(platforms) && platforms.length > 0) {
+    config.platforms = platforms.map(p => String(p).trim().toLowerCase());
+  }
+  if (typeof maxLeadsPerKeyword === 'number' && maxLeadsPerKeyword >= 1 && maxLeadsPerKeyword <= 100) {
+    config.maxLeadsPerKeyword = maxLeadsPerKeyword;
+  }
+  config.version = (config.version || 0) + 1;
+
+  writeKeywordsFile(config);
+  res.json({ success: true, config });
+});
+
+// POST /api/discovery/keywords/add — appends a single keyword
+router.post('/keywords/add', (req, res) => {
+  const keyword = String(req.body.keyword || '').trim();
+  if (!keyword) {
+    return res.status(400).json({ error: 'keyword is required' });
+  }
+
+  const config = readKeywordsFile();
+  if (config.keywords.includes(keyword)) {
+    return res.status(409).json({ error: 'Keyword already exists', config });
+  }
+
+  config.keywords.push(keyword);
+  config.version = (config.version || 0) + 1;
+  writeKeywordsFile(config);
+  res.json({ success: true, config });
+});
+
+// DELETE /api/discovery/keywords/:idx — removes keyword at index
+router.delete('/keywords/:idx', (req, res) => {
+  const idx = Number(req.params.idx);
+  const config = readKeywordsFile();
+
+  if (!Number.isInteger(idx) || idx < 0 || idx >= config.keywords.length) {
+    return res.status(400).json({ error: `Invalid index: ${req.params.idx}. Must be 0-${config.keywords.length - 1}` });
+  }
+
+  const removed = config.keywords.splice(idx, 1)[0];
+  config.version = (config.version || 0) + 1;
+  writeKeywordsFile(config);
+  res.json({ success: true, removed, config });
+});
 
 module.exports = router;

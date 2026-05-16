@@ -452,8 +452,186 @@ async function clearPlatform(platform) {
   window.gtss.updateSessionDots();
 }
 
+// ---------------------------------------------------------------------------
+// Pipeline Settings
+// ---------------------------------------------------------------------------
+
+let pipelineState = {
+  config: {},
+  keywords: { keywords: [], platforms: [], maxLeadsPerKeyword: 10 },
+  runs: [],
+};
+
+async function loadPipelineSettings() {
+  try {
+    const [config, keywords, runs] = await Promise.all([
+      window.gtss.fetchJSON("/api/settings/pipeline"),
+      window.gtss.fetchJSON("/api/discovery/keywords"),
+      window.gtss.fetchJSON("/api/pipeline/runs?limit=5"),
+    ]);
+    pipelineState.config = config;
+    pipelineState.keywords = keywords;
+    pipelineState.runs = runs;
+    applyPipelineConfig(config);
+    renderKeywords(keywords);
+    renderPipelineRuns(runs);
+  } catch (error) {
+    console.error("Failed to load pipeline settings:", error);
+  }
+}
+
+function applyPipelineConfig(config) {
+  document.getElementById("pipeline-mode").value = config.pipelineMode || "ai";
+  document.getElementById("pipeline-auto-approve").value = config.autoApproveVariant || "B";
+  document.getElementById("pipeline-cron").value = config.pipelineCron || "0 8 * * *";
+  document.getElementById("discovery-mode").value = config.discoveryMode || "";
+  document.getElementById("qualification-mode").value = config.qualificationMode || "";
+  document.getElementById("message-mode").value = config.messageMode || "";
+  document.getElementById("qualification-threshold").value = config.qualificationThreshold ?? 50;
+  document.getElementById("qualification-manual-score").value = config.qualificationManualScore ?? 75;
+}
+
+function renderKeywords(data) {
+  const list = document.getElementById("keywords-list");
+  if (!data.keywords || data.keywords.length === 0) {
+    list.innerHTML = '<span class="muted">No keywords configured.</span>';
+    return;
+  }
+  list.innerHTML = data.keywords.map((kw, idx) => `
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span style="flex: 1; color: var(--gtss-text); font-size: 13px;">${idx + 1}. ${kw}</span>
+      <button class="secondary-button" data-remove-keyword="${idx}" type="button" style="min-height: 30px; padding: 0 8px; font-size: 12px;">✕</button>
+    </div>
+  `).join("");
+}
+
+function renderPipelineRuns(runs) {
+  const body = document.getElementById("pipeline-runs-body");
+  if (!runs || runs.length === 0) {
+    body.innerHTML = '<tr><td colspan="9" class="muted" style="text-align: center;">No pipeline runs yet</td></tr>';
+    return;
+  }
+  body.innerHTML = runs.map(run => {
+    const s = run.stages || {};
+    const statusClass = run.status === "completed" ? "color: var(--gtss-success)" : run.status === "failed" ? "color: var(--gtss-danger)" : "color: var(--gtss-warning, #f59e0b)";
+    return `<tr>
+      <td>${run.id}</td>
+      <td>${run.trigger}</td>
+      <td>${run.mode}</td>
+      <td style="${statusClass}; font-weight: 800;">${run.status}</td>
+      <td>${run.started_at ? new Date(run.started_at).toLocaleString() : "-"}</td>
+      <td>${s.discovery ? `${s.discovery.newLeads || 0} new` : "-"}</td>
+      <td>${s.qualification ? `${s.qualification.qualified || 0}` : "-"}</td>
+      <td>${s.messages ? `${s.messages.generated || 0}` : "-"}</td>
+      <td>${s.send ? `${s.send.sent || 0}` : "-"}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function savePipelineSettings() {
+  try {
+    await window.gtss.fetchJSON("/api/settings/pipeline", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pipelineMode: document.getElementById("pipeline-mode").value,
+        autoApproveVariant: document.getElementById("pipeline-auto-approve").value,
+        pipelineCron: document.getElementById("pipeline-cron").value,
+        discoveryMode: document.getElementById("discovery-mode").value,
+        qualificationMode: document.getElementById("qualification-mode").value,
+        messageMode: document.getElementById("message-mode").value,
+        qualificationThreshold: document.getElementById("qualification-threshold").value,
+        qualificationManualScore: document.getElementById("qualification-manual-score").value,
+      }),
+    });
+    window.gtss.showToast("Pipeline settings saved", "success");
+  } catch (error) {
+    window.gtss.showToast(error.message, "error");
+  }
+}
+
+async function runPipeline() {
+  const btn = document.getElementById("run-pipeline");
+  btn.disabled = true;
+  btn.textContent = "⏳ Running...";
+  setInline("pipeline-result", "Pipeline running — this may take several minutes...", "");
+
+  try {
+    const mode = document.getElementById("pipeline-mode").value;
+    const result = await window.gtss.fetchJSON("/api/pipeline/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    setInline("pipeline-result", `Pipeline run #${result.runId} started. Refresh to see results.`, "success");
+    // Refresh runs after a short delay
+    setTimeout(async () => {
+      try {
+        pipelineState.runs = await window.gtss.fetchJSON("/api/pipeline/runs?limit=5");
+        renderPipelineRuns(pipelineState.runs);
+      } catch (_) {}
+    }, 3000);
+  } catch (error) {
+    setInline("pipeline-result", `Pipeline failed: ${error.message}`, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "▶ Run Pipeline Now";
+  }
+}
+
+async function addKeyword() {
+  const input = document.getElementById("new-keyword");
+  const keyword = input.value.trim();
+  if (!keyword) return;
+
+  try {
+    const result = await window.gtss.fetchJSON("/api/discovery/keywords/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keyword }),
+    });
+    pipelineState.keywords = result.config;
+    renderKeywords(result.config);
+    input.value = "";
+    window.gtss.showToast("Keyword added", "success");
+  } catch (error) {
+    window.gtss.showToast(error.message, "error");
+  }
+}
+
+async function removeKeyword(idx) {
+  try {
+    const result = await window.gtss.fetchJSON(`/api/discovery/keywords/${idx}`, {
+      method: "DELETE",
+    });
+    pipelineState.keywords = result.config;
+    renderKeywords(result.config);
+    window.gtss.showToast(`Removed: ${result.removed}`, "success");
+  } catch (error) {
+    window.gtss.showToast(error.message, "error");
+  }
+}
+
+function bindPipelineEvents() {
+  document.getElementById("save-pipeline").addEventListener("click", savePipelineSettings);
+  document.getElementById("run-pipeline").addEventListener("click", runPipeline);
+  document.getElementById("add-keyword").addEventListener("click", addKeyword);
+  document.getElementById("new-keyword").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") addKeyword();
+  });
+  document.addEventListener("click", (event) => {
+    const removeBtn = event.target.closest("[data-remove-keyword]");
+    if (removeBtn) {
+      removeKeyword(Number(removeBtn.dataset.removeKeyword));
+    }
+  });
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
+  bindPipelineEvents();
   await loadSettings();
   await loadSessions();
+  await loadPipelineSettings();
 });
+

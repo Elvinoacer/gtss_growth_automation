@@ -4,6 +4,10 @@ const { getDb } = require("../db/database");
 const { getPrimaryPlatform } = require("./platformCatalog");
 const { callGeminiText } = require("./aiService");
 const logger = require("../utils/logger");
+const {
+  stageMode,
+  autoApproveVariant,
+} = require("../config/pipelineConfig");
 
 // ---------------------------------------------------------------------------
 // SSE infrastructure (mirrors qualificationService pattern)
@@ -134,6 +138,82 @@ function stripCodeFences(text) {
 }
 
 // ---------------------------------------------------------------------------
+// Template-based fallback message generation
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate messages from templates when AI is unavailable or in manual mode.
+ * Applies personalisation rules based on lead's company, location, and role.
+ *
+ * @param {Object} lead - Lead record from DB
+ * @param {string} [productPitch] - Product name override
+ * @returns {{variantA: {id: number, body: string}, variantB: {id: number, body: string}}}
+ */
+function generateFromTemplate(lead, productPitch) {
+  const db = getDb();
+  const resolvedPlatform = lead.platform || getPrimaryPlatform();
+  const messageType = resolvedPlatform === "linkedin" ? "connect" : "dm";
+  const template = getTemplate(resolvedPlatform, messageType);
+  const painPoint = extractPainPoint(lead.score_reason);
+  const product = productPitch || "Restaurant Manager";
+
+  const templateVars = {
+    lead_name: lead.name || "there",
+    role: lead.role || "",
+    company: lead.company || "your business",
+    location: lead.location || "Kenya",
+    product,
+    pain_point: painPoint,
+  };
+
+  // Variant A: straight template fill
+  const bodyA = template
+    ? fillTemplate(template, templateVars)
+    : `Hi ${templateVars.lead_name}, I work with businesses in Kenya to help them with ${painPoint}. Would love to connect!`;
+
+  // Variant B: enhanced personalisation
+  let opener = `Hi ${templateVars.lead_name},`;
+  if (lead.company && lead.company !== "your business") {
+    opener = `Hi ${templateVars.lead_name}, I came across ${lead.company} and was really impressed.`;
+  }
+
+  let locationLine = "";
+  const loc = (lead.location || "").toLowerCase();
+  if (loc.includes("nairobi")) {
+    locationLine = " Especially given the competitive Nairobi F&B scene.";
+  } else if (loc.includes("mombasa")) {
+    locationLine = " Especially given how busy the Mombasa hospitality market is.";
+  }
+
+  let roleAddress = "";
+  const role = (lead.role || "").toLowerCase();
+  if (role.includes("owner") || role.includes("manager")) {
+    roleAddress = ` As someone running the show at ${lead.company || 'your business'},`;
+  }
+
+  // Get platform-appropriate CTA from template
+  const templates = loadTemplates();
+  const ctaTemplate = templates[`${resolvedPlatform}_${messageType}`] || templates[`${resolvedPlatform}_dm`] || "";
+  const ctaMatch = ctaTemplate.match(/Would you be open to.*$|Would love to.*$|Worth a quick.*$|Mind if I.*$/im);
+  const cta = ctaMatch ? ctaMatch[0] : "Would you be open to a quick chat?";
+
+  const bodyB = `${opener}${locationLine}\n\n${roleAddress} I think our ${product} could really help with ${painPoint}.\n\n${fillTemplate(cta, templateVars)}`.trim();
+
+  const insertStmt = db.prepare(
+    `INSERT INTO messages (lead_id, platform, body, variant, status, generated_by, generated_at)
+     VALUES (?, ?, ?, ?, 'pending', 'template-fallback', CURRENT_TIMESTAMP)`,
+  );
+
+  const resultA = insertStmt.run(lead.id, resolvedPlatform, bodyA, "A");
+  const resultB = insertStmt.run(lead.id, resolvedPlatform, bodyB, "B");
+
+  return {
+    variantA: { id: resultA.lastInsertRowid, body: bodyA },
+    variantB: { id: resultB.lastInsertRowid, body: bodyB },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Core: generateMessages
 // ---------------------------------------------------------------------------
 
@@ -182,8 +262,8 @@ Return ONLY the message body.`;
     const cleanB = stripCodeFences(bodyB).replace(/^["']|["']$/g, "");
 
     const insertStmt = db.prepare(
-      `INSERT INTO messages (lead_id, platform, body, variant, status, generated_at)
-       VALUES (?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)`,
+      `INSERT INTO messages (lead_id, platform, body, variant, status, generated_by, generated_at)
+       VALUES (?, ?, ?, ?, 'pending', 'ai', CURRENT_TIMESTAMP)`,
     );
 
     const resultA = insertStmt.run(leadId, resolvedPlatform, cleanA, "A");
@@ -196,16 +276,22 @@ Return ONLY the message body.`;
   } catch (error) {
     logger.error(
       "MESSAGES",
-      `Failed to generate messages for lead ${leadId}`,
+      `Failed to generate AI messages for lead ${leadId}`,
       error,
     );
-    // Mark lead as failed if it's a 500 or parse error
-    if (error.status === 500 || error.status === "parse_failed") {
-      db.prepare(`UPDATE leads SET status = 'scoring_failed' WHERE id = ?`).run(
-        leadId,
-      );
+
+    // Fallback to template when AI fails
+    logger.warn("MESSAGES", `Gemini unavailable for lead ${leadId}, using template fallback`);
+    try {
+      return generateFromTemplate(lead, productPitch);
+    } catch (fallbackError) {
+      logger.error("MESSAGES", `Template fallback also failed for lead ${leadId}`, fallbackError);
+      // Mark lead as failed if it's a 500 or parse error
+      if (error.status === 500 || error.status === "parse_failed") {
+        db.prepare(`UPDATE leads SET status = 'scoring_failed' WHERE id = ?`).run(leadId);
+      }
+      throw error;
     }
-    throw error;
   }
 }
 
@@ -336,10 +422,101 @@ async function generateAllMessages(jobId, productPitch, tone) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Pipeline entry point: runMessageStage
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the message generation stage for the pipeline.
+ * Generates messages for all qualified leads that don't yet have an approved message.
+ * Auto-approves the configured variant (default: B).
+ *
+ * @param {string|number} jobId - Pipeline run ID for event tracking
+ * @param {Function} emit - Event emitter function
+ * @returns {Promise<{generated: number, approved: number}>}
+ */
+async function runMessageStage(jobId, emit) {
+  const db = getDb();
+  const mode = stageMode('message');
+  const variant = autoApproveVariant();
+
+  // Get all qualified leads that don't yet have an approved message
+  const leads = db.prepare(`
+    SELECT l.* FROM leads l
+    LEFT JOIN messages m ON m.lead_id = l.id AND m.status = 'approved'
+    WHERE l.status = 'qualified' AND m.id IS NULL
+    ORDER BY l.lead_score DESC
+  `).all();
+
+  if (leads.length === 0) {
+    emit({ type: 'info', message: 'No qualified leads need messages' });
+    return { generated: 0, approved: 0 };
+  }
+
+  let generated = 0;
+  let approved = 0;
+
+  emit({ type: 'info', message: `Generating messages for ${leads.length} leads (mode: ${mode}, auto-approve: variant ${variant})` });
+
+  for (let i = 0; i < leads.length; i++) {
+    const lead = leads[i];
+    emit({ type: 'progress', message: `Generating message for ${lead.name || lead.id}...`, processed: i, total: leads.length });
+
+    try {
+      let result;
+      if (mode === 'manual') {
+        result = generateFromTemplate(lead);
+      } else {
+        // AI mode with automatic template fallback (handled inside generateMessages)
+        result = await generateMessages(lead.id, lead.platform);
+      }
+
+      generated++;
+
+      // Auto-approve configured variant
+      const updated = db.prepare(`
+        UPDATE messages
+        SET status = 'approved',
+            approved_by = 'pipeline-auto',
+            approved_at = CURRENT_TIMESTAMP
+        WHERE lead_id = ? AND variant = ? AND status = 'pending'
+      `).run(lead.id, variant);
+
+      if (updated.changes > 0) {
+        approved++;
+        emit({
+          type: 'generated',
+          leadId: lead.id,
+          name: lead.name,
+          autoApproved: variant,
+          variantA: result.variantA.body.slice(0, 60),
+          variantB: result.variantB.body.slice(0, 60),
+        });
+      }
+    } catch (err) {
+      emit({ type: 'warn', message: `Failed for ${lead.name || lead.id}: ${err.message}` });
+    }
+
+    // Batch delay every BATCH_SIZE leads
+    if ((i + 1) % BATCH_SIZE === 0 && i + 1 < leads.length) {
+      await delay(BATCH_DELAY_MS);
+    }
+  }
+
+  emit({
+    type: 'complete',
+    message: `Generated ${generated} messages, ${approved} auto-approved as variant ${variant}`,
+  });
+
+  return { generated, approved };
+}
+
 module.exports = {
   generateMessages,
   generateFollowUp,
   generateAllMessages,
+  generateFromTemplate,
+  runMessageStage,
   registerJobStream,
   emitJobEvent,
   closeJobStream,

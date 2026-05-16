@@ -354,5 +354,55 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+// ---------------------------------------------------------------------------
+// Pipeline settings
+// ---------------------------------------------------------------------------
+const pipelineConfig = require('../config/pipelineConfig');
+
+apiRouter.get('/pipeline', (req, res) => {
+  res.json({
+    pipelineMode: process.env.PIPELINE_MODE || 'ai',
+    discoveryMode: process.env.DISCOVERY_MODE || '',
+    qualificationMode: process.env.QUALIFICATION_MODE || '',
+    messageMode: process.env.MESSAGE_MODE || '',
+    sendMode: process.env.SEND_MODE || '',
+    qualificationThreshold: pipelineConfig.qualificationThreshold(),
+    qualificationManualScore: pipelineConfig.manualQualificationScore(),
+    autoApproveVariant: pipelineConfig.autoApproveVariant(),
+    pipelineCron: pipelineConfig.pipelineCron(),
+  });
+});
+
+apiRouter.patch('/pipeline', (req, res) => {
+  const fields = {
+    pipelineMode: 'PIPELINE_MODE',
+    discoveryMode: 'DISCOVERY_MODE',
+    qualificationMode: 'QUALIFICATION_MODE',
+    messageMode: 'MESSAGE_MODE',
+    sendMode: 'SEND_MODE',
+    qualificationThreshold: 'QUALIFICATION_THRESHOLD',
+    qualificationManualScore: 'QUALIFICATION_MANUAL_SCORE',
+    autoApproveVariant: 'MESSAGE_AUTO_APPROVE_VARIANT',
+    pipelineCron: 'PIPELINE_CRON',
+  };
+
+  const updated = [];
+
+  for (const [bodyKey, envKey] of Object.entries(fields)) {
+    if (req.body[bodyKey] !== undefined) {
+      const value = String(req.body[bodyKey]).trim();
+      upsertEnvValue(envKey, value);
+      process.env[envKey] = value;
+      updated.push(bodyKey);
+    }
+  }
+
+  if (updated.length === 0) {
+    return res.status(400).json({ error: 'No pipeline settings provided' });
+  }
+
+  return res.json({ success: true, updated });
+});
+
 module.exports = pageRouter;
 module.exports.apiRouter = apiRouter;

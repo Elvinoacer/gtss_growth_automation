@@ -95,6 +95,92 @@
         </section>
 
         <section class="settings-section gtss-card">
+          <div class="section-head">
+            <h2>Pipeline Configuration</h2>
+            <div>
+              <button id="save-pipeline" class="primary-button" type="button">Save Pipeline Settings</button>
+              <button id="run-pipeline" class="secondary-button" type="button">▶ Run Pipeline Now</button>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <div class="form-row">
+              <label class="field">Pipeline Mode
+                <select id="pipeline-mode">
+                  <option value="ai">AI (Gemini + fallback)</option>
+                  <option value="manual">Manual (templates/rules only)</option>
+                </select>
+              </label>
+              <label class="field">Auto-approve Variant
+                <select id="pipeline-auto-approve">
+                  <option value="B">Variant B</option>
+                  <option value="A">Variant A</option>
+                </select>
+              </label>
+              <label class="field">Pipeline Schedule (Cron)
+                <input id="pipeline-cron" type="text" placeholder="0 8 * * *">
+              </label>
+            </div>
+
+            <div class="form-row">
+              <label class="field">Discovery Mode Override
+                <select id="discovery-mode" class="stage-mode-override">
+                  <option value="">Inherit from Pipeline Mode</option>
+                  <option value="ai">AI</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </label>
+              <label class="field">Qualification Mode Override
+                <select id="qualification-mode" class="stage-mode-override">
+                  <option value="">Inherit from Pipeline Mode</option>
+                  <option value="ai">AI</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </label>
+              <label class="field">Message Mode Override
+                <select id="message-mode" class="stage-mode-override">
+                  <option value="">Inherit from Pipeline Mode</option>
+                  <option value="ai">AI</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="form-row">
+              <label class="field">Qualification Threshold (0-100)
+                <input id="qualification-threshold" type="number" min="0" max="100" placeholder="50">
+              </label>
+              <label class="field">Manual Qualification Score
+                <input id="qualification-manual-score" type="number" min="0" max="100" placeholder="75">
+              </label>
+            </div>
+          </div>
+
+          <div style="margin-top: 18px;">
+            <h3 style="margin: 0 0 12px;">Discovery Keywords</h3>
+            <div id="keywords-list" class="form-grid" style="gap: 6px; max-height: 200px; overflow-y: auto;"></div>
+            <div class="form-row" style="margin-top: 10px;">
+              <label class="field" style="flex: 3;">
+                <input id="new-keyword" type="text" placeholder="Add keyword, e.g. restaurant owner Nairobi">
+              </label>
+              <button id="add-keyword" class="primary-button" type="button">Add Keyword</button>
+            </div>
+          </div>
+
+          <div style="margin-top: 18px;">
+            <h3 style="margin: 0 0 12px;">Recent Pipeline Runs</h3>
+            <div class="limits-table-wrap">
+              <table class="limits-table">
+                <thead><tr><th>#</th><th>Trigger</th><th>Mode</th><th>Status</th><th>Started</th><th>Discovery</th><th>Qualified</th><th>Messages</th><th>Sent</th></tr></thead>
+                <tbody id="pipeline-runs-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <span id="pipeline-result" class="inline-result" style="margin-top: 10px; display: block;"></span>
+        </section>
+
+        <section class="settings-section gtss-card">
           <div class="section-head"><h2>Notification Settings</h2><span id="email-result" class="inline-result"></span></div>
           <div class="form-grid">
             <div class="form-row">

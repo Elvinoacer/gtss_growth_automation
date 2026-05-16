@@ -1,6 +1,11 @@
 const { getDb } = require("../db/database");
 const { callGeminiText } = require("./aiService");
 const logger = require("../utils/logger");
+const {
+  stageMode,
+  manualQualificationScore,
+  qualificationThreshold,
+} = require("../config/pipelineConfig");
 
 const jobStreams = new Map();
 const jobEventHistory = new Map();
@@ -107,7 +112,8 @@ async function scoreLead(lead) {
 
     const score = Math.max(0, Math.min(100, Number(result.score) || 0));
     const reason = String(result.reason || "");
-    const status = score >= 50 ? "qualified" : "deprioritized";
+    const threshold = qualificationThreshold();
+    const status = score >= threshold ? "qualified" : "deprioritized";
 
     db.prepare(
       `UPDATE leads
@@ -119,7 +125,26 @@ async function scoreLead(lead) {
   } catch (error) {
     logger.error("QUALIFICATION", `Error scoring lead ${lead.id}`, error);
 
-    // Mark as scoring_failed if it's a 500 or parse error
+    // In AI mode, fall back to manual score when Gemini is unavailable
+    const mode = stageMode('qualification');
+    if (mode === 'ai') {
+      const fallbackScore = manualQualificationScore();
+      const threshold = qualificationThreshold();
+      const fallbackStatus = fallbackScore >= threshold ? 'qualified' : 'deprioritized';
+      const fallbackReason = `Auto-qualified: AI unavailable (${error.message}), score assigned by pipeline fallback`;
+
+      logger.warn('QUALIFICATION', `Gemini unavailable for lead ${lead.id}, using manual fallback score ${fallbackScore}`);
+
+      db.prepare(
+        `UPDATE leads
+         SET lead_score = ?, score_reason = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      ).run(fallbackScore, fallbackReason, fallbackStatus, lead.id);
+
+      return { score: fallbackScore, reason: fallbackReason, factors: {} };
+    }
+
+    // Original error handling for non-pipeline contexts
     const status =
       error.status === 500 || error.status === "parse_failed"
         ? "scoring_failed"
@@ -199,9 +224,69 @@ async function scoreLeadsBatch(leadIds, jobId) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Pipeline entry point: runQualificationStage
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the qualification stage for the pipeline.
+ * In manual mode, all pending leads are bulk-qualified with a fixed score.
+ * In AI mode, leads are scored via Gemini with automatic fallback.
+ *
+ * @param {string|number} jobId - Pipeline run ID for SSE event tracking
+ * @param {Function} emit - Event emitter function (type, message)
+ * @returns {Promise<{processed: number, qualified: number, deprioritized: number}>}
+ */
+async function runQualificationStage(jobId, emit) {
+  const mode = stageMode('qualification');
+  const db = getDb();
+
+  // Find all leads that need qualification
+  const pending = db.prepare(
+    `SELECT id FROM leads
+     WHERE status IN ('discovered', 'pending_qualification')
+        OR (lead_score IS NULL AND status NOT IN ('dismissed', 'messaged', 'replied', 'meeting_booked', 'converted', 'lost'))
+     ORDER BY created_at DESC`
+  ).all().map(r => r.id);
+
+  if (pending.length === 0) {
+    emit({ type: 'info', message: 'No pending leads to qualify' });
+    return { processed: 0, qualified: 0, deprioritized: 0 };
+  }
+
+  if (mode === 'manual') {
+    // Bulk qualify all leads — intentionally makes all pass so the operator
+    // can reject on the Message Generator page before messages are sent
+    const score = manualQualificationScore();
+    const reason = 'Pipeline manual mode — all leads pre-qualified for human review';
+
+    emit({ type: 'info', message: `Manual mode: qualifying ${pending.length} leads with score ${score}` });
+
+    db.prepare(
+      `UPDATE leads
+       SET lead_score = ?, score_reason = ?, status = 'qualified', updated_at = CURRENT_TIMESTAMP
+       WHERE id IN (${pending.map(() => '?').join(',')})`
+    ).run(score, reason, ...pending);
+
+    emit({
+      type: 'complete',
+      message: `Manual mode: ${pending.length} leads qualified with score ${score}`,
+      qualified: pending.length,
+      deprioritized: 0,
+    });
+
+    return { processed: pending.length, qualified: pending.length, deprioritized: 0 };
+  }
+
+  // AI mode — calls existing scoreLeadsBatch with AI→manual fallback inside scoreLead
+  emit({ type: 'info', message: `AI mode: scoring ${pending.length} leads via Gemini` });
+  return await scoreLeadsBatch(pending, jobId);
+}
+
 module.exports = {
   scoreLead,
   scoreLeadsBatch,
+  runQualificationStage,
   registerJobStream,
   emitJobEvent,
   closeJobStream,

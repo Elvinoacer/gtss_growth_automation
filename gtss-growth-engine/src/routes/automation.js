@@ -14,6 +14,12 @@ const {
   releaseActionFingerprint,
 } = require("../automation/idempotency");
 const { determineActionType } = require("../automation/executor");
+const {
+  runFullPipeline,
+  getPipelineRun,
+  listPipelineRuns,
+  registerPipelineStream,
+} = require("../pipeline/pipelineRunner");
 
 const router = express.Router();
 
@@ -371,6 +377,59 @@ router.post("/api/automation/open-browser/:platform", async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Pipeline API Routes
+// ---------------------------------------------------------------------------
+
+// POST /api/pipeline/run — trigger full or partial pipeline
+router.post("/api/pipeline/run", async (req, res) => {
+  const { mode, stages } = req.body || {};
+  const options = {};
+
+  if (mode === 'ai' || mode === 'manual') {
+    options.mode = mode;
+  }
+  if (Array.isArray(stages) && stages.length > 0) {
+    const validStages = ['discovery', 'qualification', 'messages', 'send'];
+    options.stages = stages.filter(s => validStages.includes(s));
+    if (options.stages.length === 0) delete options.stages;
+  }
+
+  try {
+    const runId = await runFullPipeline('manual', options);
+    res.json({ success: true, runId });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/pipeline/stream/:runId — SSE stream for pipeline events
+router.get("/api/pipeline/stream/:runId", (req, res) => {
+  const runId = req.params.runId;
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+
+  registerPipelineStream(runId, res);
+});
+
+// GET /api/pipeline/runs — list recent pipeline runs
+router.get("/api/pipeline/runs", (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+  const runs = listPipelineRuns(limit);
+  res.json(runs);
+});
+
+// GET /api/pipeline/runs/:runId — single run detail
+router.get("/api/pipeline/runs/:runId", (req, res) => {
+  const run = getPipelineRun(Number(req.params.runId));
+  if (!run) return res.status(404).json({ error: 'Pipeline run not found' });
+  res.json(run);
 });
 
 module.exports = router;

@@ -78,6 +78,26 @@ function startBackgroundJobs() {
     });
   });
 
+  // Pipeline cron — run the full outreach pipeline on schedule
+  const { pipelineCron } = require('../config/pipelineConfig');
+  const { runFullPipeline } = require('../pipeline/pipelineRunner');
+  const cronExpression = pipelineCron();
+
+  if (cronExpression && cron.validate(cronExpression)) {
+    cron.schedule(cronExpression, async () => {
+      logger.info('PIPELINE', `Scheduled pipeline run triggered (cron: ${cronExpression})`);
+      try {
+        const runId = await runFullPipeline('cron');
+        logger.info('PIPELINE', `Scheduled pipeline run completed: #${runId}`);
+      } catch (err) {
+        logger.error('PIPELINE', 'Scheduled pipeline run failed', { error: err.message });
+      }
+    });
+    logger.info('SERVER', `Pipeline cron registered: ${cronExpression}`);
+  } else if (cronExpression) {
+    logger.warn('SERVER', `Invalid PIPELINE_CRON expression: "${cronExpression}" — pipeline cron NOT registered`);
+  }
+
   logger.info("SERVER", "Background automation worker initialized.");
 }
 

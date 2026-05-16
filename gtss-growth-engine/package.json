@@ -8,7 +8,8 @@
     "dev": "node --watch src/server.js",
     "test": "node --test",
     "migrate:retry-columns": "node scripts/migrate-retry-columns.js",
-    "migrate:message-columns": "node scripts/migrate-message-columns.js"
+    "migrate:message-columns": "node scripts/migrate-message-columns.js",
+    "migrate:pipeline": "node scripts/migrate-pipeline.js"
   },
   "keywords": [
     "growth",

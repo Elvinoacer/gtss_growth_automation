@@ -98,6 +98,30 @@ function initializeSchema(database) {
     /* tables exist */
   }
 
+  // Pipeline migrations
+  try {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS pipeline_runs (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        trigger     TEXT NOT NULL,
+        mode        TEXT NOT NULL,
+        status      TEXT DEFAULT 'running',
+        stages_json TEXT,
+        started_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+        finished_at DATETIME
+      );
+    `);
+  } catch (_) { /* table exists */ }
+  try {
+    database.exec('ALTER TABLE leads ADD COLUMN pipeline_run_id INTEGER REFERENCES pipeline_runs(id)');
+  } catch (_) {}
+  try {
+    database.exec('ALTER TABLE discovery_runs ADD COLUMN pipeline_run_id INTEGER REFERENCES pipeline_runs(id)');
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE messages ADD COLUMN generated_by TEXT DEFAULT 'ai'");
+  } catch (_) {}
+
   seedDefaultSettings(database);
 }
 
