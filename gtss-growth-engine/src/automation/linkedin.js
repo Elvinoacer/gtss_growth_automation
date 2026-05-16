@@ -76,19 +76,28 @@ const SELECTORS = {
   ],
   dmEditor: [
     '.msg-form__contenteditable[contenteditable="true"]',
+    '.msg-form textarea',
+    'textarea[name="message"]',
+    'textarea[placeholder*="message" i]',
+    'textarea[aria-label*="message" i]',
+    'textarea[aria-label*="write" i]',
     '[contenteditable="true"][aria-label*="message" i]',
     '[contenteditable="true"][aria-label*="Write" i]',
     '[contenteditable="true"][data-placeholder]',
     '.msg-overlay-conversation-bubble [contenteditable="true"]',
+    '.msg-overlay-conversation-bubble [role="textbox"]',
     '[contenteditable="true"][role="textbox"]',
     '[role="textbox"]',
-    '[contenteditable="true"]'
+    '[contenteditable="true"]',
+    'textarea'
   ],
   dmOverlay: [
     '.msg-overlay-conversation-bubble',
     '.msg-convo-wrapper',
     '.msg-form',
-    '[role="dialog"]:has([contenteditable="true"])'
+    '[role="dialog"]:has(textarea)',
+    '[role="dialog"]:has([contenteditable="true"])',
+    '[role="dialog"]:has([role="textbox"])'
   ],
   dmSend: [
     'button.msg-form__send-button[aria-label]',
@@ -105,28 +114,36 @@ const SELECTORS = {
 };
 
 async function firstVisible(page, selectors, timeout = 1500) {
-  for (const selector of selectors) {
-    const locator = page.locator(selector).first();
-    try {
-      await locator.waitFor({ state: 'visible', timeout });
-      return { locator, selector };
-    } catch (_) {
-      // Try the next fallback selector.
-    }
-  }
-  return null;
+  return firstVisibleIn(page, selectors, timeout);
 }
 
 async function firstVisibleIn(scope, selectors, timeout = 1500) {
+  const deadline = Date.now() + timeout;
+
   for (const selector of selectors) {
-    const locator = scope.locator(selector).first();
-    try {
-      await locator.waitFor({ state: 'visible', timeout });
-      return { locator, selector };
-    } catch (_) {
-      // Try the next fallback selector.
+    const locator = scope.locator(selector);
+    const count = await locator.count().catch(() => 0);
+
+    for (let index = 0; index < count; index++) {
+      const candidate = locator.nth(index);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return null;
+
+      try {
+        await candidate.waitFor({
+          state: 'visible',
+          timeout: Math.min(300, remaining)
+        });
+        return {
+          locator: candidate,
+          selector: count > 1 ? `${selector} >> nth=${index}` : selector
+        };
+      } catch (_) {
+        // Try the next matching candidate.
+      }
     }
   }
+
   return null;
 }
 
@@ -293,7 +310,15 @@ async function verifyDmSent(page, editorTarget, message) {
     }
 
     const editorText = await editorLocator
-      .evaluate(el => (el.textContent || el.innerText || '').trim(), undefined, { timeout: 1000 })
+      .evaluate((el) => {
+        const tagName = String(el.tagName || '').toLowerCase();
+
+        if (tagName === 'textarea' || tagName === 'input') {
+          return String(el.value || '').trim();
+        }
+
+        return String(el.textContent || el.innerText || '').trim();
+      }, undefined, { timeout: 1000 })
       .catch(() => '');
 
     if (!editorText) {
@@ -496,11 +521,6 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
       return premiumRequired;
     }
 
-    await page.locator('.msg-overlay-conversation-bubble, .msg-form, .msg-form__contenteditable, [contenteditable="true"]')
-      .first()
-      .waitFor({ state: 'visible', timeout: 8000 })
-      .catch(() => {});
-
     const premiumAfterWait = await detectPremiumRequired(page);
     if (premiumAfterWait) {
       emit('warn', premiumAfterWait.reason);
@@ -509,15 +529,21 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
 
     // The messaging overlay should pop up. Find the editor.
     const dmOverlayMatch = await firstVisible(page, SELECTORS.dmOverlay, 5000);
-    const editorMatch = dmOverlayMatch
+    let editorMatch = dmOverlayMatch
       ? await firstVisibleIn(dmOverlayMatch.locator, SELECTORS.dmEditor, 5000)
       : null;
+
+    if (!editorMatch) {
+      emit('warn', 'DM editor not found inside overlay, trying page-level fallback selectors.');
+      editorMatch = await firstVisible(page, SELECTORS.dmEditor, 5000);
+    }
+
     if (!editorMatch) {
        emit('error', 'Could not find message textarea in the chat overlay.');
        return { outcome: 'failed', reason: 'Textarea not found' };
     }
 
-    emit('info', 'Typing DM...');
+    emit('info', `Typing DM using ${editorMatch.selector}...`);
     await typeLikeHuman(page, editorMatch.locator, message);
     await humanDelay(1000, 2000);
 
