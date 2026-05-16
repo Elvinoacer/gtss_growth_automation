@@ -48,7 +48,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Set default schedule to next rounded hour
   const now = new Date();
   now.setHours(now.getHours() + 1, 0, 0, 0);
-  scheduleDate.value = now.toISOString().split("T")[0];
+  scheduleDate.value = formatLocalDateInput(now);
   scheduleTime.value = now.toTimeString().slice(0, 5);
 
   init();
@@ -56,8 +56,11 @@ document.addEventListener("DOMContentLoaded", () => {
   async function init() {
     bindEvents();
     await loadPauseState();
-    await loadCalendar();
-    await loadQueue();
+    await refreshSchedulerViews();
+
+    setInterval(() => {
+      refreshSchedulerViews();
+    }, 60_000);
   }
 
   // ── Helpers ──
@@ -95,10 +98,22 @@ document.addEventListener("DOMContentLoaded", () => {
     return `${months[d.getMonth()]} ${d.getDate()}`;
   }
 
+  function formatLocalDateInput(date) {
+    return [
+      date.getFullYear(),
+      String(date.getMonth() + 1).padStart(2, "0"),
+      String(date.getDate()).padStart(2, "0"),
+    ].join("-");
+  }
+
   function formatWeekRange(monday) {
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
     return `${formatDate(monday)} – ${formatDate(sunday)}, ${monday.getFullYear()}`;
+  }
+
+  async function refreshSchedulerViews() {
+    await Promise.allSettled([loadCalendar(), loadQueue()]);
   }
 
   // ── Character Counter ──
@@ -124,7 +139,7 @@ document.addEventListener("DOMContentLoaded", () => {
   async function loadCalendar() {
     weekRangeLabel.textContent =
       formatWeekRange(currentWeekStart).toUpperCase();
-    const weekStr = currentWeekStart.toISOString().split("T")[0];
+    const weekStr = formatLocalDateInput(currentWeekStart);
 
     let posts = [];
     try {
@@ -159,13 +174,13 @@ document.addEventListener("DOMContentLoaded", () => {
       for (let i = 0; i < 7; i++) {
         const d = new Date(currentWeekStart);
         d.setDate(currentWeekStart.getDate() + i);
-        const dayStr = d.toISOString().split("T")[0];
+        const dayStr = formatLocalDateInput(d);
         const isWeekend = i >= 5;
         const isToday = d.getTime() === today.getTime();
 
         const dayPosts = posts.filter((p) => {
           const pDate = new Date(p.scheduled_at || p.published_at);
-          const pDayStr = pDate.toISOString().split("T")[0];
+          const pDayStr = formatLocalDateInput(pDate);
           const hour = pDate.getHours();
           return pDayStr === dayStr && hour >= slot.startH && hour < slot.endH;
         });
@@ -384,7 +399,7 @@ document.addEventListener("DOMContentLoaded", () => {
     $("edit-body").value = post.body || "";
     if (post.scheduled_at) {
       const d = new Date(post.scheduled_at);
-      $("edit-date").value = d.toISOString().split("T")[0];
+      $("edit-date").value = formatLocalDateInput(d);
       $("edit-time").value = d.toTimeString().slice(0, 5);
     }
     $("edit-modal-backdrop").classList.remove("hidden");
@@ -452,7 +467,8 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         const result = await res.json();
 
-        if (!result.filePath) throw new Error("Server did not return a file path");
+        if (!result.filePath)
+          throw new Error("Server did not return a file path");
 
         uploadedMediaFilePath = result.filePath; // absolute FS path — used when posting
         uploadedMediaPath = result.path; // web URL — used for preview thumbnail only

@@ -34,6 +34,7 @@ async function deleteMediaFile(mediaPath) {
 function initScheduledPoster() {
   logger.info("Initializing Scheduled Poster cron job (runs every minute)");
 
+  // isPublishing prevents overlap; node-cron does not support a noOverlap option.
   cron.schedule(
     "* * * * *",
     async () => {
@@ -54,7 +55,6 @@ function initScheduledPoster() {
           return;
         }
 
-        const now = new Date().toISOString();
         const duePosts = db
           .prepare(
             `SELECT *
@@ -87,25 +87,23 @@ function initScheduledPoster() {
 
           try {
             const result = await publishPost(post.id, noopEmit, {
-              headless: true,
-              allowHeadlessSocial: true,
               trace: false,
+              skipPostStatusUpdate: true,
             });
 
             const anySucceeded = result.success.length > 0;
             const anyFailed = result.failed.length > 0;
 
-            if (anySucceeded) {
+            if (anySucceeded && !anyFailed) {
               db.prepare(
                 `UPDATE posts
-                 SET retry_count = 0,
+                 SET status = 'published',
+                     published_at = CURRENT_TIMESTAMP,
+                     retry_count = 0,
                      next_retry_at = NULL,
                      last_error = NULL
                  WHERE id = ?`,
               ).run(post.id);
-            }
-
-            if (anySucceeded && !anyFailed) {
               logger.info(`Cron: Post ${post.id} fully published.`);
               continue;
             }
@@ -115,7 +113,6 @@ function initScheduledPoster() {
                 succeeded: result.success,
                 failed: result.failed,
               });
-              continue;
             }
 
             const newRetryCount = (post.retry_count || 0) + 1;
@@ -194,7 +191,6 @@ function initScheduledPoster() {
       }
     },
     {
-      noOverlap: true,
       name: "scheduled-poster",
     },
   );

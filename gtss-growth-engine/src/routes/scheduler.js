@@ -65,6 +65,37 @@ function normalizeScheduledAt(value) {
   return scheduledDate.toISOString();
 }
 
+function parseLocalDateString(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const parts = value.split("-");
+  if (parts.length !== 3) {
+    return null;
+  }
+
+  const [year, month, day] = parts.map((part) => Number(part));
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day)
+  ) {
+    return null;
+  }
+
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
 function normalizeMediaPath(mediaPath) {
   if (mediaPath == null || mediaPath === "") {
     return null;
@@ -247,7 +278,10 @@ router.get("/api/scheduler/posts", (req, res) => {
 
     if (week) {
       // week is a date string; we compute Mon-Sun range
-      const weekDate = new Date(week);
+      const weekDate = parseLocalDateString(week);
+      if (!weekDate) {
+        return res.status(400).json({ error: "Invalid week value" });
+      }
       const dayOfWeek = weekDate.getDay();
       const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
       const monday = new Date(weekDate);

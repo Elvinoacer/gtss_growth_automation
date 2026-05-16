@@ -789,6 +789,7 @@ async function postToInstagram(page, body, mediaPath, emit) {
 // ---------------------------------------------------------------------------
 
 async function publishPost(postId, emit, browserOptions = {}) {
+  const { skipPostStatusUpdate = false, ...launchOptions } = browserOptions;
   const db = getDb();
   const post = db.prepare("SELECT * FROM posts WHERE id = ?").get(postId);
   if (!post) throw new Error(`Post ${postId} not found`);
@@ -835,7 +836,7 @@ async function publishPost(postId, emit, browserOptions = {}) {
 
     let browser, context;
     try {
-      const result = await createBrowser(platform, browserOptions);
+      const result = await createBrowser(platform, launchOptions);
       browser = result.browser;
       context = result.context;
       const page = result.page;
@@ -908,13 +909,15 @@ async function publishPost(postId, emit, browserOptions = {}) {
     }
   }
 
-  // Update post status
-  if (succeeded.length > 0) {
-    db.prepare(
-      `UPDATE posts SET status = 'published', published_at = CURRENT_TIMESTAMP WHERE id = ?`,
-    ).run(postId);
-  } else {
-    db.prepare(`UPDATE posts SET status = 'failed' WHERE id = ?`).run(postId);
+  // Update post status unless the caller is managing cron state separately.
+  if (!skipPostStatusUpdate) {
+    if (succeeded.length > 0) {
+      db.prepare(
+        `UPDATE posts SET status = 'published', published_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      ).run(postId);
+    } else {
+      db.prepare(`UPDATE posts SET status = 'failed' WHERE id = ?`).run(postId);
+    }
   }
 
   // Cleanup uploaded media file
