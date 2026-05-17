@@ -20,6 +20,7 @@
   let platformCatalog = [];
   let platformLabels = {};
   let defaultPlatform = "";
+  let pipelineConfig = {};
 
   // Settings state
   let selectedTone = "friendly";
@@ -137,6 +138,7 @@
   }
 
   function getCharLimitForPlatform(platform) {
+    if (platform === "x") return 500;
     // Determine the key based on platform
     const connectKey = `${platform}_connect`;
     const dmKey = `${platform}_dm`;
@@ -413,6 +415,37 @@
     variantATextarea.value = modalVariantA ? modalVariantA.body : "";
     variantBTextarea.value = modalVariantB ? modalVariantB.body : "";
 
+    const platformHintEl = document.getElementById("modal-platform-hint");
+    if (platformHintEl) {
+      const platform = (msg.platform || "").toLowerCase();
+      if (platform === "x") {
+        const outreachMode = pipelineConfig.xOutreachMode || "follow_first";
+        let modeLabel = "";
+        if (outreachMode === "follow_first") {
+          modeLabel = "<strong>Follow First</strong>: The system will first follow the lead to warm up, then send this direct message.";
+        } else if (outreachMode === "dm_only") {
+          modeLabel = "<strong>Direct Message Only</strong>: The system will directly send this message without following.";
+        } else {
+          modeLabel = "<strong>Direct Message First</strong>: The system will send the DM first, and follow only if direct messaging succeeds/needs fallback.";
+        }
+        platformHintEl.innerHTML = `💡 <strong>X Platform Hint</strong>: Direct messages are capped at 500 characters.<br>${modeLabel}`;
+        platformHintEl.style.display = "block";
+      } else if (platform === "linkedin") {
+        const outreachMode = pipelineConfig.linkedinOutreachMode || "connect_first";
+        let modeLabel = "";
+        if (outreachMode === "connect_first") {
+          modeLabel = "<strong>Connect First</strong>: The message will be sent as a personalized connection request (max 300 characters). If already connected, it will be a direct message (max 1000 characters).";
+        } else {
+          modeLabel = "<strong>Direct Message Only</strong>: The message will be sent directly as a direct message (max 1000 characters).";
+        }
+        platformHintEl.innerHTML = `💡 <strong>LinkedIn Platform Hint</strong>: Connection messages are capped at 300 characters, while DMs are capped at 1000 characters.<br>${modeLabel}`;
+        platformHintEl.style.display = "block";
+      } else {
+        platformHintEl.innerHTML = `💡 <strong>${platformLabel(platform)} Hint</strong>: Direct message will be sent directly to the lead. Max limit is 1000 characters.`;
+        platformHintEl.style.display = "block";
+      }
+    }
+
     const limit = getCharLimitForPlatform(msg.platform);
     updateCharCounter(variantATextarea, charCounterA, limit);
     updateCharCounter(variantBTextarea, charCounterB, limit);
@@ -436,6 +469,12 @@
     modalLeadId = null;
     modalVariantA = null;
     modalVariantB = null;
+
+    const platformHintEl = document.getElementById("modal-platform-hint");
+    if (platformHintEl) {
+      platformHintEl.style.display = "none";
+      platformHintEl.innerHTML = "";
+    }
   }
 
   function updateCharCounter(textarea, counterEl, limit) {
@@ -695,12 +734,22 @@
     }
   });
 
+  async function loadPipelineConfig() {
+    try {
+      pipelineConfig = await fetchJSON("/api/settings/pipeline");
+    } catch (err) {
+      console.warn("Failed to load pipeline config for outreach hints:", err);
+    }
+  }
+
   // ----------------------------------------------------------------
   // Init
   // ----------------------------------------------------------------
 
   loadPlatformFilterOptions().finally(() => {
-    loadStats();
-    loadMessages();
+    loadPipelineConfig().finally(() => {
+      loadStats();
+      loadMessages();
+    });
   });
 })();

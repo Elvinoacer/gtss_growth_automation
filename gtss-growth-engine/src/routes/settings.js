@@ -407,6 +407,8 @@ function clone(value) {
 const pipelineConfig = require('../config/pipelineConfig');
 
 apiRouter.get('/pipeline', (req, res) => {
+  const db = getDb();
+  const getSettingValue = (key) => db.prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value;
   res.json({
     pipelineMode: process.env.PIPELINE_MODE || 'ai',
     discoveryMode: process.env.DISCOVERY_MODE || '',
@@ -417,6 +419,8 @@ apiRouter.get('/pipeline', (req, res) => {
     qualificationManualScore: pipelineConfig.manualQualificationScore(),
     autoApproveVariant: pipelineConfig.autoApproveVariant(),
     pipelineCron: pipelineConfig.pipelineCron(),
+    xOutreachMode: process.env.X_OUTREACH_MODE || getSettingValue("x_outreach_mode") || "follow_first",
+    linkedinOutreachMode: process.env.LINKEDIN_OUTREACH_MODE || getSettingValue("linkedin_outreach_mode") || "connect_first",
   });
 });
 
@@ -431,15 +435,26 @@ apiRouter.patch('/pipeline', (req, res) => {
     qualificationManualScore: 'QUALIFICATION_MANUAL_SCORE',
     autoApproveVariant: 'MESSAGE_AUTO_APPROVE_VARIANT',
     pipelineCron: 'PIPELINE_CRON',
+    xOutreachMode: 'X_OUTREACH_MODE',
+    linkedinOutreachMode: 'LINKEDIN_OUTREACH_MODE',
   };
 
   const updated = [];
+  const db = getDb();
 
   for (const [bodyKey, envKey] of Object.entries(fields)) {
     if (req.body[bodyKey] !== undefined) {
       const value = String(req.body[bodyKey]).trim();
       upsertEnvValue(envKey, value);
       process.env[envKey] = value;
+
+      // Synchronize back to the settings table
+      if (bodyKey === 'xOutreachMode') {
+        db.prepare("INSERT INTO settings (key, value) VALUES ('x_outreach_mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(value);
+      } else if (bodyKey === 'linkedinOutreachMode') {
+        db.prepare("INSERT INTO settings (key, value) VALUES ('linkedin_outreach_mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(value);
+      }
+
       updated.push(bodyKey);
     }
   }

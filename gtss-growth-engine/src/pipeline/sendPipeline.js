@@ -32,12 +32,26 @@ const logger = require('../utils/logger');
 async function runSendStage(pipelineRunId, emit) {
   const db = getDb();
 
-  // ── 1. Check platform sessions ──────────────────────────────────────────
-  const platforms = getPlatformKeys();
+  // ── 1. Check the queue ──────────────────────────────────────────────────
+  const queue = getQueuedActions();
+
+  if (queue.length === 0) {
+    emit({ type: 'info', message: 'No approved messages ready to send.' });
+    return { sent: 0, failed: 0, skipped: 0, limitReached: false };
+  }
+
+  // Identify platforms that actually have queued/runnable actions
+  const platformsWithQueuedActions = [...new Set(queue.map(a => a.platform))];
+
+  // ── 2. Check platform sessions ──────────────────────────────────────────
+  const platformsToCheck = platformsWithQueuedActions.length > 0
+    ? platformsWithQueuedActions
+    : getPlatformKeys();
+
   const activePlatforms = [];
   const inactivePlatforms = [];
 
-  for (const platform of platforms) {
+  for (const platform of platformsToCheck) {
     if (isSessionValid(platform)) {
       activePlatforms.push(platform);
     } else {
@@ -55,16 +69,8 @@ async function runSendStage(pipelineRunId, emit) {
   if (activePlatforms.length === 0) {
     emit({
       type: 'error',
-      message: 'No platform has a valid session. Aborting send stage. Please re-authenticate at least one platform.',
+      message: 'No platform with pending messages has a valid session. Aborting send stage. Please re-authenticate the required platforms.',
     });
-    return { sent: 0, failed: 0, skipped: 0, limitReached: false };
-  }
-
-  // ── 2. Check the queue ──────────────────────────────────────────────────
-  const queue = getQueuedActions();
-
-  if (queue.length === 0) {
-    emit({ type: 'info', message: 'No approved messages ready to send.' });
     return { sent: 0, failed: 0, skipped: 0, limitReached: false };
   }
 

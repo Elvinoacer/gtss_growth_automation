@@ -171,9 +171,15 @@ function generateFromTemplate(lead, productPitch) {
   };
 
   // Both variants use the same canonical template
-  const body = template
+  let body = template
     ? fillTemplate(template, templateVars)
     : `Hi ${templateVars.lead_name},\n\nI'm reaching out because I know how much of a nightmare it is when a sudden ISP outage brings a busy dining room to a standstill. I develop localized management systems specifically designed to maintain 100% operational uptime during internet drops—meaning kitchen routing and mobile payments keep flowing no matter what.\n\nIs relying on a stable connection something that currently causes friction for your front-of-house team?\n\nWould love to connect!\n\nBest,\nElvin`;
+
+  // Strict character limit enforcement
+  const limit = getCharLimit(resolvedPlatform, messageType);
+  if (body.length > limit) {
+    body = body.slice(0, limit);
+  }
 
   const insertStmt = db.prepare(
     `INSERT INTO messages (lead_id, platform, body, variant, status, generated_by, generated_at)
@@ -239,7 +245,13 @@ Return ONLY the message body (max 300 chars).`;
 
   try {
     const body = await callGeminiText(prompt);
-    const cleanBody = stripCodeFences(body).replace(/^["']|["']$/g, "");
+    let cleanBody = stripCodeFences(body).replace(/^["']|["']$/g, "");
+
+    // Strict character limit enforcement for follow-up DMs
+    const limit = getCharLimit(resolvedPlatform, "dm");
+    if (cleanBody.length > limit) {
+      cleanBody = cleanBody.slice(0, limit);
+    }
 
     const result = db
       .prepare(

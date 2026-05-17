@@ -116,6 +116,9 @@ function initializeSchema(database) {
     database.exec('ALTER TABLE leads ADD COLUMN pipeline_run_id INTEGER REFERENCES pipeline_runs(id)');
   } catch (_) {}
   try {
+    database.exec('ALTER TABLE leads ADD COLUMN x_handle TEXT');
+  } catch (_) {}
+  try {
     database.exec('ALTER TABLE discovery_runs ADD COLUMN pipeline_run_id INTEGER REFERENCES pipeline_runs(id)');
   } catch (_) {}
   try {
@@ -136,6 +139,25 @@ function seedDefaultSettings(database) {
         "INSERT INTO settings (key, value) VALUES ('daily_limits', ?) ON CONFLICT(key) DO NOTHING",
       )
       .run(JSON.stringify(limits));
+  }
+
+  // Seed default outreach modes
+  const xOutreachModeRow = database
+    .prepare("SELECT value FROM settings WHERE key = 'x_outreach_mode'")
+    .get();
+  if (!xOutreachModeRow) {
+    database
+      .prepare("INSERT INTO settings (key, value) VALUES ('x_outreach_mode', ?) ON CONFLICT(key) DO NOTHING")
+      .run("follow_first");
+  }
+
+  const linkedinOutreachModeRow = database
+    .prepare("SELECT value FROM settings WHERE key = 'linkedin_outreach_mode'")
+    .get();
+  if (!linkedinOutreachModeRow) {
+    database
+      .prepare("INSERT INTO settings (key, value) VALUES ('linkedin_outreach_mode', ?) ON CONFLICT(key) DO NOTHING")
+      .run("connect_first");
   }
 }
 

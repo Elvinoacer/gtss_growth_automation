@@ -30,6 +30,73 @@ const AUTH_STATES = {
   UNKNOWN_STATE: "UNKNOWN_STATE",
 };
 
+const X_AUTH_SELECTORS = [
+  '[data-testid="SideNav_AccountSwitcher_Button"]',
+  '[data-testid="AppTabBar_Home_Link"]',
+  '[data-testid="AppTabBar_Profile_Link"]',
+  '[data-testid="AppTabBar_Notifications_Link"]',
+  '[data-testid="AppTabBar_Messages_Link"]',
+  'nav[aria-label="Primary"]',
+  'a[href="/home"]',
+  'a[href="/explore"]',
+  'a[href="/messages"]',
+  'div[role="textbox"][data-testid="tweetTextarea_0"]',
+  'button[data-testid="tweetButton"]',
+  'button[data-testid="tweetButtonInline"]',
+];
+
+const X_SEARCH_RESULT_SELECTORS = [
+  '[data-testid="UserCell"]',
+  '[data-testid="cellInnerDiv"]',
+];
+
+const X_LOGIN_SELECTORS = [
+  'input[name="text"]',
+  'input[autocomplete="username"]',
+  'input[autocomplete="current-password"]',
+  'button[data-testid="LoginForm_Login_Button"]',
+  'div[data-testid="LoginForm_Login_Button"]',
+  'a[href="/i/flow/login"]',
+  'a[href="/login"]',
+];
+
+const X_CAPTCHA_SELECTORS = [
+  'iframe[title*="captcha" i]',
+  'iframe[src*="captcha" i]',
+  'input[name="captcha"]',
+  '[aria-label*="captcha" i]',
+];
+
+const X_LOGIN_PHRASES = [
+  "sign in to x",
+  "log in to x",
+  "login to x",
+  "enter your phone number, email address, or username",
+  "enter your phone number, email, or username",
+];
+
+const X_CAPTCHA_PHRASES = [
+  "captcha",
+  "verify you are human",
+  "verify you're human",
+  "security check",
+  "security challenge",
+  "unusual activity",
+  "suspicious activity",
+  "prove you are human",
+];
+
+const X_RATE_LIMIT_PHRASES = [
+  "rate limit exceeded",
+  "too many requests",
+  "you have reached the limit",
+  "reach your limit",
+  "try again later",
+  "unable to send",
+  "unable to follow more",
+  "restricted from direct messaging",
+];
+
 /**
  * Wait for a random duration between min and max milliseconds to simulate human behavior.
  */
@@ -259,6 +326,126 @@ async function detectCaptcha(page) {
   }
 }
 
+function textContainsAny(text, phrases) {
+  const normalized = String(text || "").toLowerCase();
+  return (
+    phrases.find((phrase) => normalized.includes(phrase.toLowerCase())) || null
+  );
+}
+
+async function getPageBodyText(page) {
+  return page
+    .locator("body")
+    .innerText({ timeout: 2000 })
+    .catch(() => "");
+}
+
+async function firstVisibleLocator(scope, selectors, timeout = 1500) {
+  const deadline = Date.now() + timeout;
+
+  for (const selector of selectors) {
+    const locator = scope.locator(selector);
+    const count = await locator.count().catch(() => 0);
+
+    for (let index = 0; index < count; index++) {
+      const candidate = locator.nth(index);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return null;
+
+      try {
+        await candidate.waitFor({
+          state: "visible",
+          timeout: Math.min(300, remaining),
+        });
+        return candidate;
+      } catch (_) {
+        // Try the next matching candidate.
+      }
+    }
+  }
+
+  return null;
+}
+
+async function classifyXSession(page) {
+  await page
+    .waitForLoadState("domcontentloaded", { timeout: 10000 })
+    .catch(() => {});
+
+  const url = page.url().toLowerCase();
+  const bodyText = await getPageBodyText(page);
+  const body = bodyText.toLowerCase();
+
+  const rateLimitDetected =
+    textContainsAny(body, X_RATE_LIMIT_PHRASES) ||
+    url.includes("rate_limit") ||
+    url.includes("rate-limit");
+
+  if (rateLimitDetected) {
+    return {
+      state: AUTH_STATES.RATE_LIMITED,
+      reason: "X rate limit text detected",
+    };
+  }
+
+  const captchaDetected =
+    url.includes("/challenge") ||
+    url.includes("/captcha") ||
+    textContainsAny(body, X_CAPTCHA_PHRASES) ||
+    (await firstVisibleLocator(page, X_CAPTCHA_SELECTORS, 2000));
+
+  if (captchaDetected) {
+    return {
+      state: AUTH_STATES.CAPTCHA_REQUIRED,
+      reason: "X captcha/challenge detected",
+    };
+  }
+
+  const loginDetected =
+    url.includes("/login") ||
+    url.includes("/i/flow/login") ||
+    url.includes("/flow/login") ||
+    textContainsAny(body, X_LOGIN_PHRASES) ||
+    (await firstVisibleLocator(page, X_LOGIN_SELECTORS, 2000));
+
+  if (loginDetected) {
+    return {
+      state: AUTH_STATES.LOGIN_REQUIRED,
+      reason: `X login URL or form detected: ${page.url()}`,
+    };
+  }
+
+  const searchPageDetected =
+    url.includes("/search") ||
+    (await firstVisibleLocator(page, X_SEARCH_RESULT_SELECTORS, 2000));
+
+  if (searchPageDetected) {
+    return {
+      state: AUTH_STATES.AUTHENTICATED,
+      reason: "X search page or search result signal found",
+    };
+  }
+
+  const authenticatedSignal =
+    url.includes("/home") ||
+    url.includes("/compose/tweet") ||
+    textContainsAny(body, ["for you", "following"]) ||
+    (await firstVisibleLocator(page, X_AUTH_SELECTORS, 2000));
+
+  if (authenticatedSignal) {
+    return {
+      state: AUTH_STATES.AUTHENTICATED,
+      reason: "X home or composer signal found",
+    };
+  }
+
+  return {
+    state: AUTH_STATES.UNKNOWN_STATE,
+    reason:
+      "X auth state is ambiguous; no login, captcha, rate-limit, or authenticated signal found",
+  };
+}
+
 function markAutomationSessionInvalid(platform) {
   INVALIDATED_PLATFORMS.add(platform);
   markSessionInvalid(platform);
@@ -434,6 +621,8 @@ async function checkSessionState(page, platform, emit, options = {}) {
 
   if (platform === "linkedin") {
     result = await classifyLinkedInSession(page);
+  } else if (platform === "x") {
+    result = await classifyXSession(page);
   } else {
     const challenged = await detectCaptcha(page);
     if (challenged) {
@@ -567,6 +756,8 @@ async function createBrowser(platform, options = {}) {
       // Always open a NEW tab for automation — never hijack existing tabs
       const page = await context.newPage();
       logger.info("BROWSER", `Opened new CDP tab for ${platform} automation`);
+
+      page.once("close", () => releaseBrowserLock(lock));
 
       const tracePath = await startTracing(context, platform, options);
       releaseLockOnClose(browser, context, lock);

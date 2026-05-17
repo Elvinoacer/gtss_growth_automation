@@ -8,10 +8,13 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "gtss-browser-test-"));
 process.env.DB_PATH = path.join(root, "gtss.db");
 process.env.ENCRYPTION_KEY = "test-key";
 process.env.AUTOMATION_LOCKS_DIR = path.join(root, "locks");
+process.env.AUTOMATION_ARTIFACTS_DIR = path.join(root, "artifacts");
 process.env.ALLOW_HEADLESS_SOCIAL = "false";
 
 const {
   acquireBrowserLock,
+  AUTH_STATES,
+  checkSessionState,
   getBrowserMode,
   releaseBrowserLock,
   normalizeHeadless,
@@ -29,6 +32,44 @@ function restoreEnv(snapshot) {
       process.env[key] = value;
     }
   });
+}
+
+function createMockXPage({ url, bodyText = "", visibleSelectors = [] }) {
+  const visible = new Set(visibleSelectors);
+
+  function makeCandidate(selector) {
+    const isVisible = selector === "body" || visible.has(selector);
+
+    return {
+      waitFor: async () => {
+        if (!isVisible) {
+          throw new Error(`Selector not visible: ${selector}`);
+        }
+      },
+      isVisible: async () => isVisible,
+      innerText: async () => (selector === "body" ? bodyText : ""),
+    };
+  }
+
+  return {
+    url: () => url,
+    waitForLoadState: async () => {},
+    isClosed: () => true,
+    content: async () => "<html></html>",
+    screenshot: async () => Buffer.from(""),
+    locator: (selector) => ({
+      count: async () => (selector === "body" || visible.has(selector) ? 1 : 0),
+      nth: () => makeCandidate(selector),
+      first: () => makeCandidate(selector),
+      innerText: async () => (selector === "body" ? bodyText : ""),
+      isVisible: async () => selector === "body" || visible.has(selector),
+      waitFor: async () => {
+        if (selector !== "body" && !visible.has(selector)) {
+          throw new Error(`Selector not visible: ${selector}`);
+        }
+      },
+    }),
+  };
 }
 
 test("browser locks block concurrent use of the same profile", () => {
@@ -105,4 +146,76 @@ test("shared CDP takes precedence over persistent browser mode for social platfo
   assert.equal(getBrowserMode("local"), "persistent");
 
   restoreEnv(snapshot);
+});
+
+test("x search result pages are treated as authenticated", async () => {
+  const result = await checkSessionState(
+    createMockXPage({
+      url: "https://x.com/search?q=OpenAI&f=user",
+      visibleSelectors: ['[data-testid="UserCell"]'],
+    }),
+    "x",
+    () => {},
+  );
+
+  assert.equal(result.state, AUTH_STATES.AUTHENTICATED);
+});
+
+test("x session state detection classifies authenticated, login, captcha, rate limit, and unknown states", async () => {
+  const emit = () => {};
+
+  const authenticated = await checkSessionState(
+    createMockXPage({
+      url: "https://x.com/home",
+      visibleSelectors: ['[data-testid="SideNav_AccountSwitcher_Button"]'],
+    }),
+    "x",
+    emit,
+  );
+  assert.equal(authenticated.state, AUTH_STATES.AUTHENTICATED);
+
+  const loginRequired = await checkSessionState(
+    createMockXPage({
+      url: "https://x.com/i/flow/login",
+      bodyText: "Sign in to X",
+      visibleSelectors: [
+        'input[name="text"]',
+        'button[data-testid="LoginForm_Login_Button"]',
+      ],
+    }),
+    "x",
+    emit,
+  );
+  assert.equal(loginRequired.state, AUTH_STATES.LOGIN_REQUIRED);
+
+  const captchaRequired = await checkSessionState(
+    createMockXPage({
+      url: "https://x.com/account/access",
+      bodyText: "We detected unusual activity. Please verify you are human.",
+      visibleSelectors: ['iframe[title*="captcha" i]'],
+    }),
+    "x",
+    emit,
+  );
+  assert.equal(captchaRequired.state, AUTH_STATES.CAPTCHA_REQUIRED);
+
+  const rateLimited = await checkSessionState(
+    createMockXPage({
+      url: "https://x.com/home",
+      bodyText: "Rate limit exceeded. Try again later.",
+    }),
+    "x",
+    emit,
+  );
+  assert.equal(rateLimited.state, AUTH_STATES.RATE_LIMITED);
+
+  const unknownState = await checkSessionState(
+    createMockXPage({
+      url: "https://x.com/notifications",
+      bodyText: "Welcome back",
+    }),
+    "x",
+    emit,
+  );
+  assert.equal(unknownState.state, AUTH_STATES.UNKNOWN_STATE);
 });

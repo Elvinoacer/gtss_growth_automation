@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS leads (
   company TEXT,
   location TEXT,
   profile_url TEXT UNIQUE,
+  x_handle TEXT,
   website TEXT,
   source_keyword TEXT,
   lead_score INTEGER DEFAULT NULL,

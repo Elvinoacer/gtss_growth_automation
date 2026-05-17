@@ -33,11 +33,11 @@ function createEmitter(sseRes) {
     };
 
     // Broadcast via Socket.IO to all connected clients
-    broadcast('automation:log', payload);
+    broadcast("automation:log", payload);
 
     // Also broadcast queue/limits refresh signals on state changes
-    if (['state', 'done', 'error', 'info'].includes(type)) {
-      broadcast('automation:refresh', { type });
+    if (["state", "done", "error", "info"].includes(type)) {
+      broadcast("automation:refresh", { type });
     }
 
     // Legacy SSE stream
@@ -171,26 +171,57 @@ function getLinkedInOutreachMode() {
   return "connect_first";
 }
 
+function getXOutreachMode() {
+  const configured =
+    process.env.X_OUTREACH_MODE ||
+    getSettingValue("x_outreach_mode");
+
+  if (configured === "dm_only" || configured === "dm_first") return configured;
+  return "follow_first";
+}
+
 function determineActionType(message) {
-  if (message.platform !== "linkedin") return "dm";
   if (message.is_follow_up) return "dm";
 
-  const outreachMode = getLinkedInOutreachMode();
-  if (outreachMode === "dm_only" || outreachMode === "dm_first") return "dm";
+  if (message.platform === "linkedin") {
+    const outreachMode = getLinkedInOutreachMode();
+    if (outreachMode === "dm_only" || outreachMode === "dm_first") return "dm";
 
-  // Check if a connection request was already sent to this lead
-  const db = getDb();
-  const priorConnect = db
-    .prepare(
-      `
-    SELECT id FROM touchpoints
-    WHERE lead_id = ? AND type = 'connections' AND outcome = 'sent'
-    LIMIT 1
-  `,
-    )
-    .get(message.lead_id);
+    // Check if a connection request was already sent to this lead
+    const db = getDb();
+    const priorConnect = db
+      .prepare(
+        `
+      SELECT id FROM touchpoints
+      WHERE lead_id = ? AND type = 'connections' AND outcome = 'sent'
+      LIMIT 1
+    `,
+      )
+      .get(message.lead_id);
 
-  return priorConnect ? "dm" : "connect";
+    return priorConnect ? "dm" : "connect";
+  }
+
+  if (message.platform === "x") {
+    const outreachMode = getXOutreachMode();
+    if (outreachMode === "dm_only" || outreachMode === "dm_first") return "dm";
+
+    // Check if a follow was already sent to this lead
+    const db = getDb();
+    const priorFollow = db
+      .prepare(
+        `
+      SELECT id FROM touchpoints
+      WHERE lead_id = ? AND type = 'follows' AND outcome = 'sent'
+      LIMIT 1
+    `,
+      )
+      .get(message.lead_id);
+
+    return priorFollow ? "dm" : "follow";
+  }
+
+  return "dm";
 }
 
 async function runAutomationAction(action, browserState, emit) {
@@ -207,11 +238,18 @@ async function runAutomationAction(action, browserState, emit) {
 
   const { page } = browserState;
 
-  if (actionType === "connect" && automationModule.sendConnectionRequest) {
+  if ((actionType === "connect" || actionType === "follow") && (automationModule.sendConnectionRequest || automationModule.followUser)) {
     if (automationModule.likeRecentPost) {
       emit("info", "Warming up: liking a recent post...");
       await automationModule.likeRecentPost(page, action.profile_url, emit);
       await humanDelay(3000, 6000);
+    }
+    if (actionType === "follow" && automationModule.followUser) {
+      return await automationModule.followUser(
+        page,
+        action.profile_url,
+        emit,
+      );
     }
     return await automationModule.sendConnectionRequest(
       page,
@@ -285,9 +323,9 @@ function recordOutcome(action, actionType, outcomeObj) {
        WHERE id = ?`,
     ).run(action.message_id);
 
-    // For LinkedIn connect actions, queue the DM body as a new pending message
-    // so it fires once the connection is accepted (on the next queue run)
-    if (normalizedActionType === "connections") {
+    // For LinkedIn connect and X follow actions, queue the DM body as a new pending message
+    // so it fires once the connection or follow is complete (on the next queue run)
+    if (normalizedActionType === "connections" || normalizedActionType === "follows") {
       const originalMessage = db
         .prepare(`SELECT * FROM messages WHERE id = ?`)
         .get(action.message_id);
@@ -303,10 +341,12 @@ function recordOutcome(action, actionType, outcomeObj) {
           .get(action.lead_id);
 
         if (!existing) {
+          // Add a 1-hour delay/snooze for X follows to prevent immediate bot-like direct messaging
+          const snoozeDelay = action.platform === "x" ? "datetime('now', '+1 hour')" : "NULL";
           db.prepare(
             `
-            INSERT INTO messages (lead_id, platform, body, variant, is_follow_up, status, generated_at)
-            VALUES (?, ?, ?, 'A', 0, 'pending', CURRENT_TIMESTAMP)
+            INSERT INTO messages (lead_id, platform, body, variant, is_follow_up, status, snooze_until, generated_at)
+            VALUES (?, ?, ?, 'A', 0, 'pending', ${snoozeDelay}, CURRENT_TIMESTAMP)
           `,
           ).run(action.lead_id, action.platform, originalMessage.body);
         }
@@ -470,6 +510,47 @@ async function closeBrowserState(browserState, platform) {
   });
 }
 
+function getPageUrl(page) {
+  try {
+    return String(page.url()).toLowerCase();
+  } catch (_) {
+    return "";
+  }
+}
+
+function isManualAuthComplete(page, platform) {
+  const url = getPageUrl(page);
+  if (!url) return false;
+
+  if (platform === "linkedin") return url.includes("/feed");
+  if (platform === "x") return url.includes("/home");
+  if (platform === "facebook") {
+    return (
+      url.includes("facebook.com") &&
+      !url.includes("/login") &&
+      !url.includes("/checkpoint") &&
+      !url.includes("/recover") &&
+      !url.includes("/two_factor") &&
+      !url.includes("/r.php")
+    );
+  }
+  if (platform === "instagram") {
+    return (
+      url.includes("instagram.com") &&
+      !url.includes("/accounts/login") &&
+      !url.includes("/challenge") &&
+      !url.includes("/two_factor") &&
+      !url.includes("/accounts/onetap")
+    );
+  }
+
+  return (
+    !url.includes("/login") &&
+    !url.includes("/checkpoint") &&
+    !url.includes("/challenge")
+  );
+}
+
 function getSessionCheckUrl(platform) {
   if (platform === "linkedin") return "https://www.linkedin.com/feed/";
   if (platform === "x") return "https://x.com/home";
@@ -621,20 +702,36 @@ async function processActionQueue(jobId, sseRes) {
     async function getOrCreateBrowser(plat, emitFn, evtBase, fp) {
       if (browserCache.has(plat)) {
         const cached = browserCache.get(plat);
-        if (cached.page && !cached.page.isClosed()) return { browserState: cached };
+        if (cached.page && !cached.page.isClosed())
+          return { browserState: cached };
         browserCache.delete(plat);
       }
-      emitState(emitFn, jobId, "STARTING_BROWSER", `Starting browser for ${plat}.`, { ...evtBase, fingerprint: fp });
-      emitState(emitFn, jobId, "AUTH_CHECK", `Checking ${plat} session.`, { ...evtBase, fingerprint: fp });
+      emitState(
+        emitFn,
+        jobId,
+        "STARTING_BROWSER",
+        `Starting browser for ${plat}.`,
+        { ...evtBase, fingerprint: fp },
+      );
+      emitState(emitFn, jobId, "AUTH_CHECK", `Checking ${plat} session.`, {
+        ...evtBase,
+        fingerprint: fp,
+      });
       const validated = await createValidatedBrowser(plat, emitFn);
-      if (validated.browserState) browserCache.set(plat, validated.browserState);
+      if (validated.browserState)
+        browserCache.set(plat, validated.browserState);
       return validated;
     }
 
     async function closeAllCachedBrowsers() {
       for (const [plat, state] of browserCache) {
-        try { await closeBrowserState(state, plat); }
-        catch (e) { logger.warn("AUTOMATION", `Failed to close browser for ${plat}`, { error: e.message }); }
+        try {
+          await closeBrowserState(state, plat);
+        } catch (e) {
+          logger.warn("AUTOMATION", `Failed to close browser for ${plat}`, {
+            error: e.message,
+          });
+        }
       }
       browserCache.clear();
     }
@@ -737,7 +834,12 @@ async function processActionQueue(jobId, sseRes) {
       }
 
       try {
-        const validated = await getOrCreateBrowser(platform, emit, eventBase, reservation.fingerprint);
+        const validated = await getOrCreateBrowser(
+          platform,
+          emit,
+          eventBase,
+          reservation.fingerprint,
+        );
         const browserState = validated.browserState;
 
         if (!browserState) {
@@ -975,40 +1077,54 @@ async function authenticatePlatform(platform) {
 
   return new Promise((resolve, reject) => {
     let checkInterval;
-    const timeout = setTimeout(
-      async () => {
-        clearInterval(checkInterval);
-        try {
-          await closeBrowserState(browserState, platform);
-        } catch (e) {}
-        reject(new Error("Auth timeout (5 mins)"));
+    let timeout;
+    let finalized = false;
+
+    const settle = async (success, errorMessage) => {
+      if (finalized) return;
+      finalized = true;
+      clearInterval(checkInterval);
+      if (timeout) clearTimeout(timeout);
+
+      try {
+        await closeBrowserState(browserState, platform);
+      } catch (e) {}
+
+      if (success) {
+        resolve(true);
+      } else {
+        reject(new Error(errorMessage));
+      }
+    };
+
+    page.once("close", () => {
+      void settle(
+        isManualAuthComplete(page, platform),
+        "Browser closed before authentication completed",
+      );
+    });
+
+    timeout = setTimeout(
+      () => {
+        void settle(false, "Auth timeout (5 mins)");
       },
       5 * 60 * 1000,
     );
 
     checkInterval = setInterval(async () => {
       try {
+        if (finalized) return;
+
         if (page.isClosed()) {
-          clearInterval(checkInterval);
-          clearTimeout(timeout);
-          reject(new Error("Browser closed"));
+          void settle(
+            isManualAuthComplete(page, platform),
+            "Browser closed before authentication completed",
+          );
           return;
         }
 
-        const url = page.url();
-        let isLoggedIn = false;
-        if (platform === "linkedin" && url.includes("/feed")) isLoggedIn = true;
-        if (platform === "x" && url.includes("/home")) isLoggedIn = true;
-        if (platform === "facebook" && url === "https://www.facebook.com/")
-          isLoggedIn = true;
-        if (platform === "instagram" && url === "https://www.instagram.com/")
-          isLoggedIn = true;
-
-        if (isLoggedIn) {
-          clearInterval(checkInterval);
-          clearTimeout(timeout);
-          await closeBrowserState(browserState, platform);
-          resolve(true);
+        if (isManualAuthComplete(page, platform)) {
+          await settle(true);
         }
       } catch (err) {}
     }, 3000);
@@ -1021,8 +1137,10 @@ module.exports = {
   stopJob,
   stopAllJobs,
   authenticatePlatform,
+  isManualAuthComplete,
   getQueuedActions,
   isWithinLimit,
   determineActionType,
   getLinkedInOutreachMode,
+  getXOutreachMode,
 };

@@ -545,6 +545,8 @@ function applyPipelineConfig(config) {
   document.getElementById("message-mode").value = config.messageMode || "";
   document.getElementById("qualification-threshold").value = config.qualificationThreshold ?? 50;
   document.getElementById("qualification-manual-score").value = config.qualificationManualScore ?? 75;
+  document.getElementById("linkedin-outreach-mode").value = config.linkedinOutreachMode || "connect_first";
+  document.getElementById("x-outreach-mode").value = config.xOutreachMode || "follow_first";
 }
 
 function renderKeywords(data) {
@@ -598,6 +600,8 @@ async function savePipelineSettings() {
         messageMode: document.getElementById("message-mode").value,
         qualificationThreshold: document.getElementById("qualification-threshold").value,
         qualificationManualScore: document.getElementById("qualification-manual-score").value,
+        linkedinOutreachMode: document.getElementById("linkedin-outreach-mode").value,
+        xOutreachMode: document.getElementById("x-outreach-mode").value,
       }),
     });
     window.gtss.showToast("Pipeline settings saved", "success");

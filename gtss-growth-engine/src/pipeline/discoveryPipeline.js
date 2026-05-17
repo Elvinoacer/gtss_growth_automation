@@ -18,15 +18,19 @@ const logger = require('../utils/logger');
  */
 function loadKeywords() {
   const filePath = path.resolve(keywordsFilePath());
+  const defaultPlatforms = process.env.DISCOVERY_PLATFORMS
+    ? process.env.DISCOVERY_PLATFORMS.split(',').map(p => p.trim().toLowerCase()).filter(Boolean)
+    : ['linkedin', 'x'];
+
   try {
     if (!fs.existsSync(filePath)) {
       logger.warn('PIPELINE', `Keywords file not found at ${filePath}`);
-      return { keywords: [], platforms: ['linkedin'], maxLeadsPerKeyword: 10 };
+      return { keywords: [], platforms: defaultPlatforms, maxLeadsPerKeyword: 10 };
     }
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch (err) {
     logger.error('PIPELINE', 'Failed to load keywords.json', { error: err.message });
-    return { keywords: [], platforms: ['linkedin'], maxLeadsPerKeyword: 10 };
+    return { keywords: [], platforms: defaultPlatforms, maxLeadsPerKeyword: 10 };
   }
 }
 
@@ -60,7 +64,14 @@ async function runDiscoveryStage(pipelineRunId, emit) {
 
   // AI mode — full automated discovery
   const config = loadKeywords();
-  const { keywords, platforms, maxLeadsPerKeyword } = config;
+  let { keywords, platforms, maxLeadsPerKeyword } = config;
+
+  // Support DISCOVERY_PLATFORMS environment variable override
+  if (process.env.DISCOVERY_PLATFORMS) {
+    platforms = process.env.DISCOVERY_PLATFORMS.split(',')
+      .map(p => p.trim().toLowerCase())
+      .filter(Boolean);
+  }
 
   if (keywords.length === 0) {
     emit({ type: 'warn', message: 'No keywords configured. Skipping discovery.' });
@@ -78,10 +89,29 @@ async function runDiscoveryStage(pipelineRunId, emit) {
 
   for (let i = 0; i < keywords.length; i++) {
     const keyword = keywords[i];
+    let keywordText = keyword;
+    let keywordPlatforms = platforms;
+
+    if (keyword && typeof keyword === 'object') {
+      keywordText = keyword.keyword || '';
+      if (keyword.platforms && Array.isArray(keyword.platforms)) {
+        keywordPlatforms = keyword.platforms;
+      }
+    }
+
+    // Apply active DISCOVERY_PLATFORMS override/filtering if set
+    if (process.env.DISCOVERY_PLATFORMS) {
+      keywordPlatforms = keywordPlatforms.filter(p => platforms.includes(p));
+    }
+
+    if (!keywordText) {
+      logger.warn('PIPELINE', `Skipping empty keyword at index ${i}`);
+      continue;
+    }
 
     emit({
       type: 'progress',
-      message: `Keyword ${i + 1}/${keywords.length}: "${keyword}"`,
+      message: `Keyword ${i + 1}/${keywords.length}: "${keywordText}" on ${keywordPlatforms.join(', ')}`,
       processed: i,
       total: keywords.length,
     });
@@ -91,13 +121,13 @@ async function runDiscoveryStage(pipelineRunId, emit) {
       const run = db.prepare(
         `INSERT INTO discovery_runs (keyword, platforms, leads_found, status, pipeline_run_id)
          VALUES (?, ?, 0, 'running', ?)`
-      ).run(keyword, JSON.stringify(platforms), pipelineRunId);
+      ).run(keywordText, JSON.stringify(keywordPlatforms), pipelineRunId);
 
       const jobId = run.lastInsertRowid;
 
       const result = await discoverLeads(
-        keyword,
-        platforms,
+        keywordText,
+        keywordPlatforms,
         maxLeadsPerKeyword,
         jobId,
       );
@@ -108,7 +138,7 @@ async function runDiscoveryStage(pipelineRunId, emit) {
           `UPDATE leads
            SET pipeline_run_id = ?
            WHERE source_keyword = ? AND pipeline_run_id IS NULL`
-        ).run(pipelineRunId, keyword);
+        ).run(pipelineRunId, keywordText);
       }
 
       totalNewLeads += result.new || 0;
@@ -116,13 +146,13 @@ async function runDiscoveryStage(pipelineRunId, emit) {
 
       emit({
         type: 'info',
-        message: `"${keyword}": ${result.new} new leads (${result.duplicates} duplicates)`,
+        message: `"${keywordText}": ${result.new} new leads (${result.duplicates} duplicates)`,
       });
     } catch (err) {
-      logger.error('PIPELINE', `Discovery failed for keyword "${keyword}"`, { error: err.message });
+      logger.error('PIPELINE', `Discovery failed for keyword "${keywordText}"`, { error: err.message });
       emit({
         type: 'warn',
-        message: `"${keyword}" failed: ${err.message} — continuing with next keyword`,
+        message: `"${keywordText}" failed: ${err.message} — continuing with next keyword`,
       });
       skipped++;
     }

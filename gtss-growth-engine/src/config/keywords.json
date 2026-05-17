@@ -20,8 +20,12 @@
     "restaurant owner Mombasa",
     "hospitality entrepreneur Kenya",
     "supper club Nairobi",
-    "food business owner Kenya"
+    "food business owner Kenya",
+    "restaurant owner Kenya",
+    "hotel owner Kenya",
+    "#restaurantowner Nairobi",
+    "#NairobiCafe"
   ],
-  "platforms": ["linkedin", "facebook"],
+  "platforms": ["linkedin", "facebook", "x"],
   "maxLeadsPerKeyword": 10
 }

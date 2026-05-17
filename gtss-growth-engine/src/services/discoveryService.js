@@ -11,6 +11,51 @@ const { broadcast } = require("./socketService");
 const MAX_PROFILE_VISITS_PER_HOUR = 50;
 const DEFAULT_MIN_DELAY_MS = 3000;
 const DEFAULT_MAX_DELAY_MS = 15000;
+const X_SEARCH_CARD_SELECTORS = [
+  '[data-testid="UserCell"]',
+  '[data-testid="cellInnerDiv"]',
+];
+const X_RESERVED_PROFILE_PATHS = new Set([
+  "home",
+  "search",
+  "explore",
+  "messages",
+  "notifications",
+  "compose",
+  "intent",
+  "settings",
+  "login",
+  "i",
+  "hashtag",
+]);
+const X_RESERVED_SECOND_PATHS = new Set([
+  "status",
+  "photo",
+  "video",
+  "search",
+  "home",
+  "explore",
+  "messages",
+  "compose",
+  "intent",
+  "settings",
+  "notifications",
+]);
+const X_NOISE_LINE_PATTERNS = [
+  /^follow$/i,
+  /^following$/i,
+  /^followers?$/i,
+  /^posts?$/i,
+  /^view profile$/i,
+  /^view post$/i,
+  /^message$/i,
+  /^promoted$/i,
+  /^ad$/i,
+  /^verified$/i,
+  /^premium$/i,
+  /^subscribe$/i,
+  /^join now$/i,
+];
 const visitTimestamps = [];
 const jobStreams = new Map();
 const stoppedJobs = new Set();
@@ -44,7 +89,7 @@ function emitJobEvent(jobId, event) {
   jobEventHistory.set(key, h.slice(-200));
 
   // Broadcast via Socket.IO
-  broadcast('discovery:event', event);
+  broadcast("discovery:event", event);
 
   // Legacy SSE
   const s = jobStreams.get(key);
@@ -150,6 +195,361 @@ async function detectCaptcha(page, platform, emit) {
   );
   if (found) emit({ type: "captcha", platform, message: "CAPTCHA detected" });
   return found;
+}
+
+function cleanText(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isNoiseLine(line) {
+  const normalized = cleanText(line).toLowerCase();
+  if (!normalized) return true;
+  if (X_NOISE_LINE_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+  if (/^https?:\/\//i.test(normalized) || /^www\./i.test(normalized))
+    return true;
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(?:\/.*)?$/i.test(normalized)) return true;
+  if (
+    /^\d[\d,\.\s]*(k|m|b)?\s+(followers?|following|posts?)$/i.test(normalized)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeXHandle(value) {
+  const cleaned = cleanText(value).replace(/^@/, "");
+  const match = cleaned.match(/[A-Za-z0-9_]{1,30}/);
+  return match ? match[0] : "";
+}
+
+function normalizeXProfileUrl(value) {
+  if (!value) return "";
+
+  try {
+    const parsed = new URL(value, "https://x.com");
+    const host = parsed.hostname.replace(/^www\./i, "").toLowerCase();
+    const isXHost =
+      host === "x.com" ||
+      host.endsWith(".x.com") ||
+      host === "twitter.com" ||
+      host.endsWith(".twitter.com");
+
+    if (!host || !isXHost) {
+      return "";
+    }
+
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments.length === 0) return "";
+
+    const handle = normalizeXHandle(segments[0]);
+    if (!handle || X_RESERVED_PROFILE_PATHS.has(handle.toLowerCase())) {
+      return "";
+    }
+
+    const secondSegment = (segments[1] || "").toLowerCase();
+    if (secondSegment && X_RESERVED_SECOND_PATHS.has(secondSegment)) {
+      return "";
+    }
+
+    return `https://x.com/${handle}`;
+  } catch (_) {
+    return "";
+  }
+}
+
+function extractFirstUrl(text) {
+  const raw = String(text || "").match(/\bhttps?:\/\/[^\s)]+|\bwww\.[^\s)]+/i);
+  if (!raw) return "";
+
+  const candidate = raw[0].replace(/[.,;:!?]+$/g, "");
+  try {
+    const normalized = candidate.startsWith("http")
+      ? candidate
+      : `https://${candidate}`;
+    const parsed = new URL(normalized);
+    const host = parsed.hostname.replace(/^www\./i, "").toLowerCase();
+    if (
+      !host ||
+      host === "x.com" ||
+      host === "twitter.com" ||
+      host === "t.co"
+    ) {
+      return "";
+    }
+    return parsed.toString().replace(/\/$/, "");
+  } catch (_) {
+    return "";
+  }
+}
+
+function extractWebsiteFromSnapshot(hrefs, text) {
+  const directHref = (Array.isArray(hrefs) ? hrefs : [])
+    .map((href) => {
+      try {
+        const parsed = new URL(href, "https://x.com");
+        const host = parsed.hostname.replace(/^www\./i, "").toLowerCase();
+        if (
+          !host ||
+          host === "x.com" ||
+          host === "twitter.com" ||
+          host === "t.co"
+        ) {
+          return "";
+        }
+        return parsed.toString().replace(/\/$/, "");
+      } catch (_) {
+        return "";
+      }
+    })
+    .find(Boolean);
+
+  return directHref || extractFirstUrl(text);
+}
+
+function extractFollowerCount(text) {
+  const match = cleanText(text).match(
+    /\b([\d.,]+(?:\s?[KMB])?)\s+followers?\b/i,
+  );
+  return match ? cleanText(match[1]) : "";
+}
+
+function inferRoleCompanyFromBio(bio) {
+  const normalized = cleanText(bio).replace(/[•·|]+/g, " ");
+  if (!normalized) return { role: "", company: "" };
+
+  const patterns = [
+    /^(?<role>[A-Za-z][A-Za-z0-9&'()\-\/ ]{1,80}?)\s+(?:at|@|for|with)\s+(?<company>[A-Za-z0-9][A-Za-z0-9&'().,\-\/ ]{1,80})$/i,
+    /^(?<role>[A-Za-z][A-Za-z0-9&'()\-\/ ]{1,80}?)\s*[–-]\s*(?<company>[A-Za-z0-9][A-Za-z0-9&'().,\-\/ ]{1,80})$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (!match) continue;
+
+    const role = cleanText(match.groups.role);
+    const company = cleanText(match.groups.company);
+    if (
+      role &&
+      company &&
+      /founder|co-founder|ceo|cto|cmo|coo|vp|head|director|manager|lead|engineer|designer|developer|writer|creator|marketer|sales|growth|product|consultant|advisor|analyst|researcher|student|entrepreneur|builder|executive/i.test(
+        role,
+      )
+    ) {
+      return { role, company };
+    }
+  }
+
+  const roleMatch = normalized.match(
+    /\b(founder|co-founder|ceo|cto|cmo|coo|vp(?: of [^ ]+)?|head of [^|,;]+|director|manager|lead|engineer|designer|developer|writer|creator|marketer|sales|growth|product|consultant|advisor|analyst|researcher|student|entrepreneur|builder|executive)\b[^|,;]*/i,
+  );
+  const companyMatch = normalized.match(
+    /(?:at|@|for|with)\s+([A-Za-z0-9][A-Za-z0-9&'().,\-\/ ]{1,80})/i,
+  );
+
+  return {
+    role: roleMatch ? cleanText(roleMatch[0]) : "",
+    company: companyMatch ? cleanText(companyMatch[1]) : "",
+  };
+}
+
+function inferLocationFromLines(lines, text) {
+  const candidates = (Array.isArray(lines) ? lines : [])
+    .map(cleanText)
+    .filter((line) => line && !isNoiseLine(line));
+
+  const locationLike = candidates.find((line) => {
+    const lower = line.toLowerCase();
+    return (
+      lower.includes("remote") ||
+      lower.includes("worldwide") ||
+      lower.includes("global") ||
+      /\b(kenya|nairobi|mombasa|london|new york|san francisco|toronto|lagos|berlin|paris|india|usa|uk|canada|europe|africa|asia|singapore|dubai|sydney|melbourne)\b/i.test(
+        lower,
+      ) ||
+      /,\s*[A-Za-z]{2,}$/.test(line)
+    );
+  });
+
+  if (locationLike) return locationLike;
+
+  const fallback = candidates.find((line) => line.length <= 60);
+  return fallback || "";
+}
+
+function parseXSearchLeadSnapshot(snapshot) {
+  const rawText = String(snapshot && snapshot.text ? snapshot.text : "");
+  const text = cleanText(rawText);
+  const hrefs = Array.isArray(snapshot && snapshot.hrefs) ? snapshot.hrefs : [];
+  const lines = rawText.split(/\r?\n/).map(cleanText).filter(Boolean);
+
+  let profileUrl = hrefs.map(normalizeXProfileUrl).find(Boolean) || "";
+  const handleFromUrl = profileUrl
+    ? profileUrl.replace(/^https?:\/\/[^/]+\//i, "").split("/")[0]
+    : "";
+  const handleLine = lines.find((line) => /^@[A-Za-z0-9_.]{1,30}$/i.test(line));
+  const handle = normalizeXHandle(handleLine || handleFromUrl || "");
+
+  if (!profileUrl && handle) {
+    profileUrl = `https://x.com/${handle}`;
+  }
+
+  if (!profileUrl && !handle) return null;
+
+  const nameLine =
+    lines.find(
+      (line) =>
+        !isNoiseLine(line) &&
+        !/^@[A-Za-z0-9_.]{1,30}$/i.test(line) &&
+        !/^https?:\/\//i.test(line),
+    ) ||
+    handle ||
+    "X profile";
+
+  const bioCandidates = [];
+  let skippedName = false;
+  let skippedHandle = false;
+
+  for (const line of lines) {
+    if (!skippedName && line === nameLine) {
+      skippedName = true;
+      continue;
+    }
+    if (!skippedHandle && normalizeXHandle(line) === handle) {
+      skippedHandle = true;
+      continue;
+    }
+    if (isNoiseLine(line)) continue;
+    bioCandidates.push(line);
+  }
+
+  const followerCount = extractFollowerCount(text);
+  const website = extractWebsiteFromSnapshot(hrefs, text);
+  const location = inferLocationFromLines(bioCandidates, text);
+  const bio = cleanText(
+    bioCandidates
+      .filter((line) => line !== location && line !== website)
+      .join(" "),
+  );
+  const inferred = inferRoleCompanyFromBio(bio);
+
+  return {
+    platform: "x",
+    name: cleanText(nameLine) || handle || "X profile",
+    handle,
+    bio,
+    role: inferred.role,
+    company: inferred.company,
+    location,
+    website,
+    follower_count: followerCount,
+    profile_url: profileUrl,
+  };
+}
+
+async function firstVisibleLocator(scope, selectors, timeout = 1500) {
+  const deadline = Date.now() + timeout;
+
+  for (const selector of selectors) {
+    const locator = scope.locator(selector);
+    const count = await locator.count().catch(() => 0);
+
+    for (let index = 0; index < count; index++) {
+      const candidate = locator.nth(index);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return null;
+
+      try {
+        await candidate.waitFor({
+          state: "visible",
+          timeout: Math.min(300, remaining),
+        });
+        return candidate;
+      } catch (_) {
+        // Try the next matching candidate.
+      }
+    }
+  }
+
+  return null;
+}
+
+async function captureXSearchSnapshots(page, maxCards) {
+  const selector = X_SEARCH_CARD_SELECTORS.join(", ");
+  return page
+    .evaluate(
+      ({ selector: cardSelector, maxCards: limit }) => {
+        const clean = (value) =>
+          String(value || "")
+            .replace(/\s+/g, " ")
+            .trim();
+        const container = document.querySelector('[data-testid="primaryColumn"]') || document;
+        const cards = Array.from(container.querySelectorAll(cardSelector)).slice(
+          0,
+          Math.max(0, limit),
+        );
+
+        return cards
+          .map((card) => ({
+            text: clean(card.innerText || ""),
+            hrefs: Array.from(card.querySelectorAll("a[href]")).map(
+              (anchor) => anchor.getAttribute("href") || "",
+            ),
+          }))
+          .filter((snapshot) => snapshot.text || snapshot.hrefs.length);
+      },
+      { selector, maxCards },
+    )
+    .catch(() => []);
+}
+
+async function waitForXSearchResults(page) {
+  return firstVisibleLocator(page, X_SEARCH_CARD_SELECTORS, 15000);
+}
+
+async function scrollXSearchResults(page) {
+  const viewport =
+    page.viewportSize() ||
+    (await page
+      .evaluate(() => ({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      }))
+      .catch(() => ({ width: 1280, height: 800 })));
+  const distance = Math.max(1200, Math.round(viewport.height * 1.25));
+
+  await page.mouse.wheel(0, distance).catch(() => {});
+  await delay(1200);
+}
+
+async function extractXSearchResults(page, max) {
+  const snapshots = await withTimeout(
+    captureXSearchSnapshots(page, Math.max(20, Math.min(max * 4, 100))),
+    20_000,
+    "X search snapshot capture",
+  );
+
+  const leads = [];
+  const seen = new Set();
+
+  for (const snapshot of snapshots) {
+    if (leads.length >= max) break;
+    const lead = parseXSearchLeadSnapshot(snapshot);
+    if (!lead || !lead.profile_url) continue;
+
+    const key = lead.profile_url.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    leads.push(lead);
+  }
+
+  return {
+    selector: 'dom:[data-testid="UserCell"], dom:[data-testid="cellInnerDiv"]',
+    leads,
+  };
 }
 
 function normalizeLinkedInProfileUrl(url) {
@@ -268,7 +668,10 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
   let totalNewCollected = 0;
   const rawProfiles = [];
 
-  emit({ type: "info", message: `Starting discovery for "${keyword}" (Goal: ${maxLeads} new leads)` });
+  emit({
+    type: "info",
+    message: `Starting discovery for "${keyword}" (Goal: ${maxLeads} new leads)`,
+  });
 
   try {
     for (const platform of selected) {
@@ -277,12 +680,20 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
 
       // Limit Check
       if (!isWithinLimit(platform, "visits")) {
-        emit({ type: "warn", platform, message: `Daily visit limit reached for ${platform}. Skipping.` });
+        emit({
+          type: "warn",
+          platform,
+          message: `Daily visit limit reached for ${platform}. Skipping.`,
+        });
         continue;
       }
 
       const needed = maxLeads - totalNewCollected;
-      emit({ type: "info", platform, message: `Searching ${platform} for up to ${needed} more new leads...` });
+      emit({
+        type: "info",
+        platform,
+        message: `Searching ${platform} for up to ${needed} more new leads...`,
+      });
 
       try {
         const found = await withTimeout(
@@ -293,20 +704,27 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
 
         found.forEach((p) => {
           // Check if this profile is already in our collected list or in the DB
-          const isInBatch = rawProfiles.some(rp => rp.profile_url === p.profile_url);
-          const existsInDb = db.prepare('SELECT 1 FROM leads WHERE profile_url = ?').get(p.profile_url);
-          
+          const isInBatch = rawProfiles.some(
+            (rp) => rp.profile_url === p.profile_url,
+          );
+          const existsInDb = db
+            .prepare("SELECT 1 FROM leads WHERE profile_url = ?")
+            .get(p.profile_url);
+
           if (!isInBatch && !existsInDb) {
             totalNewCollected++;
           }
-          
+
           // We still push duplicates to rawProfiles so insertLeads can report them correctly,
           // but we only count non-duplicates toward our stopping goal.
           rawProfiles.push({ ...p, source_keyword: keyword });
         });
 
         if (totalNewCollected >= maxLeads) {
-          emit({ type: "info", message: `Target of ${maxLeads} new leads reached.` });
+          emit({
+            type: "info",
+            message: `Target of ${maxLeads} new leads reached.`,
+          });
           break;
         }
       } catch (e) {
@@ -398,7 +816,7 @@ const platformDiscoveryMap = {
       let newLeadsCount = 0;
       let pageNum = 1;
       const db = getDb();
-      
+
       while (newLeadsCount < max && !isJobStopped(jobId)) {
         emit({
           type: "info",
@@ -426,21 +844,24 @@ const platformDiscoveryMap = {
           30_000,
           "LinkedIn result extraction",
         );
-        
+
         let foundNew = 0;
         for (const lead of leads) {
           // Skip if already found in this run
-          if (allLeads.some(l => l.profile_url === lead.profile_url)) continue;
-          
+          if (allLeads.some((l) => l.profile_url === lead.profile_url))
+            continue;
+
           allLeads.push(lead);
-          
+
           // Check DB to count if it's truly new
-          const existing = db.prepare('SELECT 1 FROM leads WHERE profile_url = ?').get(lead.profile_url);
+          const existing = db
+            .prepare("SELECT 1 FROM leads WHERE profile_url = ?")
+            .get(lead.profile_url);
           if (!existing) {
-             foundNew++;
-             newLeadsCount++;
+            foundNew++;
+            newLeadsCount++;
           }
-          
+
           if (newLeadsCount >= max) break;
         }
 
@@ -451,7 +872,7 @@ const platformDiscoveryMap = {
         });
 
         if (newLeadsCount >= max || leads.length === 0) {
-           break;
+          break;
         }
 
         // Store first lead URL to verify page transition later
@@ -461,19 +882,19 @@ const platformDiscoveryMap = {
         await page.evaluate(async () => {
           for (let i = 0; i < 3; i++) {
             window.scrollBy(0, window.innerHeight);
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise((r) => setTimeout(r, 500));
           }
           window.scrollTo(0, document.body.scrollHeight);
         });
         await delay(2000);
-        
+
         // Try multiple selectors for the Next button
         const nextButtonSelectors = [
-          'button.artdeco-pagination__button--next:not([disabled])',
+          "button.artdeco-pagination__button--next:not([disabled])",
           'button[aria-label="Next"]:not([disabled])',
-          'button:has-text("Next"):not([disabled])'
+          'button:has-text("Next"):not([disabled])',
         ];
-        
+
         let nextBtn = null;
         for (const selector of nextButtonSelectors) {
           const loc = page.locator(selector).first();
@@ -484,43 +905,73 @@ const platformDiscoveryMap = {
         }
 
         if (nextBtn) {
-           emit({ type: "info", platform: "linkedin", message: `Clicking Next page (current page ${pageNum})...` });
-           
-           // Ensure it's in view
-           await nextBtn.scrollIntoViewIfNeeded().catch(() => {});
-           await nextBtn.click({ timeout: 5000 }).catch(async () => {
-             // Fallback: force click via evaluate if normal click fails
-             await page.evaluate((sel) => {
-               const btn = document.querySelector(sel);
-               if (btn) btn.click();
-             }, await nextBtn.evaluate(node => {
-               // Get a simple selector for the evaluate call
-               return node.className ? `.${node.className.split(' ').join('.')}` : 'button.artdeco-pagination__button--next';
-             }).catch(() => 'button.artdeco-pagination__button--next'));
-           });
+          emit({
+            type: "info",
+            platform: "linkedin",
+            message: `Clicking Next page (current page ${pageNum})...`,
+          });
 
-           pageNum++;
-           
-           // Wait for the page content to actually change
-           // We wait for the first lead of the previous page to disappear or for a new list to appear
-           emit({ type: "info", platform: "linkedin", message: "Waiting for next page results to load..." });
-           
-           if (firstLeadUrl) {
-             const profileSnippet = firstLeadUrl.split('/in/')[1]?.split('/')[0];
-             if (profileSnippet) {
-               // Wait for the old result to vanish or a timeout
-               await page.waitForFunction((oldSnippet) => {
-                 return !document.body.innerText.includes(oldSnippet);
-               }, profileSnippet, { timeout: 10000 }).catch(() => {
-                 emit({ type: "warn", platform: "linkedin", message: "Page transition check timed out; content might still be loading." });
-               });
-             }
-           }
-           
-           await delay(3000); // Base safety delay for AJAX
+          // Ensure it's in view
+          await nextBtn.scrollIntoViewIfNeeded().catch(() => {});
+          await nextBtn.click({ timeout: 5000 }).catch(async () => {
+            // Fallback: force click via evaluate if normal click fails
+            await page.evaluate(
+              (sel) => {
+                const btn = document.querySelector(sel);
+                if (btn) btn.click();
+              },
+              await nextBtn
+                .evaluate((node) => {
+                  // Get a simple selector for the evaluate call
+                  return node.className
+                    ? `.${node.className.split(" ").join(".")}`
+                    : "button.artdeco-pagination__button--next";
+                })
+                .catch(() => "button.artdeco-pagination__button--next"),
+            );
+          });
+
+          pageNum++;
+
+          // Wait for the page content to actually change
+          // We wait for the first lead of the previous page to disappear or for a new list to appear
+          emit({
+            type: "info",
+            platform: "linkedin",
+            message: "Waiting for next page results to load...",
+          });
+
+          if (firstLeadUrl) {
+            const profileSnippet = firstLeadUrl.split("/in/")[1]?.split("/")[0];
+            if (profileSnippet) {
+              // Wait for the old result to vanish or a timeout
+              await page
+                .waitForFunction(
+                  (oldSnippet) => {
+                    return !document.body.innerText.includes(oldSnippet);
+                  },
+                  profileSnippet,
+                  { timeout: 10000 },
+                )
+                .catch(() => {
+                  emit({
+                    type: "warn",
+                    platform: "linkedin",
+                    message:
+                      "Page transition check timed out; content might still be loading.",
+                  });
+                });
+            }
+          }
+
+          await delay(3000); // Base safety delay for AJAX
         } else {
-           emit({ type: "info", platform: "linkedin", message: "No 'Next' button found or it is disabled. Ending search." });
-           break;
+          emit({
+            type: "info",
+            platform: "linkedin",
+            message: "No 'Next' button found or it is disabled. Ending search.",
+          });
+          break;
         }
       }
       return allLeads;
@@ -536,7 +987,187 @@ const platformDiscoveryMap = {
       await closeBrowserContext("linkedin", browserState);
     }
   },
-  x: async (kw, max, emit) => [],
+  x: async (kw, max, emit, jobId) => {
+    const browserState = await createBrowserContext("x");
+    const page = browserState.page;
+    const db = getDb();
+    const searchUrl = `https://x.com/search?q=${encodeURIComponent(kw)}&f=user`;
+    const rawLeads = [];
+    const seen = new Set();
+    let totalNewCount = 0;
+    let stagnantRounds = 0;
+    let pass = 0;
+
+    try {
+      emit({
+        type: "info",
+        platform: "x",
+        message: "Opening X people search...",
+      });
+
+      await enforceVisitLimit(emit);
+
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          await withTimeout(
+            page.goto(searchUrl, {
+              waitUntil: "domcontentloaded",
+              timeout: 60000,
+            }),
+            60000,
+            "X search navigation",
+          );
+          break;
+        } catch (error) {
+          if (attempt === 2) throw error;
+
+          emit({
+            type: "warn",
+            platform: "x",
+            message: `X search navigation attempt ${attempt} failed: ${error.message}. Retrying...`,
+          });
+          await delay(1500 * attempt);
+        }
+      }
+
+      emit({
+        type: "info",
+        platform: "x",
+        message: `X search page loaded: ${page.url()}`,
+      });
+
+      await delay(2500);
+
+      if (
+        await checkSessionExpired(page, "x", (type, message) =>
+          emit({ type, platform: "x", message }),
+        )
+      ) {
+        emit({
+          type: "warn",
+          platform: "x",
+          message:
+            "X session is not authenticated or has expired before discovery started.",
+        });
+        await captureFailureArtifact(page, "x", "discovery-x-session-expired");
+        return [];
+      }
+
+      await waitForXSearchResults(page).catch(() => {
+        emit({
+          type: "warn",
+          platform: "x",
+          message:
+            "No visible X user result cards yet; continuing with scroll-based retries.",
+        });
+      });
+
+      while (totalNewCount < max && !isJobStopped(jobId)) {
+        pass += 1;
+
+        emit({
+          type: "info",
+          platform: "x",
+          message: `Extracting X search results (pass ${pass})...`,
+        });
+
+        const { selector, leads } = await withTimeout(
+          extractXSearchResults(page, max - totalNewCount),
+          Number(process.env.DISCOVERY_PLATFORM_TIMEOUT_MS || 300_000),
+          "X search extraction",
+        );
+
+        let newOnPass = 0;
+        for (const lead of leads) {
+          const dedupeKey = String(lead.profile_url || "").toLowerCase();
+          if (!dedupeKey || seen.has(dedupeKey)) continue;
+
+          seen.add(dedupeKey);
+          const existsInDb = db
+            .prepare("SELECT 1 FROM leads WHERE profile_url = ?")
+            .get(lead.profile_url);
+
+          if (!existsInDb) {
+            totalNewCount += 1;
+            newOnPass += 1;
+          }
+
+          rawLeads.push({
+            ...lead,
+            source_keyword: kw,
+          });
+
+          if (totalNewCount >= max) break;
+        }
+
+        emit({
+          type: "info",
+          platform: "x",
+          message: `Extracted ${leads.length} X profiles from pass ${pass} (${newOnPass} new) using ${selector}. Total new so far: ${totalNewCount}/${max}.`,
+        });
+
+        if (totalNewCount >= max) {
+          emit({
+            type: "info",
+            platform: "x",
+            message: `Target of ${max} new X leads reached.`,
+          });
+          break;
+        }
+
+        if (newOnPass === 0) {
+          stagnantRounds += 1;
+        } else {
+          stagnantRounds = 0;
+        }
+
+        if (stagnantRounds >= 3) {
+          emit({
+            type: "info",
+            platform: "x",
+            message: "No new X results after repeated scrolls; ending search.",
+          });
+          break;
+        }
+
+        emit({
+          type: "info",
+          platform: "x",
+          message: "Scrolling X search results to load more users...",
+        });
+
+        await enforceVisitLimit(emit);
+        await scrollXSearchResults(page);
+        await randomActionDelay();
+
+        if (
+          await checkSessionExpired(page, "x", (type, message) =>
+            emit({ type, platform: "x", message }),
+          )
+        ) {
+          emit({
+            type: "warn",
+            platform: "x",
+            message:
+              "X session expired during discovery; returning partial results collected so far.",
+          });
+          await captureFailureArtifact(
+            page,
+            "x",
+            "discovery-x-session-expired",
+          );
+          break;
+        }
+      }
+
+      return rawLeads;
+    } catch (error) {
+      await captureFailureArtifact(page, "x", "discovery-x");
+      throw error;
+    } finally {
+      await closeBrowserContext("x", browserState);
+    }
+  },
   instagram: async (kw, max, emit) => [],
   facebook: async (kw, max, emit) => [],
 };
@@ -548,4 +1179,9 @@ module.exports = {
   emitJobEvent,
   closeJobStream,
   stopDiscovery,
+  __private: {
+    parseXSearchLeadSnapshot,
+    inferRoleCompanyFromBio,
+    normalizeXProfileUrl,
+  },
 };
