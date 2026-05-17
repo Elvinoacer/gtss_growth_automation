@@ -1,5 +1,5 @@
 document.addEventListener("DOMContentLoaded", () => {
-  const { fetchJSON, showToast, initSSE } = window.gtss;
+  const { fetchJSON, showToast, getSocket } = window.gtss;
 
   // State
   let leads = [];
@@ -538,24 +538,36 @@ document.addEventListener("DOMContentLoaded", () => {
           method: "POST",
         });
 
-        const eventSource = initSSE(`/api/crm/reply-stream/${jobId}`, (data) => {
+        // Legacy SSE to trigger backend
+        const legacySSE = window.gtss.initSSE(`/api/crm/reply-stream/${jobId}`, () => {});
+
+        const socket = getSocket();
+        if (!socket) return;
+
+        function onCrmEvent(data) {
           if (!data) return;
           if (data.type === "done") {
             showToast(data.message, "success");
-            eventSource.close();
+            cleanup();
             btn.disabled = false;
             btn.innerHTML = `<span class="material-symbols-outlined text-sm">sync</span> Detect Replies Now`;
-            // Reload leads to see new replies
             loadLeads();
           } else if (data.type === "error") {
             showToast(data.message, "error");
-            eventSource.close();
+            cleanup();
             btn.disabled = false;
             btn.innerHTML = `<span class="material-symbols-outlined text-sm">sync</span> Detect Replies Now`;
           } else {
             showToast(data.message, "info");
           }
-        });
+        }
+
+        function cleanup() {
+          socket.off('crm:event', onCrmEvent);
+          if (legacySSE) legacySSE.close();
+        }
+
+        socket.on('crm:event', onCrmEvent);
       } catch (err) {
         showToast(err.message, "error");
         btn.disabled = false;

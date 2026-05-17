@@ -6,6 +6,7 @@ const {
   captureFailureArtifact,
 } = require("../automation/browserBase");
 const { getPlatformKeys } = require("./platformCatalog");
+const { broadcast } = require("./socketService");
 
 const MAX_PROFILE_VISITS_PER_HOUR = 50;
 const DEFAULT_MIN_DELAY_MS = 3000;
@@ -41,6 +42,11 @@ function emitJobEvent(jobId, event) {
   const h = jobEventHistory.get(key) || [];
   h.push(event);
   jobEventHistory.set(key, h.slice(-200));
+
+  // Broadcast via Socket.IO
+  broadcast('discovery:event', event);
+
+  // Legacy SSE
   const s = jobStreams.get(key);
   if (s) {
     const payload = `data: ${JSON.stringify(event)}\n\n`;

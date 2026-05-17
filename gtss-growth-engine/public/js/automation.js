@@ -5,12 +5,12 @@
 (function () {
   "use strict";
 
-  const { fetchJSON, showToast, initSSE } = window.gtss;
+  const { fetchJSON, showToast, initSocket, getSocket } = window.gtss;
 
   // State
-  let activeSSE = null;
   let activeJobId = null;
   let isAutomationRunning = false;
+  let socketSub = null;
 
   // DOM Refs
   const runAllBtn = document.getElementById("run-all-btn");
@@ -43,6 +43,9 @@
     await loadLimits();
     await loadQueue();
     if (postRunBanner) postRunBanner.hidden = true;
+
+    // Start idle-mode background polling to keep data fresh
+    startPolling(POLL_IDLE_MS);
 
     // Re-check sessions
     const sessions = await fetchJSON("/api/sessions/status");
@@ -461,54 +464,71 @@
       activeJobId = res.jobId;
       isAutomationRunning = true;
       runAllBtn.disabled = true;
+      runAllBtn.innerHTML = `<span class="material-symbols-outlined animate-spin text-[18px]">refresh</span> <span class="truncate max-w-[200px]">Starting...</span>`;
       stopBtn.style.display = "flex";
 
-      appendLog("info", "Connecting to execution stream...");
+      appendLog("info", "Connected to real-time execution stream...");
 
-      activeSSE = initSSE(`/api/automation/stream/${activeJobId}`, (event) => {
+      // Connect SSE just to trigger the executor (backend needs it)
+      const legacySSE = window.gtss.initSSE(`/api/automation/stream/${activeJobId}`, () => {});
+
+      // Listen for all automation events via Socket.IO
+      function onAutomationLog(event) {
         if (!event) return;
-
         appendLog(event.type, event.message, event);
-
-        // Update UI states based on event
-        if (
-          event.type === "info" &&
-          event.message.includes("Processing action:")
-        ) {
-          loadLimits();
-        }
 
         if (event.type === "captcha") {
           showCaptchaWarning(event.platform);
         }
 
-        if (event.type === "done") {
-          renderRunSummary(event);
-          if (activeSSE) {
-            activeSSE.close();
-            activeSSE = null;
-          }
-          isAutomationRunning = false;
-          activeJobId = null;
-          runAllBtn.disabled = false;
-          stopBtn.style.display = "none";
-          loadQueue();
-          loadLimits();
+        if (event.type === "state") {
+          runAllBtn.innerHTML = `<span class="material-symbols-outlined animate-spin text-[18px]">refresh</span> <span class="truncate max-w-[200px]">${event.message}</span>`;
         }
 
-        if (event.type === "error") {
-          if (activeSSE) {
-            activeSSE.close();
-            activeSSE = null;
-          }
-          isAutomationRunning = false;
-          activeJobId = null;
-          runAllBtn.disabled = false;
-          stopBtn.style.display = "none";
-          loadQueue();
-          loadLimits();
+        if (event.type === "done") {
+          renderRunSummary(event);
+          finishRun();
         }
-      });
+
+        if (event.type === "error" && !event.message?.includes("Processing")) {
+          // Only finish on terminal errors, not per-action errors
+          if (event.message?.includes("Executor error") || event.message?.includes("stopped by user")) {
+            finishRun();
+          }
+        }
+      }
+
+      function onAutomationRefresh() {
+        loadLimits();
+        loadQueue();
+      }
+
+      function onQueueUpdate() {
+        loadQueue();
+      }
+
+      const socket = getSocket();
+      if (socket) {
+        socket.on('automation:log', onAutomationLog);
+        socket.on('automation:refresh', onAutomationRefresh);
+        socket.on('automation:queue', onQueueUpdate);
+      }
+
+      function finishRun() {
+        if (legacySSE) legacySSE.close();
+        if (socket) {
+          socket.off('automation:log', onAutomationLog);
+          socket.off('automation:refresh', onAutomationRefresh);
+          socket.off('automation:queue', onQueueUpdate);
+        }
+        isAutomationRunning = false;
+        activeJobId = null;
+        runAllBtn.disabled = false;
+        runAllBtn.innerHTML = `<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1">play_arrow</span> Run Queue`;
+        stopBtn.style.display = "none";
+        loadQueue();
+        loadLimits();
+      }
     } catch (err) {
       showToast(err.message, "error");
       appendLog("error", err.message);
@@ -643,6 +663,15 @@
   // Hide stop btn and captcha banner initially
   stopBtn.style.display = "none";
   captchaBanner.style.display = "none";
+
+  // Global socket listeners — always active for passive real-time updates
+  const socket = getSocket();
+  if (socket) {
+    socket.on('automation:queue', () => {
+      loadQueue();
+      loadLimits();
+    });
+  }
 
   // Run init
   init();

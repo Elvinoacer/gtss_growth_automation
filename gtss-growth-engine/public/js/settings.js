@@ -266,6 +266,9 @@ function bindEvents() {
     .getElementById("reset-template")
     .addEventListener("click", resetTemplate);
   document
+    .getElementById("apply-template-all")
+    .addEventListener("click", applyTemplateToAll);
+  document
     .getElementById("delete-confirmation")
     .addEventListener("input", (event) => {
       document.getElementById("clear-data").disabled =
@@ -385,6 +388,59 @@ async function resetTemplate() {
   settingsState.templates[settingsState.activeTemplate] = result.template;
   renderTemplateEditor();
   window.gtss.showToast("Template reset", "success");
+}
+
+async function applyTemplateToAll() {
+  const btn = document.getElementById("apply-template-all");
+
+  // First, save the current editor content for ALL platform templates
+  const template = document.getElementById("template-editor").value;
+  if (!template.trim()) {
+    window.gtss.showToast("Template is empty — write your message first", "error");
+    return;
+  }
+
+  if (!(await confirmModal(
+    `This will save this template to ALL platforms and overwrite ALL ${settingsState.templates ? 'existing' : ''} message bodies in the system. Continue?`
+  ))) return;
+
+  btn.disabled = true;
+  btn.textContent = "⏳ Applying...";
+  setInline("template-apply-result", "Saving template to all platforms...", "");
+
+  try {
+    // Save the template to every platform key
+    const platformKeys = Object.keys(settingsState.templates);
+    for (const key of platformKeys) {
+      await window.gtss.fetchJSON(`/api/settings/templates/${key}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template }),
+      });
+      settingsState.templates[key] = template;
+    }
+
+    // Now apply to all existing messages
+    setInline("template-apply-result", "Updating all existing messages...", "");
+    const result = await window.gtss.fetchJSON("/api/settings/templates/apply-all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    setInline(
+      "template-apply-result",
+      `✓ Updated ${result.updated}/${result.total} messages across all platforms`,
+      "success",
+    );
+    window.gtss.showToast(`Applied template to ${result.updated} messages`, "success");
+    renderTemplateTabs();
+  } catch (error) {
+    setInline("template-apply-result", `Failed: ${error.message}`, "error");
+    window.gtss.showToast(error.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⟳ Apply to All Messages";
+  }
 }
 
 async function changePassphrase() {

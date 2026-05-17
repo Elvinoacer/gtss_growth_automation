@@ -42,6 +42,11 @@ function emitJobEvent(jobId, event) {
   history.push(event);
   jobEventHistory.set(key, history.slice(-200));
 
+  // Broadcast via Socket.IO
+  const { broadcast } = require("./socketService");
+  broadcast('messages:event', event);
+
+  // Legacy SSE
   const streams = jobStreams.get(key);
   if (!streams || streams.size === 0) return;
   const payload = `data: ${JSON.stringify(event)}\n\n`;
@@ -142,11 +147,12 @@ function stripCodeFences(text) {
 // ---------------------------------------------------------------------------
 
 /**
- * Generate messages from templates when AI is unavailable or in manual mode.
- * Applies personalisation rules based on lead's company, location, and role.
+ * Generate messages from the canonical template.
+ * Both variants A and B use the same template — personalised with lead name only.
+ * No AI generation is used for outreach DMs.
  *
  * @param {Object} lead - Lead record from DB
- * @param {string} [productPitch] - Product name override
+ * @param {string} [productPitch] - Unused, kept for API compatibility
  * @returns {{variantA: {id: number, body: string}, variantB: {id: number, body: string}}}
  */
 function generateFromTemplate(lead, productPitch) {
@@ -154,62 +160,32 @@ function generateFromTemplate(lead, productPitch) {
   const resolvedPlatform = lead.platform || getPrimaryPlatform();
   const messageType = resolvedPlatform === "linkedin" ? "connect" : "dm";
   const template = getTemplate(resolvedPlatform, messageType);
-  const painPoint = extractPainPoint(lead.score_reason);
-  const product = productPitch || "Restaurant Manager";
 
   const templateVars = {
     lead_name: lead.name || "there",
     role: lead.role || "",
     company: lead.company || "your business",
     location: lead.location || "Kenya",
-    product,
-    pain_point: painPoint,
+    product: productPitch || "Restaurant Manager",
+    pain_point: extractPainPoint(lead.score_reason),
   };
 
-  // Variant A: straight template fill
-  const bodyA = template
+  // Both variants use the same canonical template
+  const body = template
     ? fillTemplate(template, templateVars)
-    : `Hi ${templateVars.lead_name}, I work with businesses in Kenya to help them with ${painPoint}. Would love to connect!`;
-
-  // Variant B: enhanced personalisation
-  let opener = `Hi ${templateVars.lead_name},`;
-  if (lead.company && lead.company !== "your business") {
-    opener = `Hi ${templateVars.lead_name}, I came across ${lead.company} and was really impressed.`;
-  }
-
-  let locationLine = "";
-  const loc = (lead.location || "").toLowerCase();
-  if (loc.includes("nairobi")) {
-    locationLine = " Especially given the competitive Nairobi F&B scene.";
-  } else if (loc.includes("mombasa")) {
-    locationLine = " Especially given how busy the Mombasa hospitality market is.";
-  }
-
-  let roleAddress = "";
-  const role = (lead.role || "").toLowerCase();
-  if (role.includes("owner") || role.includes("manager")) {
-    roleAddress = ` As someone running the show at ${lead.company || 'your business'},`;
-  }
-
-  // Get platform-appropriate CTA from template
-  const templates = loadTemplates();
-  const ctaTemplate = templates[`${resolvedPlatform}_${messageType}`] || templates[`${resolvedPlatform}_dm`] || "";
-  const ctaMatch = ctaTemplate.match(/Would you be open to.*$|Would love to.*$|Worth a quick.*$|Mind if I.*$/im);
-  const cta = ctaMatch ? ctaMatch[0] : "Would you be open to a quick chat?";
-
-  const bodyB = `${opener}${locationLine}\n\n${roleAddress} I think our ${product} could really help with ${painPoint}.\n\n${fillTemplate(cta, templateVars)}`.trim();
+    : `Hi ${templateVars.lead_name},\n\nI'm reaching out because I know how much of a nightmare it is when a sudden ISP outage brings a busy dining room to a standstill. I develop localized management systems specifically designed to maintain 100% operational uptime during internet drops—meaning kitchen routing and mobile payments keep flowing no matter what.\n\nIs relying on a stable connection something that currently causes friction for your front-of-house team?\n\nWould love to connect!\n\nBest,\nElvin`;
 
   const insertStmt = db.prepare(
     `INSERT INTO messages (lead_id, platform, body, variant, status, generated_by, generated_at)
-     VALUES (?, ?, ?, ?, 'pending', 'template-fallback', CURRENT_TIMESTAMP)`,
+     VALUES (?, ?, ?, ?, 'pending', 'template', CURRENT_TIMESTAMP)`,
   );
 
-  const resultA = insertStmt.run(lead.id, resolvedPlatform, bodyA, "A");
-  const resultB = insertStmt.run(lead.id, resolvedPlatform, bodyB, "B");
+  const resultA = insertStmt.run(lead.id, resolvedPlatform, body, "A");
+  const resultB = insertStmt.run(lead.id, resolvedPlatform, body, "B");
 
   return {
-    variantA: { id: resultA.lastInsertRowid, body: bodyA },
-    variantB: { id: resultB.lastInsertRowid, body: bodyB },
+    variantA: { id: resultA.lastInsertRowid, body },
+    variantB: { id: resultB.lastInsertRowid, body },
   };
 }
 
@@ -222,77 +198,8 @@ async function generateMessages(leadId, platform, productPitch, tone) {
   const lead = db.prepare("SELECT * FROM leads WHERE id = ?").get(leadId);
   if (!lead) throw new Error(`Lead ${leadId} not found`);
 
-  const resolvedPlatform = platform || lead.platform || getPrimaryPlatform();
-  const messageType = resolvedPlatform === "linkedin" ? "connect" : "dm";
-  const charLimit = getCharLimit(resolvedPlatform, messageType);
-  const template = getTemplate(resolvedPlatform, messageType);
-  const painPoint = extractPainPoint(lead.score_reason);
-  const product = productPitch || "Restaurant Manager";
-
-  const templateVars = {
-    lead_name: lead.name || "there",
-    role: lead.role || "",
-    company: lead.company || "your business",
-    location: lead.location || "Kenya",
-    product,
-    pain_point: painPoint,
-  };
-
-  const baseTemplate = template ? fillTemplate(template, templateVars) : "";
-  const toneLabel = tone || "friendly";
-
-  const promptA = `Generate a warm, brief outreach message for ${resolvedPlatform}.
-Recipient: ${lead.name}, Role: ${lead.role}, Company: ${lead.company}.
-Product: ${product}. Tone: ${toneLabel}. Max ${charLimit} chars.
-${baseTemplate ? `Reference: ${baseTemplate}` : ""}
-Return ONLY the message body.`;
-
-  const promptB = `Generate an alternative curiosity-driven outreach message for ${resolvedPlatform}.
-Recipient: ${lead.name}, Role: ${lead.role}, Company: ${lead.company}.
-Product: ${product}. Tone: ${toneLabel}. Max ${charLimit} chars.
-Return ONLY the message body.`;
-
-  try {
-    const [bodyA, bodyB] = await Promise.all([
-      callGeminiText(promptA),
-      callGeminiText(promptB),
-    ]);
-
-    const cleanA = stripCodeFences(bodyA).replace(/^["']|["']$/g, "");
-    const cleanB = stripCodeFences(bodyB).replace(/^["']|["']$/g, "");
-
-    const insertStmt = db.prepare(
-      `INSERT INTO messages (lead_id, platform, body, variant, status, generated_by, generated_at)
-       VALUES (?, ?, ?, ?, 'pending', 'ai', CURRENT_TIMESTAMP)`,
-    );
-
-    const resultA = insertStmt.run(leadId, resolvedPlatform, cleanA, "A");
-    const resultB = insertStmt.run(leadId, resolvedPlatform, cleanB, "B");
-
-    return {
-      variantA: { id: resultA.lastInsertRowid, body: cleanA },
-      variantB: { id: resultB.lastInsertRowid, body: cleanB },
-    };
-  } catch (error) {
-    logger.error(
-      "MESSAGES",
-      `Failed to generate AI messages for lead ${leadId}`,
-      error,
-    );
-
-    // Fallback to template when AI fails
-    logger.warn("MESSAGES", `Gemini unavailable for lead ${leadId}, using template fallback`);
-    try {
-      return generateFromTemplate(lead, productPitch);
-    } catch (fallbackError) {
-      logger.error("MESSAGES", `Template fallback also failed for lead ${leadId}`, fallbackError);
-      // Mark lead as failed if it's a 500 or parse error
-      if (error.status === 500 || error.status === "parse_failed") {
-        db.prepare(`UPDATE leads SET status = 'scoring_failed' WHERE id = ?`).run(leadId);
-      }
-      throw error;
-    }
-  }
+  // Always use template — no AI generation for outreach DMs
+  return generateFromTemplate(lead, productPitch);
 }
 
 // ---------------------------------------------------------------------------

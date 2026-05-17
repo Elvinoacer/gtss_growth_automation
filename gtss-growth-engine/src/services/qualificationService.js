@@ -42,6 +42,11 @@ function emitJobEvent(jobId, event) {
   history.push(event);
   jobEventHistory.set(key, history.slice(-200));
 
+  // Broadcast via Socket.IO
+  const { broadcast } = require("./socketService");
+  broadcast('qualification:event', event);
+
+  // Legacy SSE
   const streams = jobStreams.get(key);
   if (!streams || streams.size === 0) return;
   const payload = `data: ${JSON.stringify(event)}\n\n`;

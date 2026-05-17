@@ -49,11 +49,16 @@ function getPlatformEnv(platform, suffix, fallback) {
 }
 
 function getBrowserMode(platform, options = {}) {
+  if (options.mode === "cdp") return "cdp";
   if (options.cdpEndpoint) return "cdp";
+  if (getPlatformEnv(platform, "CDP_ENDPOINT")) return "cdp";
+
+  if (options.mode === "persistent") return "persistent";
   if (options.userDataDir) return "persistent";
+
   const configured = getPlatformEnv(platform, "BROWSER_MODE");
   if (configured) return configured.toLowerCase();
-  if (getPlatformEnv(platform, "CDP_ENDPOINT")) return "cdp";
+
   return "persistent";
 }
 
@@ -235,7 +240,7 @@ async function humanScroll(page) {
  */
 async function detectCaptcha(page) {
   try {
-    const content = await page.innerText('body').catch(() => '');
+    const content = await page.innerText("body").catch(() => "");
     const contentLower = content.toLowerCase();
 
     const triggers = [
@@ -265,9 +270,10 @@ async function hasPlatformAuthCookie(context, platform) {
   try {
     const cookies = await context.cookies();
     if (platform === "linkedin") {
-      return cookies.some((cookie) =>
-        ["li_at", "JSESSIONID"].includes(cookie.name) &&
-        /(^|\.)linkedin\.com$/i.test(cookie.domain || "")
+      return cookies.some(
+        (cookie) =>
+          ["li_at", "JSESSIONID"].includes(cookie.name) &&
+          /(^|\.)linkedin\.com$/i.test(cookie.domain || ""),
       );
     }
 
@@ -283,7 +289,9 @@ async function hasPlatformAuthCookie(context, platform) {
 
 async function isLinkedInLoggedIn(page) {
   try {
-    await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+    await page
+      .waitForLoadState("domcontentloaded", { timeout: 10000 })
+      .catch(() => {});
 
     const loggedInSignals = [
       '[data-control-name="nav.settings"]',
@@ -337,40 +345,79 @@ async function captureFailureSnapshot(page, platform, label) {
 
 async function classifyLinkedInSession(page) {
   const url = page.url().toLowerCase();
-  const bodyText = await page.locator("body").innerText({ timeout: 2000 }).catch(() => "");
+  const bodyText = await page
+    .locator("body")
+    .innerText({ timeout: 2000 })
+    .catch(() => "");
   const body = bodyText.toLowerCase();
 
   if (url.includes("/checkpoint") || url.includes("/challenge")) {
-    return { state: AUTH_STATES.CHECKPOINT_REQUIRED, reason: `LinkedIn checkpoint URL: ${page.url()}` };
+    return {
+      state: AUTH_STATES.CHECKPOINT_REQUIRED,
+      reason: `LinkedIn checkpoint URL: ${page.url()}`,
+    };
   }
 
-  if (body.includes("captcha") || body.includes("verify you're human") || body.includes("verify you are human")) {
-    return { state: AUTH_STATES.CAPTCHA_REQUIRED, reason: "LinkedIn human verification detected" };
+  if (
+    body.includes("captcha") ||
+    body.includes("verify you're human") ||
+    body.includes("verify you are human")
+  ) {
+    return {
+      state: AUTH_STATES.CAPTCHA_REQUIRED,
+      reason: "LinkedIn human verification detected",
+    };
   }
 
-  if (body.includes("weekly invitation limit") || body.includes("try again later")) {
-    return { state: AUTH_STATES.RATE_LIMITED, reason: "LinkedIn rate-limit text detected" };
+  if (
+    body.includes("weekly invitation limit") ||
+    body.includes("try again later")
+  ) {
+    return {
+      state: AUTH_STATES.RATE_LIMITED,
+      reason: "LinkedIn rate-limit text detected",
+    };
   }
 
-  if (body.includes("unusual activity") || body.includes("temporarily restricted") || body.includes("temporarily blocked")) {
-    return { state: AUTH_STATES.TEMPORARY_BLOCK, reason: "LinkedIn temporary block text detected" };
+  if (
+    body.includes("unusual activity") ||
+    body.includes("temporarily restricted") ||
+    body.includes("temporarily blocked")
+  ) {
+    return {
+      state: AUTH_STATES.TEMPORARY_BLOCK,
+      reason: "LinkedIn temporary block text detected",
+    };
   }
 
   if (url.includes("/login") || url.includes("/uas/login")) {
-    return { state: AUTH_STATES.LOGIN_REQUIRED, reason: `LinkedIn login URL: ${page.url()}` };
+    return {
+      state: AUTH_STATES.LOGIN_REQUIRED,
+      reason: `LinkedIn login URL: ${page.url()}`,
+    };
   }
 
   const loggedIn = await isLinkedInLoggedIn(page);
   if (loggedIn) {
-    return { state: AUTH_STATES.AUTHENTICATED, reason: "LinkedIn authenticated DOM signal found" };
+    return {
+      state: AUTH_STATES.AUTHENTICATED,
+      reason: "LinkedIn authenticated DOM signal found",
+    };
   }
 
   const hasAuthCookie = await hasPlatformAuthCookie(page.context(), "linkedin");
   if (!hasAuthCookie) {
-    return { state: AUTH_STATES.LOGIN_REQUIRED, reason: "LinkedIn auth cookies are missing" };
+    return {
+      state: AUTH_STATES.LOGIN_REQUIRED,
+      reason: "LinkedIn auth cookies are missing",
+    };
   }
 
-  return { state: AUTH_STATES.UNKNOWN_STATE, reason: "LinkedIn auth cookies exist, but no authenticated DOM signal was visible" };
+  return {
+    state: AUTH_STATES.UNKNOWN_STATE,
+    reason:
+      "LinkedIn auth cookies exist, but no authenticated DOM signal was visible",
+  };
 }
 
 async function checkSessionState(page, platform, emit, options = {}) {
@@ -390,11 +437,20 @@ async function checkSessionState(page, platform, emit, options = {}) {
   } else {
     const challenged = await detectCaptcha(page);
     if (challenged) {
-      result = { state: AUTH_STATES.CAPTCHA_REQUIRED, reason: `${platform} challenge text detected` };
+      result = {
+        state: AUTH_STATES.CAPTCHA_REQUIRED,
+        reason: `${platform} challenge text detected`,
+      };
     } else if (loginSignals.some((signal) => url.includes(signal))) {
-      result = { state: AUTH_STATES.LOGIN_REQUIRED, reason: `${platform} login/checkpoint URL: ${page.url()}` };
+      result = {
+        state: AUTH_STATES.LOGIN_REQUIRED,
+        reason: `${platform} login/checkpoint URL: ${page.url()}`,
+      };
     } else {
-      result = { state: AUTH_STATES.AUTHENTICATED, reason: "No login or challenge signal detected" };
+      result = {
+        state: AUTH_STATES.AUTHENTICATED,
+        reason: "No login or challenge signal detected",
+      };
     }
   }
 
@@ -414,7 +470,12 @@ async function checkSessionState(page, platform, emit, options = {}) {
     emit(
       result.state.toLowerCase(),
       `${platform} session state: ${result.state}. ${result.reason}`,
-      { platform, authState: result.state, reason: result.reason, ...artifacts },
+      {
+        platform,
+        authState: result.state,
+        reason: result.reason,
+        ...artifacts,
+      },
     );
   }
 
@@ -502,9 +563,11 @@ async function createBrowser(platform, options = {}) {
       const context =
         browser.contexts()[0] ||
         (await browser.newContext({ locale: "en-KE" }));
-      const page =
-        context.pages().find((candidate) => !candidate.isClosed()) ||
-        (await context.newPage());
+
+      // Always open a NEW tab for automation — never hijack existing tabs
+      const page = await context.newPage();
+      logger.info("BROWSER", `Opened new CDP tab for ${platform} automation`);
+
       const tracePath = await startTracing(context, platform, options);
       releaseLockOnClose(browser, context, lock);
       return trackBrowserState({
@@ -515,6 +578,7 @@ async function createBrowser(platform, options = {}) {
         mode,
         tracePath,
         shouldCloseBrowser: false,
+        shouldClosePageOnly: true, // close the tab but keep Chrome open
         lock,
       });
     } catch (error) {
@@ -625,16 +689,24 @@ async function closeBrowser(browser, platform, context, options = {}) {
       const mode = options.mode || "persistent";
       const hasAuthCookie = await hasPlatformAuthCookie(context, platform);
       if (INVALIDATED_PLATFORMS.has(platform)) {
-        logger.warn("BROWSER", "Session was invalidated during this run; not marking active on close", {
-          platform,
-          mode,
-        });
+        logger.warn(
+          "BROWSER",
+          "Session was invalidated during this run; not marking active on close",
+          {
+            platform,
+            mode,
+          },
+        );
       } else if (platform === "linkedin" && !hasAuthCookie) {
         markAutomationSessionInvalid(platform);
-        logger.warn("BROWSER", "LinkedIn auth cookies missing on close; session remains invalid", {
-          platform,
-          mode,
-        });
+        logger.warn(
+          "BROWSER",
+          "LinkedIn auth cookies missing on close; session remains invalid",
+          {
+            platform,
+            mode,
+          },
+        );
       } else {
         markSessionActive(platform, { mode, hasAuthCookie });
       }
@@ -646,7 +718,18 @@ async function closeBrowser(browser, platform, context, options = {}) {
   }
 
   try {
-    if (options.shouldCloseBrowser !== false) {
+    if (
+      options.shouldClosePageOnly &&
+      options.page &&
+      !options.page.isClosed()
+    ) {
+      // CDP mode: close only the automation tab, keep Chrome running
+      await options.page.close();
+      logger.info(
+        "BROWSER",
+        `Closed automation tab for ${platform} (Chrome stays open)`,
+      );
+    } else if (options.shouldCloseBrowser !== false) {
       if (context && options.mode === "persistent") {
         await context.close();
       } else if (browser) {
@@ -690,6 +773,7 @@ module.exports = {
   checkSessionState,
   AUTH_STATES,
   captureFailureArtifact,
+  getBrowserMode,
   getProfileDir,
   acquireBrowserLock,
   releaseBrowserLock,

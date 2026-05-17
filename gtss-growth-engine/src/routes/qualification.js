@@ -8,6 +8,7 @@ const {
   emitJobEvent,
   closeJobStream,
 } = require("../services/qualificationService");
+const { broadcast } = require("../services/socketService");
 
 const router = express.Router();
 
@@ -205,6 +206,7 @@ router.patch("/api/qualification/leads/:id/score", (req, res) => {
   ).run(score, reason, status, id);
 
   const updated = db.prepare("SELECT * FROM leads WHERE id = ?").get(id);
+  broadcast('qualification:mutation', { type: 'score_override', lead: updated });
   res.json(updated);
 });
 
@@ -250,6 +252,7 @@ router.patch("/api/qualification/leads/:id/status", (req, res) => {
   }
 
   const updated = db.prepare("SELECT * FROM leads WHERE id = ?").get(id);
+  broadcast('qualification:mutation', { type: 'status_update', lead: updated });
   res.json(updated);
 });
 
@@ -308,6 +311,7 @@ router.post("/api/qualification/leads/bulk/manual-qualify", (req, res) => {
   });
 
   const updated = transaction(candidates);
+  broadcast('qualification:mutation', { type: 'bulk_manual_qualify', count: updated });
   res.json({ updated });
 });
 
@@ -418,6 +422,7 @@ router.patch("/api/qualification/leads/bulk/status", (req, res) => {
   });
 
   const updated = transaction(ids);
+  broadcast('qualification:mutation', { type: 'bulk_status', status, count: updated });
   res.json({ updated });
 });
 

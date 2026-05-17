@@ -138,42 +138,60 @@ function openDiscoveryStream(jobId) {
     discoveryState.eventSource.close();
   }
 
+  // Legacy SSE to trigger backend stream
   discoveryState.eventSource = window.gtss.initSSE(
     `/api/discovery/stream/${jobId}`,
-    async (event) => {
-      appendLog(event);
-
-      if (event.type === "captcha") {
-        appendLog({
-          type: "captcha",
-          message: event.message || "CAPTCHA detected, automation paused",
-        });
-      }
-
-      if (event.type === "done") {
-        const result = event.result || {};
-        document.getElementById("running-panel").classList.remove("visible");
-        document.getElementById("discovery-form").style.display = "";
-        document.getElementById("result-summary").classList.add("visible");
-        document.getElementById("result-summary-text").textContent =
-          `Discovery complete: ${result.new || 0} new leads, ${result.duplicates || 0} duplicates.`;
-        window.gtss.showToast(
-          `Discovery complete: ${result.new || 0} new leads found`,
-          "success",
-        );
-        discoveryState.eventSource.close();
-        discoveryState.eventSource = null;
-        await loadResults();
-        await loadHistory();
-      }
-
-      if (event.type === "error") {
-        window.gtss.showToast(event.message || "Discovery failed", "error");
-        document.getElementById("running-panel").classList.remove("visible");
-        document.getElementById("discovery-form").style.display = "";
-      }
-    },
+    () => {},
   );
+
+  // Socket.IO listener for real-time events
+  const socket = window.gtss.getSocket();
+  if (!socket) return;
+
+  function onDiscoveryEvent(event) {
+    if (event.jobId && String(event.jobId) !== String(jobId)) return;
+    appendLog(event);
+
+    if (event.type === "captcha") {
+      appendLog({
+        type: "captcha",
+        message: event.message || "CAPTCHA detected, automation paused",
+      });
+    }
+
+    if (event.type === "done") {
+      const result = event.result || {};
+      document.getElementById("running-panel").classList.remove("visible");
+      document.getElementById("discovery-form").style.display = "";
+      document.getElementById("result-summary").classList.add("visible");
+      document.getElementById("result-summary-text").textContent =
+        `Discovery complete: ${result.new || 0} new leads, ${result.duplicates || 0} duplicates.`;
+      window.gtss.showToast(
+        `Discovery complete: ${result.new || 0} new leads found`,
+        "success",
+      );
+      cleanup();
+      loadResults();
+      loadHistory();
+    }
+
+    if (event.type === "error") {
+      window.gtss.showToast(event.message || "Discovery failed", "error");
+      document.getElementById("running-panel").classList.remove("visible");
+      document.getElementById("discovery-form").style.display = "";
+      cleanup();
+    }
+  }
+
+  function cleanup() {
+    socket.off('discovery:event', onDiscoveryEvent);
+    if (discoveryState.eventSource) {
+      discoveryState.eventSource.close();
+      discoveryState.eventSource = null;
+    }
+  }
+
+  socket.on('discovery:event', onDiscoveryEvent);
 }
 
 async function stopDiscovery() {

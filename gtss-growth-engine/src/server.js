@@ -12,6 +12,7 @@ const { sanitizeRequestBody } = require("./utils/validation");
 const { notFoundHandler, errorHandler } = require("./utils/errorHandlers");
 const { stopAllJobs } = require("./automation/executor");
 const { closeAllBrowsers } = require("./automation/browserBase");
+const { initSocketIO } = require("./services/socketService");
 const packageJson = require("../package.json");
 
 const app = express();
@@ -142,6 +143,10 @@ const server = app.listen(PORT, () => {
     "SERVER",
     `GTSS Growth Engine v${packageJson.version} started on http://localhost:${PORT}`,
   );
+
+  // Initialize Socket.IO on the HTTP server
+  initSocketIO(server);
+
   backgroundJobsProcess = startBackgroundJobsWorker();
 });
 

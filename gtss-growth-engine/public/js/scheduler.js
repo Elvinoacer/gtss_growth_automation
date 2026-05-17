@@ -1,5 +1,5 @@
 document.addEventListener("DOMContentLoaded", () => {
-  const { fetchJSON, showToast, initSSE } = window.gtss;
+  const { fetchJSON, showToast, getSocket } = window.gtss;
 
   // Platform char limits for posts
   const LIMITS = { x: 280, linkedin: 3000, facebook: 63206, instagram: 2200 };
@@ -416,8 +416,16 @@ document.addEventListener("DOMContentLoaded", () => {
     liveLogPanel.classList.remove("hidden");
     liveLogBody.innerHTML = "";
 
-    const sse = initSSE(`/api/scheduler/stream/${jobId}`, (data) => {
+    // Legacy SSE to trigger backend stream
+    const legacySSE = window.gtss.initSSE(`/api/scheduler/stream/${jobId}`, () => {});
+
+    const socket = getSocket();
+    if (!socket) return;
+
+    function onSchedulerEvent(data) {
       if (!data) return;
+      if (data.jobId && String(data.jobId) !== String(jobId)) return;
+
       const line = document.createElement("div");
       const icon =
         data.type === "published" ? "✓" : data.type === "error" ? "✗" : "›";
@@ -429,14 +437,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (data.type === "done" || data.type === "error") {
         showToast(data.message, data.type === "done" ? "success" : "error");
-        sse.close();
+        cleanup();
         setTimeout(() => {
           liveLogPanel.classList.add("hidden");
           loadCalendar();
           loadQueue();
         }, 3000);
       }
-    });
+    }
+
+    function cleanup() {
+      socket.off('scheduler:event', onSchedulerEvent);
+      if (legacySSE) legacySSE.close();
+    }
+
+    socket.on('scheduler:event', onSchedulerEvent);
   }
 
   // ── Event Binding ──

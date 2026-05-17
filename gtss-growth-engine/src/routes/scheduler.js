@@ -15,6 +15,7 @@ const {
   POST_CHAR_LIMITS,
 } = require("../services/schedulerService");
 const logger = require("../utils/logger");
+const { broadcast } = require("../services/socketService");
 
 const router = express.Router();
 
@@ -242,6 +243,7 @@ router.post("/api/scheduler/posts", async (req, res) => {
       const post = db
         .prepare("SELECT * FROM posts WHERE id = ?")
         .get(result.lastInsertRowid);
+      broadcast('scheduler:mutation', { type: 'post_scheduled', postId: post.id });
       res.json({ post });
     }
   } catch (error) {
@@ -383,6 +385,7 @@ router.patch("/api/scheduler/posts/:id", (req, res) => {
     } catch {
       /* keep */
     }
+    broadcast('scheduler:mutation', { type: 'post_updated', postId: Number(id) });
     res.json({ post: updated });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -395,6 +398,7 @@ router.delete("/api/scheduler/posts/:id", (req, res) => {
   try {
     const db = getDb();
     db.prepare("DELETE FROM posts WHERE id = ?").run(id);
+    broadcast('scheduler:mutation', { type: 'post_deleted', postId: Number(id) });
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

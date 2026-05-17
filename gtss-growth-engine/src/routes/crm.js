@@ -7,6 +7,7 @@ const { detectReplies } = require("../services/replyDetector");
 const { asyncHandler } = require("../utils/errorHandlers");
 const { isValidStatusTransition } = require("../utils/validation");
 const logger = require("../utils/logger");
+const { broadcast } = require("../services/socketService");
 
 const router = express.Router();
 const activeStreams = new Map();
@@ -76,6 +77,7 @@ router.patch(
     ).run(id, `Status changed to ${status}${notes ? ": " + notes : ""}`);
 
     res.json({ success: true, status });
+    broadcast('crm:mutation', { type: 'status_change', leadId: id, status });
   }),
 );
 
@@ -137,6 +139,7 @@ router.post(
     ).run(id, `Meeting scheduled for ${date}. Notes: ${notes}`);
 
     res.json({ success: true });
+    broadcast('crm:mutation', { type: 'meeting_booked', leadId: id });
   }),
 );
 
@@ -145,11 +148,13 @@ router.post("/api/crm/detect-replies", (req, res) => {
   res.json({ jobId });
   setTimeout(async () => {
     const sseRes = activeStreams.get(jobId);
-    if (!sseRes) return;
+    const { broadcast } = require("../services/socketService");
     const emit = (type, message) => {
-      sseRes.write(
-        `data: ${JSON.stringify({ type, message, timestamp: new Date().toISOString() })}\n\n`,
-      );
+      const payload = { type, message, timestamp: new Date().toISOString() };
+      broadcast('crm:event', payload);
+      if (sseRes) {
+        sseRes.write(`data: ${JSON.stringify(payload)}\n\n`);
+      }
     };
     let totalReplies = 0;
     try {
@@ -165,7 +170,7 @@ router.post("/api/crm/detect-replies", (req, res) => {
       emit("error", `Detection failed: ${err.message}`);
     } finally {
       activeStreams.delete(jobId);
-      sseRes.end();
+      if (sseRes) sseRes.end();
     }
   }, 1000);
 });

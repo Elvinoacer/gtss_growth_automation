@@ -5,7 +5,7 @@
 (function () {
   "use strict";
 
-  const { fetchJSON, showToast, initSSE } = window.gtss;
+  const { fetchJSON, showToast, getSocket } = window.gtss;
 
   // ---- State ----
   let currentFilter = "all";
@@ -15,7 +15,7 @@
   let totalLeads = 0;
   let selectedIds = new Set();
   let openDrawerLead = null;
-  let activeSSE = null;
+  let activeSocketHandler = null;
   let cachedLeads = [];
 
   // ---- DOM refs ----
@@ -269,8 +269,15 @@
     jobId,
     doneLabel = "Qualification complete!",
   ) {
-    activeSSE = initSSE(`/api/qualification/stream/${jobId}`, (event) => {
+    // Legacy SSE to trigger backend stream
+    const legacySSE = window.gtss.initSSE(`/api/qualification/stream/${jobId}`, () => {});
+
+    const socket = getSocket();
+    if (!socket) return;
+
+    function onQualEvent(event) {
       if (!event) return;
+      if (event.jobId && String(event.jobId) !== String(jobId)) return;
 
       if (event.type === "progress") {
         const pct =
@@ -294,11 +301,7 @@
           "success",
         );
 
-        if (activeSSE) {
-          activeSSE.close();
-          activeSSE = null;
-        }
-
+        cleanup();
         runAllBtn.disabled = false;
         loadStats();
         loadLeads();
@@ -311,7 +314,16 @@
       if (event.type === "error") {
         showToast(`Error: ${event.message}`, "error");
       }
-    });
+    }
+
+    function cleanup() {
+      socket.off('qualification:event', onQualEvent);
+      if (legacySSE) legacySSE.close();
+      activeSocketHandler = null;
+    }
+
+    activeSocketHandler = onQualEvent;
+    socket.on('qualification:event', onQualEvent);
   }
 
   // ----------------------------------------------------------------

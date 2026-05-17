@@ -5,7 +5,7 @@
 (function () {
   "use strict";
 
-  const { fetchJSON, showToast, initSSE } = window.gtss;
+  const { fetchJSON, showToast, getSocket } = window.gtss;
 
   // ---- State ----
   let currentFilter = "all";
@@ -15,7 +15,7 @@
   const pageLimit = 20;
   let totalMessages = 0;
   let cachedMessages = [];
-  let activeSSE = null;
+  let activeSocketCleanup = null;
   let charLimits = {};
   let platformCatalog = [];
   let platformLabels = {};
@@ -310,8 +310,15 @@
         return;
       }
 
-      activeSSE = initSSE(`/api/messages/stream/${jobId}`, (event) => {
+      // Legacy SSE to trigger backend stream
+      const legacySSE = window.gtss.initSSE(`/api/messages/stream/${jobId}`, () => {});
+
+      const socket = getSocket();
+      if (!socket) return;
+
+      function onMsgEvent(event) {
         if (!event) return;
+        if (event.jobId && String(event.jobId) !== String(jobId)) return;
 
         if (event.type === "progress") {
           const pct =
@@ -335,10 +342,7 @@
             "success",
           );
 
-          if (activeSSE) {
-            activeSSE.close();
-            activeSSE = null;
-          }
+          cleanup();
           generateAllBtn.disabled = false;
           loadStats();
           loadMessages();
@@ -351,7 +355,16 @@
         if (event.type === "error") {
           showToast(`Error: ${event.message}`, "error");
         }
-      });
+      }
+
+      function cleanup() {
+        socket.off('messages:event', onMsgEvent);
+        if (legacySSE) legacySSE.close();
+        activeSocketCleanup = null;
+      }
+
+      activeSocketCleanup = cleanup;
+      socket.on('messages:event', onMsgEvent);
     } catch (err) {
       showToast(err.message, "error");
       progressPanel.classList.remove("visible");

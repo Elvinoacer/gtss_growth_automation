@@ -37,6 +37,35 @@ document.addEventListener("DOMContentLoaded", () => {
   async function init() {
     bindEvents();
     await loadStats();
+    initSocketListeners();
+  }
+
+  let _refreshTimer = null;
+  function debouncedRefresh() {
+    if (_refreshTimer) return;
+    _refreshTimer = setTimeout(async () => {
+      _refreshTimer = null;
+      await loadStats();
+    }, 2000);
+  }
+
+  function initSocketListeners() {
+    const socket = window.gtss.getSocket();
+    if (!socket) return;
+
+    // Any module event triggers a dashboard refresh (debounced)
+    const events = [
+      'discovery:event',
+      'qualification:event',
+      'qualification:mutation',
+      'automation:log',
+      'messages:event',
+      'messages:mutation',
+      'scheduler:event',
+      'crm:event',
+      'crm:mutation',
+    ];
+    events.forEach(evt => socket.on(evt, debouncedRefresh));
   }
 
   async function loadStats() {

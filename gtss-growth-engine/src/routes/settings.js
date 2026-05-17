@@ -231,6 +231,53 @@ apiRouter.post("/templates/:platform/reset", (req, res) => {
   return res.json({ template: defaultTemplate });
 });
 
+// Apply the current active template to ALL existing messages in the system
+apiRouter.post("/templates/apply-all", (req, res) => {
+  const db = getDb();
+  const templates = getTemplates();
+
+  // Get all non-follow-up messages with FULL lead info for variable substitution
+  const messages = db.prepare(`
+    SELECT m.id, m.lead_id, m.platform, l.name, l.company, l.role, l.location, l.score_reason
+    FROM messages m
+    JOIN leads l ON l.id = m.lead_id
+    WHERE m.is_follow_up = 0 OR m.is_follow_up IS NULL
+  `).all();
+
+  if (messages.length === 0) {
+    return res.json({ success: true, updated: 0, message: "No messages to update" });
+  }
+
+  const updateStmt = db.prepare("UPDATE messages SET body = ?, generated_by = 'template' WHERE id = ?");
+
+  let updated = 0;
+  const txn = db.transaction(() => {
+    for (const msg of messages) {
+      const platform = msg.platform || "linkedin";
+      const messageType = platform === "linkedin" ? "connect" : "dm";
+      const templateKey = `${platform}_${messageType}`;
+      const template = templates[templateKey] || templates[`${platform}_dm`] || "";
+
+      if (!template) continue;
+
+      // Substitute ALL template variables
+      const body = template
+        .replace(/\{\{lead_name\}\}/g, msg.name || "there")
+        .replace(/\{\{company\}\}/g, msg.company || "your business")
+        .replace(/\{\{role\}\}/g, msg.role || "")
+        .replace(/\{\{location\}\}/g, msg.location || "Kenya")
+        .replace(/\{\{product\}\}/g, "Restaurant Manager")
+        .replace(/\{\{pain_point\}\}/g, "operational efficiency");
+
+      updateStmt.run(body, msg.id);
+      updated++;
+    }
+  });
+
+  txn();
+  return res.json({ success: true, updated, total: messages.length });
+});
+
 apiRouter.post("/clear-data", (req, res) => {
   if (req.body.confirmation !== "DELETE") {
     return res.status(400).json({ error: "Type DELETE to confirm" });

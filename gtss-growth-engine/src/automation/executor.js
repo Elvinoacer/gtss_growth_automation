@@ -16,6 +16,7 @@ const { isSessionValid } = require("./sessionManager");
 const { startJob, updateJobStatus, recordEvent } = require("./journal");
 const { reserveAction, releaseActionFingerprint } = require("./idempotency");
 const logger = require("../utils/logger");
+const { broadcast } = require("../services/socketService");
 
 const STOP_FLAGS = new Map();
 let ACTIVE_JOB_ID = null;
@@ -24,14 +25,25 @@ const MAX_AUTO_RETRIES = 3;
 
 function createEmitter(sseRes) {
   return (type, message, data = {}) => {
-    if (!sseRes) return;
-    const payload = JSON.stringify({
+    const payload = {
       type,
       message,
       timestamp: new Date().toISOString(),
       ...data,
-    });
-    sseRes.write(`data: ${payload}\n\n`);
+    };
+
+    // Broadcast via Socket.IO to all connected clients
+    broadcast('automation:log', payload);
+
+    // Also broadcast queue/limits refresh signals on state changes
+    if (['state', 'done', 'error', 'info'].includes(type)) {
+      broadcast('automation:refresh', { type });
+    }
+
+    // Legacy SSE stream
+    if (sseRes) {
+      sseRes.write(`data: ${JSON.stringify(payload)}\n\n`);
+    }
   };
 }
 
@@ -452,6 +464,8 @@ async function closeBrowserState(browserState, platform) {
     mode: browserState.mode,
     tracePath: browserState.tracePath,
     shouldCloseBrowser: browserState.shouldCloseBrowser,
+    shouldClosePageOnly: browserState.shouldClosePageOnly,
+    page: browserState.page,
     lock: browserState.lock,
   });
 }
@@ -601,6 +615,30 @@ async function processActionQueue(jobId, sseRes) {
     let failures = 0;
     let skipped = 0;
 
+    // Cache one browser/tab per platform — reuse across all actions in this run
+    const browserCache = new Map();
+
+    async function getOrCreateBrowser(plat, emitFn, evtBase, fp) {
+      if (browserCache.has(plat)) {
+        const cached = browserCache.get(plat);
+        if (cached.page && !cached.page.isClosed()) return { browserState: cached };
+        browserCache.delete(plat);
+      }
+      emitState(emitFn, jobId, "STARTING_BROWSER", `Starting browser for ${plat}.`, { ...evtBase, fingerprint: fp });
+      emitState(emitFn, jobId, "AUTH_CHECK", `Checking ${plat} session.`, { ...evtBase, fingerprint: fp });
+      const validated = await createValidatedBrowser(plat, emitFn);
+      if (validated.browserState) browserCache.set(plat, validated.browserState);
+      return validated;
+    }
+
+    async function closeAllCachedBrowsers() {
+      for (const [plat, state] of browserCache) {
+        try { await closeBrowserState(state, plat); }
+        catch (e) { logger.warn("AUTOMATION", `Failed to close browser for ${plat}`, { error: e.message }); }
+      }
+      browserCache.clear();
+    }
+
     for (const action of runnableQueue) {
       if (STOP_FLAGS.get(jobId)) {
         emit("warn", "Automation stopped by user.");
@@ -698,21 +736,9 @@ async function processActionQueue(jobId, sseRes) {
         continue;
       }
 
-      let browserState = null;
       try {
-        emitState(
-          emit,
-          jobId,
-          "STARTING_BROWSER",
-          `Starting browser for ${platform}.`,
-          { ...eventBase, fingerprint: reservation.fingerprint },
-        );
-        emitState(emit, jobId, "AUTH_CHECK", `Checking ${platform} session.`, {
-          ...eventBase,
-          fingerprint: reservation.fingerprint,
-        });
-        const validated = await createValidatedBrowser(platform, emit);
-        browserState = validated.browserState;
+        const validated = await getOrCreateBrowser(platform, emit, eventBase, reservation.fingerprint);
+        const browserState = validated.browserState;
 
         if (!browserState) {
           const authState = validated.authState || {
@@ -836,9 +862,10 @@ async function processActionQueue(jobId, sseRes) {
       } catch (err) {
         logger.error("AUTOMATION", `Error on action ${action.message_id}`, err);
         emit("error", `Unexpected error: ${err.message}`);
-        if (browserState && browserState.page) {
+        const cached = browserCache.get(platform);
+        if (cached && cached.page && !cached.page.isClosed()) {
           await captureFailureArtifact(
-            browserState.page,
+            cached.page,
             platform,
             `${actionType}-${action.message_id}-exception`,
           );
@@ -853,8 +880,6 @@ async function processActionQueue(jobId, sseRes) {
           reason: err.message,
         });
         failures++;
-      } finally {
-        await closeBrowserState(browserState, platform);
       }
 
       if (
@@ -874,6 +899,9 @@ async function processActionQueue(jobId, sseRes) {
         await humanDelay(delay.min, delay.max);
       }
     }
+
+    // Close all browsers only after the ENTIRE run is done
+    await closeAllCachedBrowsers();
 
     const remainingQueue = getQueuedActions({
       includeBlocked: true,

@@ -22,6 +22,7 @@ const {
 } = require("../pipeline/pipelineRunner");
 
 const router = express.Router();
+const { broadcast } = require("../services/socketService");
 
 // SSE response storage
 const activeStreams = new Map();
@@ -213,6 +214,7 @@ router.patch("/api/automation/queue/:messageId/skip", (req, res) => {
     db.prepare(`UPDATE messages SET status = 'skipped' WHERE id = ?`).run(
       req.params.messageId,
     );
+    broadcast('automation:queue', { action: 'skip', messageId: req.params.messageId });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -270,6 +272,7 @@ router.patch("/api/automation/queue/:messageId/retry", (req, res) => {
       .run(req.params.messageId);
 
     res.json({ success: true });
+    broadcast('automation:queue', { action: 'retry', messageId: req.params.messageId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -345,6 +348,7 @@ router.post("/api/automation/queue/retry-all", (req, res) => {
     });
 
     const updated = transaction(rows);
+    broadcast('automation:queue', { action: 'retry-all', updated });
     res.json({ success: true, updated });
   } catch (err) {
     res.status(500).json({ error: err.message });

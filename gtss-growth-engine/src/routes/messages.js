@@ -10,6 +10,7 @@ const {
   closeJobStream,
   CHAR_LIMITS,
 } = require("../services/messageService");
+const { broadcast } = require("../services/socketService");
 
 const router = express.Router();
 
@@ -288,6 +289,7 @@ router.patch("/api/messages/:id/approve", (req, res) => {
      WHERE lead_id = ? AND id != ? AND status = 'pending' AND is_follow_up = ?`,
   ).run(msg.lead_id, id, msg.is_follow_up);
 
+  broadcast('messages:mutation', { type: 'approved', messageId: id, leadId: msg.lead_id });
   return res.json({ success: true, id });
 });
 
@@ -315,6 +317,7 @@ router.patch("/api/messages/:id/skip", (req, res) => {
     "UPDATE leads SET status = 'deprioritized', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
   ).run(msg.lead_id);
 
+  broadcast('messages:mutation', { type: 'skipped', messageId: id, leadId: msg.lead_id });
   return res.json({ success: true, id });
 });
 

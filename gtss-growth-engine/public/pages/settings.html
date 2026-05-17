@@ -213,7 +213,9 @@
           <div class="form-row">
             <button id="save-template" class="primary-button" type="button">Save Template</button>
             <button id="reset-template" class="secondary-button" type="button">Reset to Default</button>
+            <button id="apply-template-all" class="secondary-button" type="button" style="background: var(--gtss-success, #22c55e); color: #fff; border-color: var(--gtss-success, #22c55e);">⟳ Apply to All Messages</button>
           </div>
+          <span id="template-apply-result" class="inline-result"></span>
         </section>
 
         <section class="settings-section gtss-card">
@@ -251,6 +253,7 @@
       </div>
     </div>
 
+    <script src="/socket.io/socket.io.js"></script>
     <script src="/js/app.js"></script>
     <script src="/js/settings.js"></script>
   </body>

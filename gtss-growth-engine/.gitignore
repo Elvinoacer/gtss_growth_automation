@@ -44,3 +44,6 @@ test-results/
 playwright-report/
 blob-report/
 playwright/.cache/
+
+# Chrome CDP automation profile
+chrome-cdp-profile/
