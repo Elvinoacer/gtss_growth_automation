@@ -133,6 +133,7 @@ app.use("/", require("./routes/crm"));
 app.use("/", require("./routes/scheduler"));
 app.use("/", require("./routes/home"));
 app.use("/settings", require("./routes/settings")); // This is the pageRouter
+app.use("/", require("./routes/instagram"));
 
 // Global Error Handlers
 app.use(notFoundHandler);

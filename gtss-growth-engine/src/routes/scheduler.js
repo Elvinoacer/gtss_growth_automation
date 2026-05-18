@@ -97,18 +97,7 @@ function parseLocalDateString(value) {
   return date;
 }
 
-function normalizeMediaPath(mediaPath) {
-  if (mediaPath == null || mediaPath === "") {
-    return null;
-  }
-
-  if (typeof mediaPath !== "string") {
-    throw new Error("mediaPath must be a string when provided");
-  }
-
-  const trimmed = mediaPath.trim();
-  if (!trimmed) return null;
-
+function normalizeSingleMediaPath(trimmed) {
   const candidates = [];
 
   if (path.isAbsolute(trimmed)) {
@@ -139,6 +128,33 @@ function normalizeMediaPath(mediaPath) {
   return resolved;
 }
 
+function normalizeMediaPath(mediaPath) {
+  if (mediaPath == null || mediaPath === "") {
+    return null;
+  }
+
+  if (typeof mediaPath !== "string") {
+    throw new Error("mediaPath must be a string when provided");
+  }
+
+  const trimmed = mediaPath.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        const resolved = parsed.map(p => normalizeSingleMediaPath(p.trim()));
+        return JSON.stringify(resolved);
+      }
+    } catch (e) {
+      // Fallback to single path
+    }
+  }
+
+  return normalizeSingleMediaPath(trimmed);
+}
+
 // ---------------------------------------------------------------------------
 // Page Route
 // ---------------------------------------------------------------------------
@@ -158,13 +174,27 @@ router.get("/scheduler", (req, res) => {
 
 // Create post
 router.post("/api/scheduler/posts", async (req, res) => {
-  const { platforms, body, mediaPath, scheduledAt, publishNow } = req.body;
+  const { platforms, body, mediaPath, scheduledAt, publishNow, ig_post_type } = req.body;
 
   if (!platforms || !Array.isArray(platforms) || platforms.length === 0) {
     return res.status(400).json({ error: "At least one platform is required" });
   }
   if (!body || !body.trim()) {
     return res.status(400).json({ error: "Post body is required" });
+  }
+
+  const hasInstagram = platforms.includes("instagram");
+  const hasMedia = mediaPath && String(mediaPath).trim() !== "";
+
+  if (hasMedia && !hasInstagram) {
+    return res.status(400).json({
+      error: "Media attachments are only allowed when Instagram is selected as a target platform.",
+    });
+  }
+  if (hasInstagram && !hasMedia) {
+    return res.status(400).json({
+      error: "Instagram posts require a media attachment (image or video).",
+    });
   }
 
   // Validate body length per platform
@@ -187,11 +217,11 @@ router.post("/api/scheduler/posts", async (req, res) => {
       const result = db
         .prepare(
           `
-        INSERT INTO posts (platforms, body, media_path, scheduled_at, status)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'draft')
+        INSERT INTO posts (platforms, body, media_path, scheduled_at, status, ig_post_type)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'draft', ?)
       `,
         )
-        .run(JSON.stringify(platforms), body, normalizedMediaPath);
+        .run(JSON.stringify(platforms), body, normalizedMediaPath, ig_post_type || 'feed');
 
       const postId = result.lastInsertRowid;
       const jobId = crypto.randomUUID();
@@ -229,8 +259,8 @@ router.post("/api/scheduler/posts", async (req, res) => {
       const result = db
         .prepare(
           `
-        INSERT INTO posts (platforms, body, media_path, scheduled_at, status)
-        VALUES (?, ?, ?, ?, 'scheduled')
+        INSERT INTO posts (platforms, body, media_path, scheduled_at, status, ig_post_type)
+        VALUES (?, ?, ?, ?, 'scheduled', ?)
       `,
         )
         .run(
@@ -238,6 +268,7 @@ router.post("/api/scheduler/posts", async (req, res) => {
           body,
           normalizedMediaPath,
           normalizedScheduledAt,
+          ig_post_type || 'feed',
         );
 
       const post = db
@@ -335,12 +366,43 @@ router.get("/api/scheduler/posts", (req, res) => {
 // Update post
 router.patch("/api/scheduler/posts/:id", (req, res) => {
   const { id } = req.params;
-  const { platforms, body, mediaPath, scheduledAt } = req.body;
+  const { platforms, body, mediaPath, scheduledAt, ig_post_type } = req.body;
 
   try {
     const db = getDb();
     const existing = db.prepare("SELECT * FROM posts WHERE id = ?").get(id);
     if (!existing) return res.status(404).json({ error: "Post not found" });
+
+    // Validate Instagram and media constraints
+    let finalPlatforms = existing.platforms;
+    if (platforms) {
+      finalPlatforms = JSON.stringify(platforms);
+    }
+    let parsedPlatforms = [];
+    try {
+      parsedPlatforms = JSON.parse(finalPlatforms);
+    } catch {
+      parsedPlatforms = [];
+    }
+
+    let finalMedia = existing.media_path;
+    if (mediaPath !== undefined) {
+      finalMedia = mediaPath;
+    }
+
+    const hasInstagram = parsedPlatforms.includes("instagram");
+    const hasMedia = finalMedia && String(finalMedia).trim() !== "";
+
+    if (hasMedia && !hasInstagram) {
+      return res.status(400).json({
+        error: "Media attachments are only allowed when Instagram is selected as a target platform.",
+      });
+    }
+    if (hasInstagram && !hasMedia) {
+      return res.status(400).json({
+        error: "Instagram posts require a media attachment (image or video).",
+      });
+    }
 
     const updates = [];
     const params = [];
@@ -370,6 +432,10 @@ router.patch("/api/scheduler/posts/:id", (req, res) => {
     if (scheduledAt) {
       updates.push("scheduled_at = ?");
       params.push(normalizeScheduledAt(scheduledAt));
+    }
+    if (ig_post_type !== undefined) {
+      updates.push("ig_post_type = ?");
+      params.push(ig_post_type);
     }
 
     if (updates.length === 0) return res.json({ success: true });

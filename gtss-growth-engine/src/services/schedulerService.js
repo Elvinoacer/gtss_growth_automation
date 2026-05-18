@@ -868,12 +868,23 @@ async function publishPost(postId, emit, browserOptions = {}) {
           );
           break;
         case "instagram":
-          success = await postToInstagram(
-            page,
-            post.body,
-            post.media_path,
-            emit,
-          );
+          {
+            const instagram = require("../automation/instagram");
+            if (post.ig_post_type === "story") {
+              const res = await instagram.postStory(page, { imagePath: post.media_path }, emit);
+              success = res.success;
+            } else if (post.ig_post_type === "carousel") {
+              const res = await instagram.postCarousel(page, { imagePaths: post.media_paths }, emit);
+              success = res.success;
+            } else {
+              const res = await instagram.postImage(
+                page,
+                { imagePath: post.media_path, caption: post.body, locationTag: post.location_tag },
+                emit
+              );
+              success = res.success;
+            }
+          }
           break;
         default:
           emit({

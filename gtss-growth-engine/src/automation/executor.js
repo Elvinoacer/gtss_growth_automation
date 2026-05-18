@@ -2,6 +2,7 @@ const {
   getDb,
   isWithinLimit: dbIsWithinLimit,
   normalizeActionType,
+  increment_action_count,
 } = require("../db/database");
 const {
   createBrowser,
@@ -93,7 +94,7 @@ function getQueuedActions(options = {}) {
     .prepare(
       `
     SELECT m.id AS message_id, m.platform, m.body, m.variant, m.is_follow_up, m.lead_id,
-           m.status, m.snooze_until, m.retry_count, m.last_error, m.blocked_reason, m.fail_category,
+           m.status, m.snooze_until, m.retry_count, m.last_error, m.blocked_reason, m.fail_category, m.action_type,
            CASE
              WHEN m.status = 'approved' AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now')) THEN 1
              ELSE 0
@@ -118,7 +119,7 @@ function getQueuedActions(options = {}) {
     .all()
     .map((action) => ({
       ...action,
-      action_type: determineActionType(action),
+      action_type: action.action_type || determineActionType(action),
       runnable: Boolean(action.runnable),
     }));
 }
@@ -226,7 +227,68 @@ function determineActionType(message) {
 
 async function runAutomationAction(action, browserState, emit) {
   const { platform } = action;
-  const actionType = determineActionType(action);
+  const actionType = action.action_type || determineActionType(action);
+
+  // Handle specific Instagram actions directly via switch routing
+  if (platform === "instagram") {
+    const instagram = require("./instagram");
+    const instagramWarmup = require("./instagramWarmup");
+    const { page } = browserState;
+    const limits = require("../config/limits");
+
+    const normalized = normalizeActionType(actionType);
+    const hasLimit = (limits.instagram && typeof limits.instagram[normalized] === "number");
+    if (hasLimit && !isWithinLimit("instagram", actionType)) {
+      emit("warn", `Instagram action ${actionType} limit reached. Skipping.`);
+      return {
+        outcome: "skipped",
+        reason: `Daily limit reached for instagram ${actionType}`,
+      };
+    }
+
+    // Extract username from profile_url
+    const username = action.profile_url ? action.profile_url.replace(/\/$/, '').split('/').pop() : '';
+
+    switch (actionType) {
+      case 'instagram_dm': {
+        const result = await instagram.sendDM(page, { username, message: action.body }, emit);
+        return {
+          outcome: result.success ? "sent" : "failed",
+          reason: result.error || null,
+          isMessageRequest: result.isMessageRequest
+        };
+      }
+      case 'instagram_follow': {
+        const result = await instagram.followAccount(page, { username }, emit);
+        return {
+          outcome: result.success ? "sent" : "failed",
+          reason: result.error || null
+        };
+      }
+      case 'instagram_like': {
+        const result = await instagram.likeRecentPost(page, { username }, emit);
+        return {
+          outcome: result.success ? "sent" : "failed",
+          reason: result.error || null
+        };
+      }
+      case 'instagram_story_view': {
+        const result = await instagram.viewStory(page, { username }, emit);
+        return {
+          outcome: result.success ? "sent" : "failed",
+          reason: result.error || null
+        };
+      }
+      case 'instagram_warmup_advance': {
+        const result = await instagramWarmup.advanceWarmupStep(page, { leadId: action.lead_id }, emit);
+        return {
+          outcome: result.success ? "sent" : "failed",
+          reason: result.error || null
+        };
+      }
+    }
+  }
+
   let automationModule;
 
   try {
@@ -289,12 +351,7 @@ function recordOutcome(action, actionType, outcomeObj) {
     reason: String(reason || "").slice(0, 200),
   });
 
-  db.prepare(
-    `
-    INSERT INTO daily_actions (platform, action_type, lead_id, outcome)
-    VALUES (?, ?, ?, ?)
-  `,
-  ).run(action.platform, normalizedActionType, action.lead_id, outcome);
+  increment_action_count(action.platform, normalizedActionType, action.lead_id, outcome);
 
   db.prepare(
     `

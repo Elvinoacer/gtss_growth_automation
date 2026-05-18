@@ -196,6 +196,51 @@ function initScheduledPoster() {
   );
 }
 
+async function postToInstagram(post, browser, emitter) {
+  const db = getDb();
+  const loadedPost = db.prepare("SELECT * FROM posts WHERE id = ?").get(post.id) || post;
+  const igPostType = loadedPost.ig_post_type || "feed";
+
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  let result = { success: false };
+  try {
+    const instagram = require("../automation/instagram");
+    switch (igPostType) {
+      case "story":
+        result = await instagram.postStory(page, { imagePath: loadedPost.media_path }, emitter);
+        break;
+      case "carousel":
+        result = await instagram.postCarousel(page, { imagePaths: loadedPost.media_paths }, emitter);
+        break;
+      case "feed":
+      default:
+        result = await instagram.postImage(
+          page,
+          { imagePath: loadedPost.media_path, caption: loadedPost.body, locationTag: loadedPost.location_tag },
+          emitter
+        );
+        break;
+    }
+  } finally {
+    await page.close();
+    await context.close();
+  }
+  return result;
+}
+
+async function postToPlatform(platform, post, browser, emitter) {
+  switch (platform) {
+    case "instagram":
+      return await postToInstagram(post, browser, emitter);
+    default:
+      return { success: false, error: `Unsupported platform: ${platform}` };
+  }
+}
+
 module.exports = {
   initScheduledPoster,
+  postToInstagram,
+  postToPlatform
 };

@@ -102,6 +102,32 @@ async function loadSettings() {
     settingsState.settings.gmail_app_password || "";
   applyNotifications(settingsState.settings.notification_settings || {});
   renderLimits(settingsState.settings.limits || {});
+
+  // Populate Instagram Settings
+  const igKeys = [
+    "warmup_min_follow_to_story_hours",
+    "warmup_max_follow_to_story_hours",
+    "warmup_min_story_to_like_hours",
+    "warmup_max_story_to_like_hours",
+    "warmup_min_like_to_dm_hours",
+    "warmup_max_like_to_dm_hours",
+    "fast_warmup_enabled",
+    "auto_warmup_on_qualify",
+    "unfollow_after_days",
+    "unfollow_pending_after_days",
+    "max_following_ratio",
+    "discovery_max_per_hashtag",
+    "discovery_min_followers",
+    "discovery_max_followers",
+    "ig_selector_version",
+    "ig_blocked_until"
+  ];
+  igKeys.forEach(key => {
+    const el = document.getElementById(key);
+    if (el) {
+      el.value = settingsState.settings[key] !== undefined && settingsState.settings[key] !== null ? settingsState.settings[key] : "";
+    }
+  });
   renderTemplateTabs();
   renderTemplateEditor();
 }
@@ -212,7 +238,16 @@ function renderTemplateEditor() {
   const editor = document.getElementById("template-editor");
   editor.value = settingsState.templates[settingsState.activeTemplate] || "";
   updateCharCount();
-  document.getElementById("variable-badges").innerHTML = variables
+  
+  let currentVariables = variables;
+  if (settingsState.activeTemplate === "instagram_dm") {
+    editor.setAttribute("maxlength", "1000");
+    currentVariables = ["{{lead_name}}", "{{business_name}}", "{{product_name}}"];
+  } else {
+    editor.removeAttribute("maxlength");
+  }
+
+  document.getElementById("variable-badges").innerHTML = currentVariables
     .map(
       (variable) =>
         `<button class="variable-badge" data-variable="${variable}" type="button">${variable}</button>`,
@@ -221,8 +256,10 @@ function renderTemplateEditor() {
 }
 
 function updateCharCount() {
+  const editor = document.getElementById("template-editor");
+  const max = settingsState.activeTemplate === "instagram_dm" ? " / 1000" : "";
   document.getElementById("char-count").textContent =
-    `${document.getElementById("template-editor").value.length} chars`;
+    `${editor.value.length}${max} chars`;
 }
 
 function insertAtCursor(textarea, text) {
@@ -278,6 +315,7 @@ function bindEvents() {
   document.querySelectorAll(".notification-checkbox").forEach((checkbox) => {
     checkbox.addEventListener("change", saveNotifications);
   });
+  document.getElementById("save-instagram-settings").addEventListener("click", saveInstagramSettings);
   document.addEventListener("click", async (event) => {
     const templateButton = event.target.closest("[data-template-key]");
     const variableButton = event.target.closest("[data-variable]");
@@ -364,6 +402,63 @@ async function saveNotifications() {
     body: JSON.stringify(collectNotifications()),
   });
   window.gtss.showToast("Notification setting saved", "success");
+}
+
+async function saveInstagramSettings() {
+  const btn = document.getElementById("save-instagram-settings");
+  btn.disabled = true;
+  btn.innerText = "Saving...";
+  try {
+    const igKeys = [
+      "warmup_min_follow_to_story_hours",
+      "warmup_max_follow_to_story_hours",
+      "warmup_min_story_to_like_hours",
+      "warmup_max_story_to_like_hours",
+      "warmup_min_like_to_dm_hours",
+      "warmup_max_like_to_dm_hours",
+      "fast_warmup_enabled",
+      "auto_warmup_on_qualify",
+      "unfollow_after_days",
+      "unfollow_pending_after_days",
+      "max_following_ratio",
+      "discovery_max_per_hashtag",
+      "discovery_min_followers",
+      "discovery_max_followers",
+      "ig_selector_version",
+      "ig_blocked_until"
+    ];
+    const formData = {};
+    igKeys.forEach(key => {
+      const el = document.getElementById(key);
+      if (el) {
+        if (key === "ig_selector_version" || key === "ig_blocked_until") {
+          formData[key] = el.value.trim() || null;
+        } else {
+          formData[key] = Number(el.value);
+        }
+      }
+    });
+
+    const res = await window.gtss.fetchJSON("/api/settings/instagram", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(formData)
+    });
+
+    if (res.success) {
+      window.gtss.showToast("Instagram settings saved successfully!", "success");
+      setInline("instagram-settings-result", "✓ Settings saved", "success");
+    } else {
+      window.gtss.showToast(res.error || "Failed to save settings.", "error");
+      setInline("instagram-settings-result", `✗ ${res.error}`, "error");
+    }
+  } catch (err) {
+    window.gtss.showToast("Network error: " + err.message, "error");
+    setInline("instagram-settings-result", `✗ ${err.message}`, "error");
+  } finally {
+    btn.disabled = false;
+    btn.innerText = "Save Instagram Settings";
+  }
 }
 
 async function saveTemplate() {

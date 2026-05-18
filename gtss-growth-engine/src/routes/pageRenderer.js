@@ -8,7 +8,8 @@ const fileMap = {
   Automation: 'automation.html',
   CRM: 'crm.html',
   Scheduler: 'content-scheduler.html',
-  Settings: 'settings.html'
+  Settings: 'settings.html',
+  InstagramWarmup: 'instagram-warmup.html'
 };
 
 function renderPage(res, page) {

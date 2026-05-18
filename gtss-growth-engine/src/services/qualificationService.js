@@ -126,6 +126,13 @@ async function scoreLead(lead) {
        WHERE id = ?`,
     ).run(score, reason, status, lead.id);
 
+    if (status === "qualified" && (lead.platform === "instagram" || (lead.profile_url && lead.profile_url.includes("instagram.com")))) {
+      const { crawlAndQueueSuggestedAccounts } = require("./instagramDiscoveryService");
+      crawlAndQueueSuggestedAccounts(lead.id).catch(err => {
+        logger.error("IG_DISCOVERY", `Failed to crawl suggested accounts for lead ${lead.id}: ${err.message}`);
+      });
+    }
+
     return { score, reason, factors: result.factors || {} };
   } catch (error) {
     logger.error("QUALIFICATION", `Error scoring lead ${lead.id}`, error);
@@ -145,6 +152,13 @@ async function scoreLead(lead) {
          SET lead_score = ?, score_reason = ?, status = ?, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
       ).run(fallbackScore, fallbackReason, fallbackStatus, lead.id);
+
+      if (fallbackStatus === "qualified" && (lead.platform === "instagram" || (lead.profile_url && lead.profile_url.includes("instagram.com")))) {
+        const { crawlAndQueueSuggestedAccounts } = require("./instagramDiscoveryService");
+        crawlAndQueueSuggestedAccounts(lead.id).catch(err => {
+          logger.error("IG_DISCOVERY", `Failed to crawl suggested accounts for lead ${lead.id}: ${err.message}`);
+        });
+      }
 
       return { score: fallbackScore, reason: fallbackReason, factors: {} };
     }
@@ -272,6 +286,16 @@ async function runQualificationStage(jobId, emit) {
        SET lead_score = ?, score_reason = ?, status = 'qualified', updated_at = CURRENT_TIMESTAMP
        WHERE id IN (${pending.map(() => '?').join(',')})`
     ).run(score, reason, ...pending);
+
+    for (const leadId of pending) {
+      const lead = db.prepare("SELECT * FROM leads WHERE id = ?").get(leadId);
+      if (lead && (lead.platform === "instagram" || (lead.profile_url && lead.profile_url.includes("instagram.com")))) {
+        const { crawlAndQueueSuggestedAccounts } = require("./instagramDiscoveryService");
+        crawlAndQueueSuggestedAccounts(lead.id).catch(err => {
+          logger.error("IG_DISCOVERY", `Failed to crawl suggested accounts for lead ${lead.id}: ${err.message}`);
+        });
+      }
+    }
 
     emit({
       type: 'complete',

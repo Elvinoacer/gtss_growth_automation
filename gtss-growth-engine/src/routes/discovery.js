@@ -41,8 +41,14 @@ router.post('/config', (req, res) => {
 });
 
 router.post('/start', (req, res) => {
-  const { keyword, platforms, maxLeads } = req.body;
+  const { keyword, platforms, maxLeads, ig_auto_warmup } = req.body;
   const selectedPlatforms = Array.isArray(platforms) ? platforms : [];
+
+  if (ig_auto_warmup !== undefined) {
+    const db = getDb();
+    const val = ig_auto_warmup ? '1' : '0';
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('auto_warmup_on_qualify', ?)").run(val);
+  }
   const parsedMaxLeads = Number(maxLeads);
   const validPlatforms = listDiscoverySources();
 

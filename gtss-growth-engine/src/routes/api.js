@@ -10,6 +10,7 @@ const {
   getPlatformCatalog,
   getPlatformKeys,
 } = require("../services/platformCatalog");
+const igFollowTracker = require("../services/igFollowTracker");
 
 const router = express.Router();
 
@@ -154,6 +155,22 @@ router.get(
 
     res.json({ used, limit, byPlatform });
   }),
+);
+
+router.get(
+  "/stats/instagram-follow-health",
+  asyncHandler(async (req, res) => {
+    const totalFollowing = igFollowTracker.getFollowingCount();
+    const { followedBack, rate } = igFollowTracker.getFollowBackRate();
+    const eligible = igFollowTracker.getUnfollowEligible();
+
+    res.json({
+      totalFollowing,
+      totalFollowBacks: followedBack,
+      followBackRate: rate,
+      eligibleForUnfollow: eligible.length
+    });
+  })
 );
 
 module.exports = router;

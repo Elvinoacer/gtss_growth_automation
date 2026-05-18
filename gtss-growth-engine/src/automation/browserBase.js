@@ -9,6 +9,7 @@ const {
 const logger = require("../utils/logger");
 const { markSessionInvalid } = require("./sessionManager");
 const { sendNotification } = require("../services/notificationService");
+const { getDb } = require("../db/database");
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -101,8 +102,33 @@ const X_RATE_LIMIT_PHRASES = [
  * Wait for a random duration between min and max milliseconds to simulate human behavior.
  */
 function humanDelay(min = 3000, max = 15000) {
+  if (process.env.TEST_SPEEDUP === "true") {
+    return Promise.resolve();
+  }
   const ms = Math.floor(Math.random() * (max - min + 1)) + min;
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Type a string character by character with human-like delays into a locator or selector.
+ */
+async function humanTypeText(page, locatorOrSelector, text) {
+  if (!text) return;
+  const target =
+    typeof locatorOrSelector === "string"
+      ? page.locator(locatorOrSelector)
+      : locatorOrSelector;
+  await target.click();
+  // Clear any existing text using keyboard select all if needed
+  await page.keyboard.press("Control+A").catch(() => {});
+  await page.keyboard.press("Backspace").catch(() => {});
+  
+  for (let i = 0; i < text.length; i++) {
+    await page.keyboard.type(text[i]);
+    if (process.env.TEST_SPEEDUP !== "true") {
+      await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 100) + 50));
+    }
+  }
 }
 
 function envKey(platform, suffix) {
@@ -927,6 +953,12 @@ async function closeBrowser(browser, platform, context, options = {}) {
         await browser.close();
       }
       logger.info("BROWSER", `Closed browser for ${platform}`);
+      if (platform === "instagram") {
+        const report = getSelectorHealthReport();
+        for (const warnMsg of report.warnings) {
+          logger.warn("INSTAGRAM_SELECTOR_HEALTH", warnMsg);
+        }
+      }
     }
   } finally {
     INVALIDATED_PLATFORMS.delete(platform);
@@ -954,10 +986,397 @@ async function closeAllBrowsers() {
   );
 }
 
+// ── Instagram Constants ──────────────────────────────────────────────────────
+const INSTAGRAM_AUTH_SELECTORS = [
+  'a[href="/"]',
+  'a[href*="/direct/inbox/"]',
+  'svg[aria-label="Home"]',
+  'svg[aria-label="New post"]'
+];
+
+const INSTAGRAM_LOGIN_SELECTORS = [
+  'input[name="username"]',
+  'input[name="password"]',
+  'button[type="submit"]',
+  'form#loginForm'
+];
+
+const INSTAGRAM_CAPTCHA_SELECTORS = [
+  'iframe[title*="recaptcha" i]',
+  '#recaptcha',
+  'iframe[src*="recaptcha" i]',
+  '.checkpoint-content'
+];
+
+const INSTAGRAM_BLOCK_PHRASES = [
+  "action blocked",
+  "try again later",
+  "we limit how often you can",
+  "temporarily blocked",
+  "restrict"
+];
+
+// ── Instagram Helper Functions ───────────────────────────────────────────────
+
+const igSelectorFailures = {};
+
+/**
+ * Resilient selector fallback helper.
+ */
+async function firstVisible(page, selectors, timeout = 1500) {
+  const result = await firstVisibleLocator(page, selectors, timeout);
+  if (!result) {
+    const primary = Array.isArray(selectors) ? selectors[0] : selectors;
+    if (primary) {
+      igSelectorFailures[primary] = (igSelectorFailures[primary] || 0) + 1;
+    }
+  }
+  return result;
+}
+
+function getSelectorHealthReport() {
+  const warnings = [];
+  for (const [selector, count] of Object.entries(igSelectorFailures)) {
+    if (count > 3) {
+      warnings.push(`[SELECTOR WARNING] Selector "${selector}" has failed ${count} times in this session.`);
+    }
+  }
+  return {
+    failures: igSelectorFailures,
+    warnings
+  };
+}
+
+function setInstagramBlockedUntil(hours = 24) {
+  const db = getDb();
+  const resumesAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('ig_blocked_until', ?)")
+    .run(resumesAt);
+  return resumesAt;
+}
+
+function isInstagramBlocked() {
+  const db = getDb();
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'ig_blocked_until'").get();
+  if (!row || !row.value) {
+    return { blocked: false, resumesAt: null };
+  }
+  const resumesAt = new Date(row.value);
+  if (isNaN(resumesAt.getTime()) || resumesAt <= new Date()) {
+    return { blocked: false, resumesAt: null };
+  }
+  return { blocked: true, resumesAt: row.value };
+}
+
+/**
+ * Check if the current page contains any action block messages.
+ */
+async function checkForInstagramBlock(page, emitter = null) {
+  const bodyText = await getPageBodyText(page);
+  const matchedPhrase = textContainsAny(bodyText, INSTAGRAM_BLOCK_PHRASES);
+  if (matchedPhrase) {
+    const resumesAt = setInstagramBlockedUntil(24);
+    const message = `Instagram action block detected: "${matchedPhrase}". Resuming at ${resumesAt}`;
+    
+    if (emitter) {
+      if (typeof emitter === "function") {
+        try {
+          emitter("warn", message, { resumesAt });
+        } catch (_) {}
+      } else if (emitter.emit && typeof emitter.emit === "function") {
+        try {
+          emitter.emit("warn", message, { resumesAt });
+        } catch (_) {}
+      }
+    }
+    logger.warn("INSTAGRAM_BLOCK", message);
+
+    try {
+      await sendNotification(
+        "[GTSS] Instagram action block detected",
+        `An action block was encountered during Instagram automation.\n\nBlock Phrase: "${matchedPhrase}"\n\nAutomation will be paused until ${resumesAt} (24 hours).`
+      );
+    } catch (err) {
+      logger.error("INSTAGRAM_BLOCK", "Failed to send block email notification", err);
+    }
+
+    return { blocked: true, reason: `Instagram action block detected: "${matchedPhrase}"`, resumesAt };
+  }
+  return { blocked: false, reason: "", resumesAt: null };
+}
+
+/**
+ * Identify and return the current authentication/session state on Instagram.
+ */
+async function checkInstagramSessionState(page) {
+  await page
+    .waitForLoadState("domcontentloaded", { timeout: 10000 })
+    .catch(() => {});
+
+  const blockCheck = await checkForInstagramBlock(page);
+  if (blockCheck.blocked) {
+    return 'blocked';
+  }
+
+  const url = page.url().toLowerCase();
+
+  // Check for captcha/challenge
+  const captchaDetected =
+    url.includes("/challenge") ||
+    url.includes("/checkpoint") ||
+    (await firstVisible(page, INSTAGRAM_CAPTCHA_SELECTORS, 2000));
+
+  if (captchaDetected) {
+    return 'captcha';
+  }
+
+  // Check for logged_out / login page
+  const loggedOutDetected =
+    url.includes("/accounts/login") ||
+    url.includes("/login") ||
+    (await firstVisible(page, INSTAGRAM_LOGIN_SELECTORS, 2000));
+
+  if (loggedOutDetected) {
+    return 'logged_out';
+  }
+
+  // Check for authenticated
+  const authenticatedDetected =
+    url.includes("/direct/inbox") ||
+    (await firstVisible(page, INSTAGRAM_AUTH_SELECTORS, 2000));
+
+  if (authenticatedDetected) {
+    return 'authenticated';
+  }
+
+  return 'unknown';
+}
+
+/**
+ * Simulates a natural human mouse hover/movement to an element.
+ */
+async function humanMouseMove(page, element) {
+  const box = await element.boundingBox();
+  if (!box) {
+    logger.warn("humanMouseMove", "Element bounding box not found");
+    return;
+  }
+
+  // 1. Move to a random offset near the element first
+  const offsetX = box.x + box.width / 2 + (Math.random() * 60 - 30);
+  const offsetY = box.y + box.height / 2 + (Math.random() * 60 - 30);
+  await page.mouse.move(Math.max(0, offsetX), Math.max(0, offsetY));
+
+  // 2. Delay between steps (100ms - 400ms)
+  await humanDelay(100, 400);
+
+  // 3. Move to the element center
+  const centerX = box.x + box.width / 2;
+  const centerY = box.y + box.height / 2;
+  await page.mouse.move(centerX, centerY);
+}
+
+/**
+ * Simulates organic browsing behaviors (page visits and scrolls) on Instagram.
+ */
+async function simulateOrganicBrowse(page, username = null) {
+  if (username) {
+    logger.info("BROWSER", `Simulating organic browse on @${username}...`);
+    const profileUrl = `https://www.instagram.com/${username}/`;
+    await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
+    await humanDelay(3000, 6000);
+
+    const postLocator = page.locator('article a[href*="/p/"]');
+    const totalPosts = await postLocator.count().catch(() => 0);
+    if (totalPosts === 0) {
+      logger.info("BROWSER", "No posts found for organic browse.");
+      return;
+    }
+
+    const targetCount = Math.min(Math.floor(Math.random() * 3) + 1, totalPosts);
+    logger.info("BROWSER", `Will organically visit ${targetCount} posts.`);
+
+    const indices = [];
+    while (indices.length < targetCount) {
+      const idx = Math.floor(Math.random() * totalPosts);
+      if (!indices.includes(idx)) {
+        indices.push(idx);
+      }
+    }
+
+    for (let i = 0; i < indices.length; i++) {
+      const postIdx = indices[i];
+      const postElement = postLocator.nth(postIdx);
+      const postUrl = await postElement.getAttribute("href").catch(() => "");
+      const fullUrl = postUrl ? `https://www.instagram.com${postUrl}` : "";
+
+      logger.info("BROWSER", `Clicking post ${i + 1}/${targetCount} at index ${postIdx}`);
+      try {
+        await humanMouseMove(page, postElement);
+        await humanDelay(300, 600);
+        await postElement.click();
+        await humanDelay(2000, 4000);
+
+        await humanScroll(page);
+        await humanDelay(2000, 4000);
+
+        const closeBtnSelectors = [
+          'svg[aria-label="Close"]',
+          'div[role="button"] svg[aria-label="Close"]',
+          'button svg[aria-label="Close"]'
+        ];
+        const closeBtn = await firstVisible(page, closeBtnSelectors, 2000).catch(() => null);
+        if (closeBtn) {
+          await humanMouseMove(page, closeBtn);
+          await humanDelay(300, 600);
+          await closeBtn.click();
+        } else {
+          logger.info("BROWSER", "Close button not found, performing back navigation.");
+          await page.goBack({ waitUntil: "domcontentloaded" }).catch(() => {});
+        }
+        await humanDelay(2000, 4000);
+
+        if (fullUrl) {
+          logger.info("BROWSER", `[viewed_post] Organically viewed post: ${fullUrl}`);
+        }
+      } catch (err) {
+        logger.warn("BROWSER", `Failed during organic post browse for index ${postIdx}: ${err.message}`);
+      }
+    }
+  } else {
+    logger.info("BROWSER", "Simulating organic browse on Instagram home feed...");
+    await page.goto("https://www.instagram.com/", { waitUntil: "domcontentloaded" });
+    await humanDelay(3000, 6000);
+
+    const scrollCount = Math.floor(Math.random() * 2) + 2;
+    for (let i = 0; i < scrollCount; i++) {
+      await humanScroll(page);
+      logger.info("BROWSER", `Completed organic scroll ${i + 1}/${scrollCount}`);
+      await humanDelay(5000, 15000);
+    }
+  }
+}
+
+/**
+ * Performs daily account/session warmup before triggering automated scripts.
+ */
+async function dailySessionWarmup(page, fastTrack = false) {
+  const startTime = Date.now();
+  logger.info("BROWSER", `Starting daily Instagram session warmup (fastTrack: ${fastTrack})...`);
+  
+  await simulateOrganicBrowse(page);
+  
+  const elapsed = Date.now() - startTime;
+  const targetTotalMs = fastTrack
+    ? Math.floor(Math.random() * 5000) + 5000
+    : Math.floor(Math.random() * 20000) + 35000;
+
+  const remainingWait = targetTotalMs - elapsed;
+  if (remainingWait > 0) {
+    logger.info("BROWSER", `Warmup elapsed: ${elapsed}ms. Waiting remaining ${remainingWait}ms to complete...`);
+    await humanDelay(remainingWait, remainingWait);
+  } else {
+    logger.info("BROWSER", `Warmup organic browse completed in ${elapsed}ms`);
+  }
+
+  const durationMs = Date.now() - startTime;
+  return { completed: true, durationMs };
+}
+
+/**
+ * Headed custom browser configuration designed specifically for Instagram.
+ */
+async function createInstagramBrowser(options = {}) {
+  logger.info("BROWSER", "Launching Instagram browser (mandatory headed mode)...");
+
+  // Mandatory headless: false
+  const headless = false;
+  
+  const userAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+  
+  const browser = await chromium.launch({
+    headless,
+    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox']
+  });
+
+  const context = await browser.newContext({
+    userAgent,
+    viewport: { width: 1280, height: 800 },
+    locale: 'en-US',
+    timezoneId: 'Africa/Nairobi',
+    geolocation: { latitude: -1.2921, longitude: 36.8219 },
+    permissions: ['geolocation']
+  });
+
+  // Injection script to minimize automation footprint
+  await context.addInitScript(() => {
+    try {
+      const newProto = navigator.__proto__;
+      delete newProto.webdriver;
+    } catch (_) {}
+    
+    try {
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [
+          { name: 'Chrome PDF Viewer' },
+          { name: 'Chromium PDF Viewer' },
+          { name: 'WebKit built-in PDF' }
+        ]
+      });
+    } catch (_) {}
+    
+    try {
+      window.chrome = { runtime: {} };
+    } catch (_) {}
+  });
+
+  const cookies = loadSession("instagram");
+  if (cookies && cookies.length > 0) {
+    await context.addCookies(cookies);
+    logger.info("BROWSER", `Loaded ${cookies.length} session cookies for Instagram`);
+  } else {
+    logger.info("BROWSER", "No existing cookie session found for Instagram");
+  }
+
+  const page = await context.newPage();
+  const tracePath = await startTracing(context, "instagram", options);
+
+  try {
+    logger.info("BROWSER", "Navigating to Instagram home to check session...");
+    await page.goto("https://www.instagram.com/", { waitUntil: "domcontentloaded" }).catch(() => {});
+    await humanDelay(2000, 4000);
+    
+    const sessionState = await checkInstagramSessionState(page);
+    logger.info("BROWSER", `Instagram session state detected: ${sessionState}`);
+    
+    if (sessionState === "authenticated") {
+      const db = getDb();
+      const settingRow = db.prepare("SELECT value FROM settings WHERE key = 'ig_warmup_fast_track'").get();
+      const fastTrack = settingRow && String(settingRow.value) === "1";
+      
+      await dailySessionWarmup(page, fastTrack);
+    }
+  } catch (err) {
+    logger.error("BROWSER", `Failed during Instagram session recovery/warmup check: ${err.message}`);
+  }
+
+  return trackBrowserState({
+    platform: "instagram",
+    browser,
+    context,
+    page,
+    mode: "ephemeral",
+    tracePath,
+    shouldCloseBrowser: true,
+    lock: null,
+  });
+}
+
 module.exports = {
   createBrowser,
   closeBrowser,
   humanDelay,
+  humanTypeText,
   humanScroll,
   detectCaptcha,
   checkSessionExpired,
@@ -970,4 +1389,20 @@ module.exports = {
   releaseBrowserLock,
   closeAllBrowsers,
   normalizeHeadless,
+  
+  // Instagram Extensions
+  firstVisible,
+  INSTAGRAM_AUTH_SELECTORS,
+  INSTAGRAM_LOGIN_SELECTORS,
+  INSTAGRAM_CAPTCHA_SELECTORS,
+  INSTAGRAM_BLOCK_PHRASES,
+  checkInstagramSessionState,
+  checkForInstagramBlock,
+  isInstagramBlocked,
+  setInstagramBlockedUntil,
+  getSelectorHealthReport,
+  humanMouseMove,
+  simulateOrganicBrowse,
+  dailySessionWarmup,
+  createInstagramBrowser,
 };

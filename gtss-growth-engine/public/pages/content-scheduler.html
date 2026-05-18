@@ -115,10 +115,58 @@
         <div class="grid grid-cols-12 gap-6">
           <!-- Text Input Area -->
           <div class="col-span-8 flex flex-col gap-4">
+            <!-- Instagram Post Options (Hidden by default) -->
+            <div id="ig-post-options" class="hidden bg-surface-container-low border border-outline-variant/60 rounded p-4 flex flex-col gap-3">
+              <div class="flex items-center gap-4">
+                <span class="font-label-caps text-label-caps text-on-surface font-semibold">Instagram Post Type:</span>
+                <div class="flex items-center gap-4">
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="ig-post-type" value="feed" checked class="text-primary focus:ring-primary h-4 w-4"/>
+                    <span class="text-body-sm text-on-surface">Feed Post</span>
+                  </label>
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="ig-post-type" value="story" class="text-primary focus:ring-primary h-4 w-4"/>
+                    <span class="text-body-sm text-on-surface">Story</span>
+                  </label>
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="ig-post-type" value="carousel" class="text-primary focus:ring-primary h-4 w-4"/>
+                    <span class="text-body-sm text-on-surface">Carousel</span>
+                  </label>
+                </div>
+              </div>
+              
+              <!-- Story Info Badge -->
+              <div id="ig-story-warning" class="hidden flex items-center"></div>
+
+              <!-- Carousel Panel -->
+              <div id="ig-carousel-panel" class="hidden flex flex-col gap-2">
+                <span class="font-label-caps text-label-caps text-on-surface block">Carousel Images (Drag to reorder, Max 10):</span>
+                <div id="carousel-upload-zone" class="border-2 border-dashed border-outline-variant rounded bg-surface p-3 flex flex-col items-center justify-center cursor-pointer hover:border-primary transition-colors">
+                  <input type="file" id="carousel-file-input" class="hidden" accept="image/*" multiple/>
+                  <span class="material-symbols-outlined text-[20px] text-outline mb-1">add_photo_alternate</span>
+                  <span class="text-[11px] text-on-surface-variant">Click to browse and add images</span>
+                </div>
+                <div id="carousel-thumbnails" class="grid grid-cols-5 gap-2"></div>
+              </div>
+            </div>
+
             <div class="relative">
               <textarea id="post-body" class="w-full rounded border border-outline-variant bg-surface-bright p-3 text-body-sm text-on-surface focus:border-primary focus:ring-1 focus:ring-primary resize-none" placeholder="Draft your content here..." rows="6"></textarea>
               <div id="char-counters" class="absolute bottom-3 right-3 font-mono-code text-mono-code text-on-surface-variant flex gap-3">
                 <!-- Populated by JS -->
+              </div>
+            </div>
+
+            <!-- Caption Preview & Hashtag utility -->
+            <div id="ig-caption-helper" class="hidden bg-surface-container-low border border-outline-variant/60 rounded p-4 flex flex-col gap-3">
+              <div>
+                <span class="font-label-caps text-label-caps text-on-surface font-semibold block mb-1">Instagram Feed Preview (Truncated at 125 chars):</span>
+                <div id="ig-preview-box" class="bg-surface-bright border border-outline-variant/50 rounded p-3 text-body-xs text-on-surface-variant break-words">
+                  <!-- JS will dynamically render first 125 chars highlighted and the rest standard -->
+                </div>
+              </div>
+              <div class="flex justify-between items-center text-body-xs">
+                <span id="ig-hashtag-recommendation" class="text-on-surface-variant flex items-center gap-1"></span>
               </div>
             </div>
 

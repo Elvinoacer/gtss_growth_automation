@@ -380,6 +380,41 @@ function inferLocationFromLines(lines, text) {
   return fallback || "";
 }
 
+function mapInstagramLead(igLead, kw) {
+  const bio = igLead.bio || igLead.ig_bio || "";
+  const { role, company } = inferRoleCompanyFromBio(bio);
+
+  let location = "";
+  if (kw.startsWith("geolocation:")) {
+    const parts = kw.split(":");
+    location = parts[2] || "";
+  }
+  if (!location) {
+    location = "Kenya";
+  }
+
+  return {
+    platform: "instagram",
+    name: igLead.display_name || igLead.name || igLead.username || igLead.ig_username || "",
+    role: role || igLead.business_category || igLead.ig_business_category || "Owner",
+    company: company || igLead.display_name || igLead.name || "",
+    location: location,
+    profile_url: igLead.profile_url || `https://www.instagram.com/${igLead.username || igLead.ig_username}/`,
+    website: igLead.website || "",
+    source_keyword: kw,
+    // Add extra ig_ fields to ensure compatibility and full context
+    ig_username: igLead.username || igLead.ig_username || "",
+    ig_follower_count: igLead.follower_count || igLead.ig_follower_count || 0,
+    ig_following_count: igLead.following_count || igLead.ig_following_count || 0,
+    ig_post_count: igLead.post_count || igLead.ig_post_count || 0,
+    ig_is_business: igLead.is_business !== undefined ? (igLead.is_business ? 1 : 0) : (igLead.ig_is_business ? 1 : 0),
+    ig_business_category: igLead.business_category || igLead.ig_business_category || null,
+    ig_has_email: (igLead.email || igLead.ig_has_email) ? 1 : 0,
+    ig_has_phone: (igLead.phone || igLead.ig_has_phone) ? 1 : 0,
+    ig_bio: bio,
+  };
+}
+
 function parseXSearchLeadSnapshot(snapshot) {
   const rawText = String(snapshot && snapshot.text ? snapshot.text : "");
   const text = cleanText(rawText);
@@ -1168,7 +1203,82 @@ const platformDiscoveryMap = {
       await closeBrowserContext("x", browserState);
     }
   },
-  instagram: async (kw, max, emit) => [],
+  instagram: async (kw, max, emit, jobId) => {
+    const { createInstagramBrowser } = require("../automation/browserBase");
+    const {
+      discoverViaHashtag,
+      discoverViaGeolocation,
+      discoverViaCompetitorFollowers,
+    } = require("../automation/instagramDiscovery");
+
+    const browserState = await createInstagramBrowser();
+    const page = browserState.page;
+    let rawLeads = [];
+
+    try {
+      emit({
+        type: "info",
+        platform: "instagram",
+        message: "Opening Instagram browser for discovery...",
+      });
+
+      const progressEmitter = (type, message, data) => {
+        emit({ type, platform: "instagram", message, ...data });
+      };
+
+      let result;
+      if (kw.startsWith("#")) {
+        const hashtag = kw.substring(1);
+        result = await discoverViaHashtag(
+          page,
+          { hashtag, maxLeads: max },
+          progressEmitter,
+        );
+      } else if (kw.startsWith("geolocation:")) {
+        const parts = kw.split(":");
+        const locationId = parts[1];
+        const locationName = parts[2];
+        result = await discoverViaGeolocation(
+          page,
+          { locationId, locationName, maxLeads: max },
+          progressEmitter,
+        );
+      } else if (kw.startsWith("competitor_followers:")) {
+        const targetAccount = kw.substring("competitor_followers:".length);
+        result = await discoverViaCompetitorFollowers(
+          page,
+          { targetAccount, maxProfiles: max },
+          progressEmitter,
+        );
+      } else if (kw.startsWith("competitor:")) {
+        const targetAccount = kw.substring("competitor:".length);
+        result = await discoverViaCompetitorFollowers(
+          page,
+          { targetAccount, maxProfiles: max },
+          progressEmitter,
+        );
+      } else {
+        throw new Error(
+          `Invalid Instagram discovery input format: "${kw}". Must start with '#', 'geolocation:', 'competitor_followers:', or 'competitor:'.`,
+        );
+      }
+
+      if (result && result.leads) {
+        rawLeads = result.leads.map((lead) => mapInstagramLead(lead, kw));
+      }
+      return rawLeads;
+    } catch (error) {
+      await captureFailureArtifact(page, "instagram", "discovery-instagram");
+      throw error;
+    } finally {
+      emit({
+        type: "info",
+        platform: "instagram",
+        message: "Closing Instagram discovery browser...",
+      });
+      await closeBrowserContext("instagram", browserState);
+    }
+  },
   facebook: async (kw, max, emit) => [],
 };
 

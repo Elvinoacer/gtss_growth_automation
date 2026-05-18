@@ -125,6 +125,56 @@ function initializeSchema(database) {
     database.exec("ALTER TABLE messages ADD COLUMN generated_by TEXT DEFAULT 'ai'");
   } catch (_) {}
 
+  // Instagram warmup safe migrations
+  try {
+    database.exec("ALTER TABLE ig_warmup_sequences ADD COLUMN next_step TEXT");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE ig_warmup_sequences ADD COLUMN next_step_after DATETIME");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE ig_warmup_sequences ADD COLUMN attempt_count INTEGER DEFAULT 0");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE ig_warmup_sequences ADD COLUMN completed_at DATETIME");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE leads ADD COLUMN ig_follow_back_at DATETIME");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE ig_follow_tracker ADD COLUMN eligible_for_unfollow INTEGER DEFAULT 1");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE ig_follow_tracker ADD COLUMN follow_status TEXT GENERATED ALWAYS AS (status)");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE messages ADD COLUMN action_type TEXT");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE touchpoints ADD COLUMN source TEXT");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE touchpoints ADD COLUMN created_at DATETIME");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE leads ADD COLUMN replied_at DATETIME");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE ig_follow_tracker ADD COLUMN follow_back_at DATETIME");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE posts ADD COLUMN ig_post_url TEXT");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE posts ADD COLUMN ig_post_type TEXT");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE posts ADD COLUMN ig_story_expires_at DATETIME");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE ig_follow_tracker ADD COLUMN follow_source TEXT");
+  } catch (_) {}
+
   seedDefaultSettings(database);
 }
 
@@ -180,8 +230,16 @@ function getDailyActionCount(platform, actionType) {
 
 function isWithinLimit(platform, actionType) {
   const normalizedActionType = normalizeActionType(actionType);
-  const platformLimits = getDailyLimits()[platform] || {};
-  const limit = platformLimits[normalizedActionType];
+  
+  let limit;
+  // First, check limits.js config (especially for Instagram as requested)
+  if (limits[platform] && typeof limits[platform][normalizedActionType] === "number") {
+    limit = limits[platform][normalizedActionType];
+  } else {
+    // Fall back to database settings limits
+    const platformLimits = getDailyLimits()[platform] || {};
+    limit = platformLimits[normalizedActionType];
+  }
 
   if (typeof limit !== "number") {
     // Emit a visible warning; use a conservative default of 5 instead of blocking
@@ -218,9 +276,21 @@ function normalizeActionType(actionType) {
     direct_message: "dms",
     follow: "follows",
     like: "likes",
+    instagram_dm: "dms",
+    instagram_follow: "follows",
+    instagram_like: "likes",
   };
 
   return aliases[actionType] || actionType;
+}
+
+function increment_action_count(platform, actionType, leadId = null, outcome = "sent") {
+  const normalizedActionType = normalizeActionType(actionType);
+  const insert = db.prepare(
+    `INSERT INTO daily_actions (platform, action_type, lead_id, outcome, performed_at)
+     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`
+  );
+  insert.run(platform, normalizedActionType, leadId, outcome);
 }
 
 function getDb() {
@@ -239,4 +309,5 @@ module.exports = {
   getDailyLimits,
   isWithinLimit,
   normalizeActionType,
+  increment_action_count,
 };

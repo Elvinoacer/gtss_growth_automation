@@ -2,6 +2,7 @@ require("dotenv").config();
 
 const { initReplyChecker } = require("./replyChecker");
 const { initScheduledPoster } = require("./scheduledPoster");
+const { initInstagramWarmupJobs } = require("./instagramWarmupJob");
 const { getDb } = require("../db/database");
 const { stopAllJobs } = require("../automation/executor");
 const { closeAllBrowsers } = require("../automation/browserBase");
@@ -36,6 +37,7 @@ function startBackgroundJobs() {
   logger.info("SERVER", "Background automation worker initializing.");
   initReplyChecker();
   initScheduledPoster();
+  initInstagramWarmupJobs();
 
   // Cleanup orphan uploads (older than 7 days) at 3 AM daily
   const cron = require("node-cron");
@@ -97,6 +99,31 @@ function startBackgroundJobs() {
   } else if (cronExpression) {
     logger.warn('SERVER', `Invalid PIPELINE_CRON expression: "${cronExpression}" — pipeline cron NOT registered`);
   }
+
+  // Instagram Inbox Reply Checker cron (runs every 30 minutes)
+  const { checkInbox, checkFollowBacks } = require("../services/instagramReplyChecker");
+  cron.schedule("*/30 * * * *", async () => {
+    logger.info("SERVER", "Running scheduled Instagram checkInbox job...");
+    try {
+      await checkInbox();
+      logger.info("SERVER", "Scheduled Instagram checkInbox job completed successfully.");
+    } catch (err) {
+      logger.error("SERVER", "Scheduled Instagram checkInbox job failed", err);
+    }
+  });
+  logger.info("SERVER", "Instagram inbox checker cron registered: every 30 minutes");
+
+  // Instagram Follow-Backs cron (runs at 4 AM daily)
+  cron.schedule("0 4 * * *", async () => {
+    logger.info("SERVER", "Running scheduled Instagram checkFollowBacks job...");
+    try {
+      const result = await checkFollowBacks();
+      logger.info("SERVER", `Scheduled Instagram checkFollowBacks job completed. Found ${result.newFollowBacksCount || 0} new follow-backs.`);
+    } catch (err) {
+      logger.error("SERVER", "Scheduled Instagram checkFollowBacks job failed", err);
+    }
+  });
+  logger.info("SERVER", "Instagram follow-backs cron registered: daily at 4:00 AM");
 
   logger.info("SERVER", "Background automation worker initialized.");
 }

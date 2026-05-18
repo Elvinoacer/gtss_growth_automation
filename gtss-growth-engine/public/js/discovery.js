@@ -56,6 +56,22 @@ async function loadPlatformControls() {
     `,
       )
       .join("");
+
+    const checkboxes = platformRow.querySelectorAll('input[name="platforms"]');
+    checkboxes.forEach(cb => {
+      cb.addEventListener("change", () => {
+        const igChecked = [...platformRow.querySelectorAll('input[name="platforms"]:checked')].some(i => i.value === "instagram");
+        const igContainer = document.getElementById("ig-discovery-container");
+        if (igContainer) {
+          if (igChecked) {
+            igContainer.classList.add("visible");
+            loadInstagramDiscoveryKeywords();
+          } else {
+            igContainer.classList.remove("visible");
+          }
+        }
+      });
+    });
   }
 
   const filterSelect = document.getElementById("platform-filter");
@@ -68,6 +84,96 @@ async function loadPlatformControls() {
       ),
     ].join("");
   }
+}
+
+let selectedHashtags = [];
+let defaultHashtags = [];
+let igKeywordsLoaded = false;
+
+async function loadInstagramDiscoveryKeywords() {
+  if (igKeywordsLoaded) return;
+  try {
+    const data = await window.gtss.fetchJSON("/api/discovery/keywords");
+    
+    // 1. Populate Hashtags
+    if (data.instagram && Array.isArray(data.instagram.hashtags)) {
+      defaultHashtags = data.instagram.hashtags;
+      // Populate starting chips from defaults
+      defaultHashtags.forEach(tag => {
+        addHashtagChip(tag);
+      });
+    }
+
+    // 2. Populate Geolocation Select Dropdown
+    const select = document.getElementById("ig-location-select");
+    if (select && data.instagram && Array.isArray(data.instagram.geolocations)) {
+      select.innerHTML = data.instagram.geolocations
+        .map(loc => `<option value="${loc.id}">${escapeHtml(loc.name)}</option>`)
+        .join("");
+    }
+
+    // Bind hashtag input
+    const hashtagInput = document.getElementById("hashtag-chip-input");
+    if (hashtagInput) {
+      hashtagInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          addHashtagChip(hashtagInput.value);
+          hashtagInput.value = "";
+        }
+      });
+    }
+
+    // Bind strategy radios
+    const strategyRadios = document.querySelectorAll('input[name="ig-strategy"]');
+    strategyRadios.forEach(radio => {
+      radio.addEventListener("change", (e) => {
+        const activeStrategy = e.target.value;
+        
+        document.getElementById("ig-hashtag-panel").classList.toggle("active", activeStrategy === "hashtag");
+        document.getElementById("ig-geolocation-panel").classList.toggle("active", activeStrategy === "geolocation");
+        document.getElementById("ig-competitor-panel").classList.toggle("active", activeStrategy === "competitor");
+        document.getElementById("ig-suggested-panel").classList.toggle("active", activeStrategy === "suggested");
+      });
+    });
+    
+    igKeywordsLoaded = true;
+  } catch (error) {
+    console.error("Failed to load Instagram discovery keywords", error);
+  }
+}
+
+function addHashtagChip(tag) {
+  tag = tag.trim().replace(/^#/, "");
+  if (!tag || selectedHashtags.includes(tag)) return;
+  selectedHashtags.push(tag);
+  renderHashtagChips();
+}
+
+function removeHashtagChip(tag) {
+  selectedHashtags = selectedHashtags.filter(t => t !== tag);
+  renderHashtagChips();
+}
+
+function renderHashtagChips() {
+  const container = document.getElementById("hashtag-chip-container");
+  const input = document.getElementById("hashtag-chip-input");
+  if (!container) return;
+  
+  const chipEls = container.querySelectorAll(".chip");
+  chipEls.forEach(el => el.remove());
+  
+  selectedHashtags.forEach(tag => {
+    const span = document.createElement("span");
+    span.className = "chip";
+    span.innerHTML = `#${escapeHtml(tag)} <span class="chip-remove" data-tag="${escapeHtml(tag)}">✕</span>`;
+    
+    span.querySelector(".chip-remove").addEventListener("click", () => {
+      removeHashtagChip(tag);
+    });
+    
+    container.insertBefore(span, input);
+  });
 }
 
 function appendLog(event) {
@@ -93,27 +199,62 @@ function formatEventMessage(event) {
 async function startDiscovery(event) {
   event.preventDefault();
 
-  const keyword = document.getElementById("keyword-input").value.trim();
+  let keyword = document.getElementById("keyword-input").value.trim();
   const platforms = selectedPlatforms();
   const maxLeads = Number(
     document.getElementById("max-leads-input").value || 20,
   );
-
-  if (!keyword) {
-    window.gtss.showToast("Keyword is required", "warning");
-    return;
-  }
 
   if (platforms.length === 0) {
     window.gtss.showToast("Select at least one platform", "warning");
     return;
   }
 
+  const hasInstagram = platforms.includes("instagram");
+  let ig_auto_warmup = false;
+
+  if (hasInstagram) {
+    const activeStrategy = document.querySelector('input[name="ig-strategy"]:checked')?.value || "hashtag";
+    ig_auto_warmup = document.getElementById("ig-auto-warmup").checked;
+
+    if (activeStrategy === "hashtag") {
+      if (selectedHashtags.length === 0) {
+        window.gtss.showToast("Please add at least one Instagram Hashtag chip.", "warning");
+        return;
+      }
+      keyword = `#${selectedHashtags[0]}`;
+    } else if (activeStrategy === "geolocation") {
+      const select = document.getElementById("ig-location-select");
+      if (!select || !select.value) {
+        window.gtss.showToast("Please select a location.", "warning");
+        return;
+      }
+      const option = select.options[select.selectedIndex];
+      keyword = `geolocation:${select.value}:${option.text}`;
+    } else if (activeStrategy === "competitor") {
+      const usernameInput = document.getElementById("ig-competitor-username");
+      const cleaned = usernameInput ? usernameInput.value.trim().replace(/^@/, "") : "";
+      if (!cleaned) {
+        window.gtss.showToast("Please enter a competitor username.", "warning");
+        return;
+      }
+      const maxScrape = Number(document.getElementById("ig-competitor-max").value || 25);
+      keyword = `competitor:${cleaned}`;
+    } else if (activeStrategy === "suggested") {
+      keyword = "competitor:suggested";
+    }
+  } else {
+    if (!keyword) {
+      window.gtss.showToast("Keyword is required", "warning");
+      return;
+    }
+  }
+
   try {
     const response = await window.gtss.fetchJSON("/api/discovery/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keyword, platforms, maxLeads }),
+      body: JSON.stringify({ keyword, platforms, maxLeads, ig_auto_warmup }),
     });
 
     discoveryState.currentJobId = response.jobId;

@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS posts (
   next_retry_at TEXT,
   last_error TEXT,
   status TEXT DEFAULT 'scheduled', -- scheduled, published, failed, draft
+  ig_post_url TEXT,
+  ig_post_type TEXT DEFAULT 'feed',
+  ig_story_expires_at DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
