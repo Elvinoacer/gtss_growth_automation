@@ -122,6 +122,7 @@ app.use("/", require("./routes/auth"));
 app.use("/api", require("./routes/api"));
 app.use("/api/settings", require("./routes/settings").apiRouter);
 app.use("/api/discovery", require("./routes/discovery"));
+app.use("/api/campaigns", require("./routes/campaigns"));
 
 // Protected Page Routes (wrapped in auth)
 app.use(authMiddleware);
@@ -133,6 +134,7 @@ app.use("/", require("./routes/crm"));
 app.use("/", require("./routes/scheduler"));
 app.use("/", require("./routes/home"));
 app.use("/settings", require("./routes/settings")); // This is the pageRouter
+app.use("/", require("./routes/campaigns").pageRouter);
 app.use("/", require("./routes/instagram"));
 
 // Global Error Handlers

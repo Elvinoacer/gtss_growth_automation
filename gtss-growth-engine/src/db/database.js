@@ -119,6 +119,9 @@ function initializeSchema(database) {
     database.exec('ALTER TABLE leads ADD COLUMN x_handle TEXT');
   } catch (_) {}
   try {
+    database.exec('ALTER TABLE leads ADD COLUMN ig_username TEXT');
+  } catch (_) {}
+  try {
     database.exec('ALTER TABLE discovery_runs ADD COLUMN pipeline_run_id INTEGER REFERENCES pipeline_runs(id)');
   } catch (_) {}
   try {
@@ -175,6 +178,97 @@ function initializeSchema(database) {
     database.exec("ALTER TABLE ig_follow_tracker ADD COLUMN follow_source TEXT");
   } catch (_) {}
 
+  try {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS telemetry_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        platform TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        duration_ms INTEGER,
+        processed_count INTEGER DEFAULT 0,
+        success_count INTEGER DEFAULT 0,
+        error_count INTEGER DEFAULT 0,
+        details_json TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+  } catch (_) {}
+
+  // Campaign schema initialization
+  try {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS campaigns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        status TEXT DEFAULT 'draft',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS connection_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE,
+        lead_id INTEGER REFERENCES leads(id) ON DELETE CASCADE,
+        status TEXT DEFAULT 'pending',
+        error_message TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(campaign_id, lead_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS dm_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE,
+        lead_id INTEGER REFERENCES leads(id) ON DELETE CASCADE,
+        message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+        status TEXT DEFAULT 'pending',
+        scheduled_at DATETIME,
+        sent_at DATETIME,
+        error_message TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(campaign_id, lead_id, message_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS campaign_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE,
+        lead_id INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+        event_type TEXT NOT NULL,
+        details_json TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_connection_jobs_campaign_id ON connection_jobs(campaign_id);
+      CREATE INDEX IF NOT EXISTS idx_connection_jobs_lead_id ON connection_jobs(lead_id);
+      CREATE INDEX IF NOT EXISTS idx_dm_jobs_campaign_id ON dm_jobs(campaign_id);
+      CREATE INDEX IF NOT EXISTS idx_dm_jobs_lead_id ON dm_jobs(lead_id);
+      CREATE INDEX IF NOT EXISTS idx_dm_jobs_message_id ON dm_jobs(message_id);
+      CREATE INDEX IF NOT EXISTS idx_campaign_events_campaign_id ON campaign_events(campaign_id);
+      CREATE INDEX IF NOT EXISTS idx_campaign_events_lead_id ON campaign_events(lead_id);
+    `);
+  } catch (_) {}
+
+  try {
+    const cols = database.prepare("PRAGMA table_info(campaigns)").all().map(c => c.name);
+    if (!cols.includes("platform")) {
+      database.exec("ALTER TABLE campaigns ADD COLUMN platform TEXT");
+    }
+  } catch (_) {}
+
+  try {
+    const cols = database.prepare("PRAGMA table_info(daily_actions)").all().map(c => c.name);
+    if (!cols.includes("campaign_id")) {
+      database.exec("ALTER TABLE daily_actions ADD COLUMN campaign_id INTEGER REFERENCES campaigns(id)");
+    }
+  } catch (_) {}
+
+  try {
+    database.exec("CREATE INDEX IF NOT EXISTS idx_daily_actions_campaign_id ON daily_actions(campaign_id)");
+  } catch (_) {}
+
   seedDefaultSettings(database);
 }
 
@@ -189,6 +283,15 @@ function seedDefaultSettings(database) {
         "INSERT INTO settings (key, value) VALUES ('daily_limits', ?) ON CONFLICT(key) DO NOTHING",
       )
       .run(JSON.stringify(limits));
+  }
+
+  const queueLockRow = database
+    .prepare("SELECT value FROM settings WHERE key = 'campaign_queue_lock'")
+    .get();
+  if (!queueLockRow) {
+    database
+      .prepare("INSERT INTO settings (key, value) VALUES ('campaign_queue_lock', ?) ON CONFLICT(key) DO NOTHING")
+      .run("false");
   }
 
   // Seed default outreach modes

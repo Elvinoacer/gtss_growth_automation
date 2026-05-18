@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>Campaign Pipeline - Growth Engine</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com" rel="preconnect" />
+    <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1" rel="stylesheet" />
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "on-error": "#ffffff",
+              "surface-container-low": "#f2f4f6",
+              "on-tertiary-container": "#e9f0ff",
+              "on-secondary-container": "#57657b",
+              "inverse-on-surface": "#eff1f3",
+              "surface-variant": "#e0e3e5",
+              surface: "#f7f9fb",
+              "on-primary": "#ffffff",
+              "error-container": "#ffdad6",
+              "on-tertiary-fixed-variant": "#38485d",
+              "on-primary-fixed-variant": "#003ea8",
+              "surface-container-high": "#e6e8ea",
+              "on-tertiary-fixed": "#0b1c30",
+              "on-background": "#191c1e",
+              "tertiary-fixed-dim": "#b7c8e1",
+              "outline-variant": "#c3c6d7",
+              "secondary-fixed-dim": "#b9c7e0",
+              "inverse-primary": "#b4c5ff",
+              "surface-dim": "#d8dadc",
+              "primary-fixed-dim": "#b4c5ff",
+              "on-surface-variant": "#434655",
+              "secondary-container": "#d5e3fd",
+              "on-secondary-fixed-variant": "#3a485c",
+              primary: "#004ac6",
+              background: "#f7f9fb",
+              tertiary: "#46566c",
+              "surface-tint": "#0053db",
+              "surface-container-highest": "#e0e3e5",
+              "surface-container": "#eceef0",
+              "tertiary-container": "#5e6e85",
+              "on-primary-container": "#eeefff",
+              error: "#ba1a1a",
+              "secondary-fixed": "#d5e3fd",
+              "on-tertiary": "#ffffff",
+              "on-error-container": "#93000a",
+              "tertiary-fixed": "#d3e4fe",
+              outline: "#737686",
+              "inverse-surface": "#2d3133",
+              "surface-bright": "#f7f9fb",
+              "primary-container": "#2563eb",
+              "surface-container-lowest": "#ffffff",
+              "on-primary-fixed": "#00174b",
+              "on-secondary-fixed": "#0d1c2f",
+              "on-secondary": "#ffffff",
+              secondary: "#515f74",
+              "on-surface": "#191c1e",
+              "primary-fixed": "#dbe1ff",
+            },
+            borderRadius: {
+              DEFAULT: "0.125rem",
+              lg: "0.25rem",
+              xl: "0.5rem",
+              full: "0.75rem",
+            },
+            spacing: {
+              "sidebar-width": "260px",
+              "table-row-height": "2.5rem",
+              gutter: "1rem",
+              "container-max": "1440px",
+              "margin-page": "1.5rem",
+            },
+            fontFamily: {
+              "mono-code": ["JetBrains Mono"],
+              "body-sm": ["Inter"],
+              "headline-md": ["Inter"],
+              "display-lg": ["Inter"],
+              "body-xs": ["Inter"],
+              "label-caps": ["Inter"],
+            }
+          }
+        }
+      };
+    </script>
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body data-page-title="CampaignDetail">
+    <!-- SHELL -->
+    <main class="page-content p-6">
+      <div class="max-w-7xl mx-auto space-y-6">
+        
+        <!-- Back Navigation & Status Header -->
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-outline-variant/60 pb-5">
+          <div class="space-y-1.5">
+            <a href="/campaigns" class="inline-flex items-center gap-1 text-primary hover:text-surface-tint font-bold text-body-xs transition-colors">
+              <span class="material-symbols-outlined text-[16px]">arrow_back</span> Back to pipelines
+            </a>
+            <div class="flex flex-wrap items-center gap-3">
+              <h2 id="campaign-title" class="text-display-lg font-bold text-on-surface">Loading Campaign...</h2>
+              <span id="campaign-platform-badge" class="hidden rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider border"></span>
+              <div id="campaign-status-badge" class="hidden items-center gap-1.5 text-body-xs font-semibold px-2 py-0.5 rounded-full border">
+                <span class="w-2 h-2 rounded-full inline-block"></span>
+                <span class="capitalize"></span>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Actions & Locks -->
+          <div class="flex flex-wrap gap-3 items-center">
+            <!-- Global Lock Status -->
+            <div id="advisory-lock-badge" class="flex items-center gap-2 rounded border px-3 py-1.5 text-xs font-semibold bg-surface-container border-outline-variant">
+              <span class="w-2.5 h-2.5 rounded-full bg-outline inline-block" id="lock-dot"></span>
+              <span id="lock-text" class="text-on-surface-variant">Checking adapter lock...</span>
+            </div>
+            
+            <!-- Pause/Resume Control -->
+            <button id="pause-resume-btn" disabled class="bg-primary hover:bg-surface-tint text-on-primary font-semibold px-4 py-2 rounded flex items-center gap-1.5 transition-colors disabled:opacity-50">
+              <span class="material-symbols-outlined text-[18px]" id="pause-resume-icon">pause</span> 
+              <span id="pause-resume-text">Pause outreach</span>
+            </button>
+
+            <!-- Manual Queue Run Controls -->
+            <button id="run-connection-btn" class="border border-outline-variant hover:border-primary text-on-surface-variant hover:text-primary font-semibold px-4 py-2 rounded flex items-center gap-1.5 transition-colors">
+              <span class="material-symbols-outlined text-[18px]">play_circle</span> Connections Queue
+            </button>
+            <button id="run-dm-btn" class="border border-outline-variant hover:border-primary text-on-surface-variant hover:text-primary font-semibold px-4 py-2 rounded flex items-center gap-1.5 transition-colors">
+              <span class="material-symbols-outlined text-[18px]">send</span> Messages Queue
+            </button>
+          </div>
+        </div>
+
+        <!-- Stats & Progress Widgets Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          
+          <!-- Circular Completion Widget -->
+          <div class="lg:col-span-1 gtss-card p-6 bg-surface-container-lowest border border-outline-variant rounded-lg shadow-sm flex flex-col justify-between items-center text-center">
+            <h3 class="font-bold text-on-surface text-base mb-4 w-full text-left">Pipeline Completion Ratios</h3>
+            
+            <div class="flex gap-8 justify-around items-center w-full py-2">
+              <!-- Connections Progress Widget -->
+              <div class="flex flex-col items-center">
+                <div class="relative w-28 h-28 flex items-center justify-center">
+                  <svg class="w-full h-full transform -rotate-90">
+                    <circle cx="56" cy="56" r="46" stroke="var(--gtss-card-border, #1e293b)" stroke-width="8" fill="transparent" />
+                    <circle id="connections-svg-circle" cx="56" cy="56" r="46" stroke="#004ac6" stroke-width="8" fill="transparent" 
+                            stroke-dasharray="289" stroke-dashoffset="289" class="transition-all duration-1000 ease-out" />
+                  </svg>
+                  <span id="connections-pct-text" class="absolute font-bold text-on-surface text-lg">0%</span>
+                </div>
+                <span class="font-label-caps text-label-caps text-on-surface-variant mt-3 uppercase font-bold">Connections</span>
+                <span id="connections-ratio-text" class="text-body-xs text-outline mt-0.5">0 / 0</span>
+              </div>
+
+              <!-- DMs Progress Widget -->
+              <div class="flex flex-col items-center">
+                <div class="relative w-28 h-28 flex items-center justify-center">
+                  <svg class="w-full h-full transform -rotate-90">
+                    <circle cx="56" cy="56" r="46" stroke="var(--gtss-card-border, #1e293b)" stroke-width="8" fill="transparent" />
+                    <circle id="dms-svg-circle" cx="56" cy="56" r="46" stroke="#0053db" stroke-width="8" fill="transparent" 
+                            stroke-dasharray="289" stroke-dashoffset="289" class="transition-all duration-1000 ease-out" />
+                  </svg>
+                  <span id="dms-pct-text" class="absolute font-bold text-on-surface text-lg">0%</span>
+                </div>
+                <span class="font-label-caps text-label-caps text-on-surface-variant mt-3 uppercase font-bold">Direct DMs</span>
+                <span id="dms-ratio-text" class="text-body-xs text-outline mt-0.5">0 / 0</span>
+              </div>
+            </div>
+
+            <div class="border-t border-outline-variant/60 w-full mt-4 pt-3 text-body-xs text-outline text-left">
+              💡 Processed outcomes sync automatically in real-time as background jobs run.
+            </div>
+          </div>
+
+          <!-- Connection Stats Summary -->
+          <div class="gtss-card p-6 bg-surface-container-lowest border border-outline-variant rounded-lg shadow-sm">
+            <h3 class="font-bold text-on-surface text-base mb-4">Connections Summary</h3>
+            <div class="grid grid-cols-2 gap-4">
+              <div class="bg-surface-container rounded p-3 flex flex-col justify-center min-h-[64px]">
+                <span class="font-label-caps text-[10px] text-on-surface-variant uppercase tracking-wider font-semibold">Total Outreach Leads</span>
+                <span id="stat-conn-total" class="font-bold text-2xl text-on-surface">0</span>
+              </div>
+              <div class="bg-surface-container rounded p-3 flex flex-col justify-center min-h-[64px]">
+                <span class="font-label-caps text-[10px] text-primary uppercase tracking-wider font-semibold">Accepted Contacts</span>
+                <span id="stat-conn-accepted" class="font-bold text-2xl text-primary">0</span>
+              </div>
+              <div class="bg-surface-container rounded p-3 flex flex-col justify-center min-h-[64px]">
+                <span class="font-label-caps text-[10px] text-on-surface-variant uppercase tracking-wider font-semibold">Requests Sent</span>
+                <span id="stat-conn-sent" class="font-bold text-2xl text-on-surface">0</span>
+              </div>
+              <div class="bg-surface-container rounded p-3 flex flex-col justify-center min-h-[64px]">
+                <span class="font-label-caps text-[10px] text-error uppercase tracking-wider font-semibold">Requests Failed</span>
+                <span id="stat-conn-failed" class="font-bold text-2xl text-error">0</span>
+              </div>
+              <div class="col-span-2 bg-surface-container rounded p-3 flex justify-between items-center min-h-[44px]">
+                <span class="font-label-caps text-[10px] text-on-surface-variant uppercase tracking-wider font-semibold">Pending / Unsent Queue</span>
+                <span id="stat-conn-pending" class="font-bold text-base text-on-surface">0</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- DM Stats Summary -->
+          <div class="gtss-card p-6 bg-surface-container-lowest border border-outline-variant rounded-lg shadow-sm">
+            <h3 class="font-bold text-on-surface text-base mb-4">Messages Summary</h3>
+            <div class="grid grid-cols-2 gap-4">
+              <div class="bg-surface-container rounded p-3 flex flex-col justify-center min-h-[64px]">
+                <span class="font-label-caps text-[10px] text-on-surface-variant uppercase tracking-wider font-semibold">Total Scheduled DMs</span>
+                <span id="stat-dm-total" class="font-bold text-2xl text-on-surface">0</span>
+              </div>
+              <div class="bg-surface-container rounded p-3 flex flex-col justify-center min-h-[64px]">
+                <span class="font-label-caps text-[10px] text-primary uppercase tracking-wider font-semibold">Successfully Sent</span>
+                <span id="stat-dm-sent" class="font-bold text-2xl text-primary">0</span>
+              </div>
+              <div class="bg-surface-container rounded p-3 flex flex-col justify-center min-h-[64px]">
+                <span class="font-label-caps text-[10px] text-green-500 uppercase tracking-wider font-semibold">Replies Received</span>
+                <span id="stat-dm-replied" class="font-bold text-2xl text-green-500">0</span>
+              </div>
+              <div class="bg-surface-container rounded p-3 flex flex-col justify-center min-h-[64px]">
+                <span class="font-label-caps text-[10px] text-error uppercase tracking-wider font-semibold">Messages Failed</span>
+                <span id="stat-dm-failed" class="font-bold text-2xl text-error">0</span>
+              </div>
+              <div class="col-span-2 bg-surface-container rounded p-3 flex justify-between items-center min-h-[44px]">
+                <span class="font-label-caps text-[10px] text-on-surface-variant uppercase tracking-wider font-semibold">Scheduled / Snoozed Queue</span>
+                <span id="stat-dm-pending" class="font-bold text-base text-on-surface">0</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Double Column / Tabs layout -->
+        <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+          
+          <!-- Jobs Manager Tabbed Container (2 cols wide) -->
+          <div class="xl:col-span-2 gtss-card bg-surface-container-lowest border border-outline-variant rounded-lg shadow-sm flex flex-col overflow-hidden">
+            <!-- Tabs Header -->
+            <div class="flex border-b border-outline-variant bg-surface-container/30">
+              <button id="tab-connections-btn" class="flex-1 font-label-caps text-label-caps uppercase tracking-wider font-bold py-4 text-center border-b-2 border-primary text-primary transition-all">
+                Connection Pipeline Jobs
+              </button>
+              <button id="tab-dms-btn" class="flex-1 font-label-caps text-label-caps uppercase tracking-wider font-bold py-4 text-center border-b-2 border-transparent text-outline hover:text-on-surface-variant transition-all">
+                Direct Message (DM) Jobs
+              </button>
+            </div>
+            
+            <!-- Tab Body -->
+            <div class="p-6 flex-1 flex flex-col justify-between min-h-[400px]">
+              
+              <!-- Connection Jobs Section -->
+              <div id="tab-connections-content" class="space-y-4">
+                <div class="overflow-x-auto min-h-[300px]">
+                  <table class="w-full text-left border-collapse">
+                    <thead>
+                      <tr class="border-b border-outline-variant text-[11px] font-bold text-outline uppercase tracking-wider">
+                        <th class="py-2.5 px-3">Lead name</th>
+                        <th class="py-2.5 px-3">Platform Handle</th>
+                        <th class="py-2.5 px-3">Queue Status</th>
+                        <th class="py-2.5 px-3">Attempts</th>
+                        <th class="py-2.5 px-3 text-right">Updated At</th>
+                      </tr>
+                    </thead>
+                    <tbody id="connections-table-body" class="text-sm text-on-surface">
+                      <!-- Rendered dynamically -->
+                    </tbody>
+                  </table>
+                  <div id="conn-table-empty" class="hidden flex-col items-center justify-center py-12 text-center text-outline">
+                    <span class="material-symbols-outlined text-4xl">contacts_product</span>
+                    <span class="mt-2 text-sm">No connection pipeline jobs in this campaign.</span>
+                  </div>
+                </div>
+
+                <!-- Pagination Connection -->
+                <div id="conn-pagination" class="flex justify-between items-center pt-4 border-t border-outline-variant/40">
+                  <span id="conn-pag-info" class="text-body-xs text-on-surface-variant font-semibold">Page 1 of 1</span>
+                  <div class="flex gap-2">
+                    <button id="conn-prev-btn" disabled class="border border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary px-2.5 py-1 rounded text-xs font-semibold disabled:opacity-50 disabled:pointer-events-none transition-colors">Prev</button>
+                    <button id="conn-next-btn" disabled class="border border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary px-2.5 py-1 rounded text-xs font-semibold disabled:opacity-50 disabled:pointer-events-none transition-colors">Next</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- DM Jobs Section -->
+              <div id="tab-dms-content" class="hidden space-y-4">
+                <div class="overflow-x-auto min-h-[300px]">
+                  <table class="w-full text-left border-collapse">
+                    <thead>
+                      <tr class="border-b border-outline-variant text-[11px] font-bold text-outline uppercase tracking-wider">
+                        <th class="py-2.5 px-3">Lead name</th>
+                        <th class="py-2.5 px-3">Platform Handle</th>
+                        <th class="py-2.5 px-3">Queue Status</th>
+                        <th class="py-2.5 px-3">Attempts</th>
+                        <th class="py-2.5 px-3 text-right">Scheduled / Sent At</th>
+                      </tr>
+                    </thead>
+                    <tbody id="dms-table-body" class="text-sm text-on-surface">
+                      <!-- Rendered dynamically -->
+                    </tbody>
+                  </table>
+                  <div id="dms-table-empty" class="hidden flex-col items-center justify-center py-12 text-center text-outline">
+                    <span class="material-symbols-outlined text-4xl">mail_lock</span>
+                    <span class="mt-2 text-sm">No scheduled message pipeline jobs.</span>
+                  </div>
+                </div>
+
+                <!-- Pagination DM -->
+                <div id="dms-pagination" class="flex justify-between items-center pt-4 border-t border-outline-variant/40">
+                  <span id="dms-pag-info" class="text-body-xs text-on-surface-variant font-semibold">Page 1 of 1</span>
+                  <div class="flex gap-2">
+                    <button id="dms-prev-btn" disabled class="border border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary px-2.5 py-1 rounded text-xs font-semibold disabled:opacity-50 disabled:pointer-events-none transition-colors">Prev</button>
+                    <button id="dms-next-btn" disabled class="border border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary px-2.5 py-1 rounded text-xs font-semibold disabled:opacity-50 disabled:pointer-events-none transition-colors">Next</button>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Real-Time Event Log Viewer (1 col wide) -->
+          <div class="lg:col-span-1 gtss-card bg-surface-container-lowest border border-outline-variant rounded-lg shadow-sm flex flex-col overflow-hidden h-[510px]">
+            <!-- Log Header -->
+            <div class="px-5 py-4 border-b border-outline-variant flex justify-between items-center bg-surface-container/30">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-primary inline-block animate-ping"></span>
+                <h3 class="font-bold text-on-surface text-sm">Campaign Event Stream</h3>
+              </div>
+              
+              <div class="flex items-center gap-3">
+                <button id="clear-stream-btn" class="text-body-xs font-semibold text-outline hover:text-primary transition-colors flex items-center gap-0.5">
+                  <span class="material-symbols-outlined text-xs">delete_sweep</span> Clear
+                </button>
+                <label class="flex items-center gap-1 text-[11px] font-semibold text-outline cursor-pointer hover:text-on-surface transition-colors">
+                  <input id="stream-autoscroll" checked class="form-checkbox h-3.5 w-3.5 rounded text-primary border-outline-variant/50 focus:ring-0 bg-transparent" type="checkbox" />
+                  Scroll
+                </label>
+              </div>
+            </div>
+            
+            <!-- Terminal Log body -->
+            <div id="stream-log-container" class="flex-1 p-4 overflow-y-auto font-mono-code text-[11px] leading-relaxed bg-[#020617] text-slate-300 space-y-2 select-text">
+              <div class="flex gap-2">
+                <span class="text-slate-500 shrink-0">[System]</span>
+                <span class="text-primary-fixed-dim shrink-0">READY</span>
+                <span class="text-white">Connecting to live campaign telemetry room...</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/app.js"></script>
+    <script src="/js/campaign-detail.js"></script>
+  </body>
+</html>

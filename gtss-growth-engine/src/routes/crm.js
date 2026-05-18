@@ -218,4 +218,15 @@ router.get(
   }),
 );
 
+router.get(
+  "/api/crm/telemetry",
+  asyncHandler(async (req, res) => {
+    const db = getDb();
+    const logs = db
+      .prepare(`SELECT * FROM telemetry_logs ORDER BY created_at DESC LIMIT 100`)
+      .all();
+    res.json(logs);
+  })
+);
+
 module.exports = router;

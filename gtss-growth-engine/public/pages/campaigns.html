@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>Campaigns - Growth Engine</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com" rel="preconnect" />
+    <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1" rel="stylesheet" />
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "on-error": "#ffffff",
+              "surface-container-low": "#f2f4f6",
+              "on-tertiary-container": "#e9f0ff",
+              "on-secondary-container": "#57657b",
+              "inverse-on-surface": "#eff1f3",
+              "surface-variant": "#e0e3e5",
+              surface: "#f7f9fb",
+              "on-primary": "#ffffff",
+              "error-container": "#ffdad6",
+              "on-tertiary-fixed-variant": "#38485d",
+              "on-primary-fixed-variant": "#003ea8",
+              "surface-container-high": "#e6e8ea",
+              "on-tertiary-fixed": "#0b1c30",
+              "on-background": "#191c1e",
+              "tertiary-fixed-dim": "#b7c8e1",
+              "outline-variant": "#c3c6d7",
+              "secondary-fixed-dim": "#b9c7e0",
+              "inverse-primary": "#b4c5ff",
+              "surface-dim": "#d8dadc",
+              "primary-fixed-dim": "#b4c5ff",
+              "on-surface-variant": "#434655",
+              "secondary-container": "#d5e3fd",
+              "on-secondary-fixed-variant": "#3a485c",
+              primary: "#004ac6",
+              background: "#f7f9fb",
+              tertiary: "#46566c",
+              "surface-tint": "#0053db",
+              "surface-container-highest": "#e0e3e5",
+              "surface-container": "#eceef0",
+              "tertiary-container": "#5e6e85",
+              "on-primary-container": "#eeefff",
+              error: "#ba1a1a",
+              "secondary-fixed": "#d5e3fd",
+              "on-tertiary": "#ffffff",
+              "on-error-container": "#93000a",
+              "tertiary-fixed": "#d3e4fe",
+              outline: "#737686",
+              "inverse-surface": "#2d3133",
+              "surface-bright": "#f7f9fb",
+              "primary-container": "#2563eb",
+              "surface-container-lowest": "#ffffff",
+              "on-primary-fixed": "#00174b",
+              "on-secondary-fixed": "#0d1c2f",
+              "on-secondary": "#ffffff",
+              secondary: "#515f74",
+              "on-surface": "#191c1e",
+              "primary-fixed": "#dbe1ff",
+            },
+            borderRadius: {
+              DEFAULT: "0.125rem",
+              lg: "0.25rem",
+              xl: "0.5rem",
+              full: "0.75rem",
+            },
+            spacing: {
+              "sidebar-width": "260px",
+              "table-row-height": "2.5rem",
+              gutter: "1rem",
+              "container-max": "1440px",
+              "margin-page": "1.5rem",
+            },
+            fontFamily: {
+              "mono-code": ["JetBrains Mono"],
+              "body-sm": ["Inter"],
+              "headline-md": ["Inter"],
+              "display-lg": ["Inter"],
+              "body-xs": ["Inter"],
+              "label-caps": ["Inter"],
+            }
+          }
+        }
+      };
+    </script>
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body data-page-title="Campaigns">
+    <!-- SHELL -->
+    <main class="page-content p-6">
+      <div class="max-w-7xl mx-auto space-y-6">
+        
+        <!-- Create Campaign Row -->
+        <section class="gtss-card p-6 bg-surface-container-lowest border border-outline-variant rounded-lg shadow-sm">
+          <h2 class="text-headline-md font-bold text-on-surface mb-4">Create New Campaign</h2>
+          <form id="create-campaign-form" class="flex flex-wrap gap-4 items-end">
+            <div class="flex-1 min-w-[260px]">
+              <label for="campaign-name" class="block font-label-caps text-label-caps text-on-surface-variant mb-2">Campaign Name</label>
+              <input id="campaign-name" type="text" placeholder="e.g. Q2 LinkedIn Outreach" required
+                     class="w-full min-h-[42px] border border-outline-variant rounded bg-surface-container px-3 py-2 text-on-surface focus:ring-0 focus:border-primary" />
+            </div>
+            <div class="w-[200px]">
+              <label for="campaign-platform" class="block font-label-caps text-label-caps text-on-surface-variant mb-2">Platform</label>
+              <select id="campaign-platform" required
+                      class="w-full min-h-[42px] border border-outline-variant rounded bg-surface-container px-3 py-2 text-on-surface focus:ring-0 focus:border-primary">
+                <option value="linkedin">LinkedIn</option>
+                <option value="x">X (Twitter)</option>
+                <option value="facebook">Facebook</option>
+                <option value="instagram">Instagram</option>
+              </select>
+            </div>
+            <button type="submit" class="bg-primary hover:bg-surface-tint text-on-primary font-semibold px-6 min-h-[42px] rounded flex items-center justify-center gap-2 transition-all">
+              <span class="material-symbols-outlined text-[18px]">add_circle</span> Launch Pipeline
+            </button>
+          </form>
+        </section>
+
+        <!-- Campaigns Grid -->
+        <section class="gtss-card p-6 bg-surface-container-lowest border border-outline-variant rounded-lg shadow-sm">
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-headline-md font-bold text-on-surface">Active & Completed Campaigns</h2>
+            <div class="flex gap-2">
+              <button id="refresh-campaigns-btn" class="border border-outline-variant hover:border-primary text-on-surface-variant hover:text-primary font-semibold px-4 py-2 rounded flex items-center gap-1.5 transition-colors">
+                <span class="material-symbols-outlined text-[18px]">refresh</span> Refresh
+              </button>
+            </div>
+          </div>
+
+          <!-- Empty State -->
+          <div id="campaigns-empty-state" class="hidden flex-col items-center justify-center py-12 text-center">
+            <span class="material-symbols-outlined text-outline text-5xl mb-3">campaign</span>
+            <h3 class="text-lg font-bold text-on-surface mb-1">No campaigns active</h3>
+            <p class="text-on-surface-variant text-sm max-w-sm">Create your first social media outreach pipeline using the form above to start warming up leads and sending message sequences.</p>
+          </div>
+
+          <!-- Grid Container -->
+          <div id="campaigns-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+
+          <!-- Pagination -->
+          <div id="campaigns-pagination" class="flex justify-between items-center mt-6 pt-4 border-t border-outline-variant">
+            <span id="pagination-info" class="text-body-xs text-on-surface-variant font-semibold">Showing page 1 of 1</span>
+            <div class="flex gap-2">
+              <button id="prev-page-btn" disabled class="border border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-50 disabled:pointer-events-none transition-colors">Prev</button>
+              <button id="next-page-btn" disabled class="border border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-50 disabled:pointer-events-none transition-colors">Next</button>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/app.js"></script>
+    <script src="/js/campaigns.js"></script>
+  </body>
+</html>

@@ -106,6 +106,144 @@ async function sendReplyEmail(lead, replyText, source) {
 }
 
 /**
+ * Send a beautiful premium Slack alert to the configured webhook channel.
+ *
+ * @param {Object} lead - The lead database row object.
+ * @param {string} replyText - The body text of the reply.
+ * @param {string} source - The source type.
+ * @returns {Promise<boolean>} Whether the Slack notification succeeded.
+ */
+async function sendSlackNotification(lead, replyText, source) {
+  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+  if (!webhookUrl) {
+    logger.debug(
+      "INSTAGRAM_REPLY_CHECKER",
+      "SLACK_WEBHOOK_URL not configured. Skipping Slack alert."
+    );
+    return false;
+  }
+
+  try {
+    const previewText =
+      replyText.substring(0, 200) + (replyText.length > 200 ? "..." : "");
+
+    const payload = {
+      text: `📬 *Instagram Reply Detected* from @${lead.ig_username || lead.name}`,
+      blocks: [
+        {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text: "📬 Instagram Reply Detected",
+            emoji: true
+          }
+        },
+        {
+          type: "section",
+          fields: [
+            {
+              type: "mrkdwn",
+              text: `*Username:*\n@${lead.ig_username || "N/A"}`
+            },
+            {
+              type: "mrkdwn",
+              text: `*Name:*\n${lead.name || "N/A"}`
+            },
+            {
+              type: "mrkdwn",
+              text: `*Company:*\n${lead.company || "N/A"}`
+            },
+            {
+              type: "mrkdwn",
+              text: `*Lead Score:*\n*${lead.lead_score !== null && lead.lead_score !== undefined ? lead.lead_score : "Unscored"}*`
+            }
+          ]
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*Source Type:*\n\`${source.toUpperCase().replace(/_/g, " ")}\``
+          }
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*Message Snippet:*\n> "${previewText}"`
+          }
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: "View Lead in CRM",
+                emoji: true
+              },
+              url: `http://localhost:3000/crm?lead=${lead.id}`,
+              style: "primary"
+            }
+          ]
+        }
+      ]
+    };
+
+    if (typeof fetch === "function") {
+      const response = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        throw new Error(`Slack webhook responded with status ${response.status}`);
+      }
+    } else {
+      const https = require("https");
+      const url = new URL(webhookUrl);
+      const postData = JSON.stringify(payload);
+      
+      await new Promise((resolve, reject) => {
+        const req = https.request({
+          hostname: url.hostname,
+          path: url.pathname + url.search,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(postData)
+          }
+        }, (res) => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve();
+          } else {
+            reject(new Error(`Slack webhook responded with status ${res.statusCode}`));
+          }
+        });
+
+        req.on("error", (err) => reject(err));
+        req.write(postData);
+        req.end();
+      });
+    }
+
+    logger.info(
+      "INSTAGRAM_REPLY_CHECKER",
+      `Slack alert sent successfully for lead ID ${lead.id}`
+    );
+    return true;
+  } catch (err) {
+    logger.error(
+      "INSTAGRAM_REPLY_CHECKER",
+      `Failed to send Slack alert for lead ID ${lead.id}`,
+      err
+    );
+    return false;
+  }
+}
+
+/**
  * Handle database log recording and trigger email dispatch for a lead reply.
  *
  * @param {number} leadId - The lead database ID.
@@ -142,8 +280,11 @@ async function updateLeadReply(leadId, replyText, source) {
     return;
   }
 
-  // 3. Dispatch Nodemailer HTML alert
-  await sendReplyEmail(lead, replyText, source);
+  // 3. Dispatch Nodemailer HTML alert and Slack webhook alert in parallel
+  await Promise.allSettled([
+    sendReplyEmail(lead, replyText, source),
+    sendSlackNotification(lead, replyText, source)
+  ]);
 }
 
 /**
@@ -159,9 +300,19 @@ async function checkPrimaryInbox(page) {
   });
   await humanDelay(3000, 6000);
 
-  // Locate listitems having bold titles or unread classes
-  const unreadSelector =
-    'div[role="listitem"]:has(span[style*="font-weight: bold"]), div[role="listitem"]:has(span[style*="font-weight: 600"]), div[role="listitem"]:has(.unread-indicator)';
+  // Locate listitems having bold titles, unread classes, or blue unread dots
+  const unreadSelector = [
+    'div[role="listitem"]:has(span[style*="font-weight: bold"])',
+    'div[role="listitem"]:has(span[style*="font-weight: 600"])',
+    'div[role="listitem"]:has(span[style*="font-weight:bold"])',
+    'div[role="listitem"]:has(span[style*="font-weight:600"])',
+    'div[role="listitem"]:has(.unread-indicator)',
+    'div[role="listitem"]:has(span[class*="unread"])',
+    'div[role="listitem"]:has(div[class*="unread"])',
+    'div[role="listitem"]:has(div[style*="background-color: rgb(0, 149, 246)"])',
+    'div[role="listitem"]:has(div[style*="background-color: var(--ig-primary-button)"])',
+    'div[role="listitem"]:has(svg[aria-label*="Unread" i])'
+  ].join(', ');
   const unreadThreads = page.locator(unreadSelector);
   const count = await unreadThreads.count().catch(() => 0);
 
@@ -173,7 +324,7 @@ async function checkPrimaryInbox(page) {
     // Extract sender username
     let username = "";
     const boldSpan = thread
-      .locator('span[style*="font-weight: bold"], span[style*="font-weight: 600"]')
+      .locator('span[style*="font-weight: bold"], span[style*="font-weight: 600"], span[style*="font-weight:bold"], span[style*="font-weight:600"]')
       .first();
     if ((await boldSpan.count()) > 0) {
       username = (await boldSpan.innerText().catch(() => "")).trim();
@@ -213,9 +364,9 @@ async function checkPrimaryInbox(page) {
     await thread.click();
     await humanDelay(2000, 4000);
 
-    // Read the last message
+    // Read the last message bubble text
     const messages = page.locator(
-      'div[role="row"], div[class*="message"], div[class*="bubble"]'
+      'div[role="row"], div[class*="message"], div[class*="bubble"], div[data-testid="message-text"], span[class*="message-text"], div[style*="background-color: var(--web-always-white)"], div[style*="background-color: rgb(239, 239, 239)"]'
     );
     const msgCount = await messages.count().catch(() => 0);
     let replyText = "[No message text found]";
@@ -238,6 +389,7 @@ async function checkPrimaryInbox(page) {
     });
     await humanDelay(3000, 5000);
   }
+  return count;
 }
 
 /**
@@ -253,7 +405,7 @@ async function checkMessageRequests(page) {
   });
   await humanDelay(3000, 6000);
 
-  const requestThreads = page.locator('div[role="listitem"], a[href*="/direct/t/"]');
+  const requestThreads = page.locator('div[role="listitem"], a[href*="/direct/t/"], div[role="button"]:has(span)');
   const count = await requestThreads.count().catch(() => 0);
   logger.info("INSTAGRAM_REPLY_CHECKER", `Detected ${count} request items.`);
 
@@ -290,7 +442,7 @@ async function checkMessageRequests(page) {
 
     // Read the last request message content
     const messages = page.locator(
-      'div[role="row"], div[class*="message"], div[class*="bubble"]'
+      'div[role="row"], div[class*="message"], div[class*="bubble"], div[data-testid="message-text"], span[class*="message-text"], div[style*="background-color: var(--web-always-white)"], div[style*="background-color: rgb(239, 239, 239)"]'
     );
     const msgCount = await messages.count().catch(() => 0);
     let replyText = "[No message text found in request]";
@@ -310,6 +462,8 @@ async function checkMessageRequests(page) {
       'button:has-text("Accept")',
       'div[role="button"]:has-text("Accept")',
       'span:has-text("Accept")',
+      'div[role="button"] span:has-text("Accept")',
+      'button[type="button"]:has-text("Accept")',
     ];
 
     let accepted = false;
@@ -351,6 +505,7 @@ async function checkMessageRequests(page) {
     });
     await humanDelay(3000, 5000);
   }
+  return count;
 }
 
 /**
@@ -359,8 +514,15 @@ async function checkMessageRequests(page) {
  * @returns {Promise<Object>} Execution status outcome.
  */
 async function checkInbox() {
+  const db = getDb();
   logger.info("INSTAGRAM_REPLY_CHECKER", "Initializing inbox reply scan...");
+  const startTime = Date.now();
   let browserState = null;
+  let success = false;
+  let errMessage = null;
+  let primaryUnreadCount = 0;
+  let requestsCount = 0;
+
   try {
     browserState = await createInstagramBrowser();
     const page = browserState.page;
@@ -369,20 +531,46 @@ async function checkInbox() {
     await dailySessionWarmup(page);
 
     // 1. Check Primary Inbox
-    await checkPrimaryInbox(page);
+    primaryUnreadCount = await checkPrimaryInbox(page).catch(() => 0);
 
     // 2. Check Message Requests
-    await checkMessageRequests(page);
+    requestsCount = await checkMessageRequests(page).catch(() => 0);
 
-    return { success: true };
+    success = true;
+    return { success: true, primaryUnreadCount, requestsCount };
   } catch (err) {
     logger.error(
       "INSTAGRAM_REPLY_CHECKER",
       "Fatal exception during automated inbox scanning",
       err
     );
+    errMessage = err.message;
     throw err;
   } finally {
+    const durationMs = Date.now() - startTime;
+    try {
+      db.prepare(`
+        INSERT INTO telemetry_logs (platform, action_type, status, duration_ms, processed_count, success_count, error_count, details_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "instagram",
+        "check_inbox",
+        success ? "success" : "failed",
+        durationMs,
+        primaryUnreadCount + requestsCount,
+        success ? (primaryUnreadCount + requestsCount) : 0,
+        success ? 0 : 1,
+        JSON.stringify({
+          primaryUnreadCount,
+          requestsCount,
+          error: errMessage,
+          browserMode: browserState ? browserState.mode : "unknown"
+        })
+      );
+    } catch (telemetryErr) {
+      logger.error("INSTAGRAM_REPLY_CHECKER", "Failed to write checkInbox telemetry", telemetryErr);
+    }
+
     if (browserState) {
       const { closeBrowser } = require("../automation/browserBase");
       await closeBrowser(
@@ -408,8 +596,13 @@ async function checkInbox() {
 async function checkFollowBacks() {
   const db = getDb();
   logger.info("INSTAGRAM_REPLY_CHECKER", "Initializing checkFollowBacks scan...");
-
+  const startTime = Date.now();
   let browserState = null;
+  let success = false;
+  let errMessage = null;
+  let newFollowBacksCount = 0;
+  let totalDiscoveredFollowers = 0;
+
   try {
     browserState = await createInstagramBrowser();
     const page = browserState.page;
@@ -524,12 +717,12 @@ async function checkFollowBacks() {
       }
     }
 
+    totalDiscoveredFollowers = followerUsernames.size;
     logger.info(
       "INSTAGRAM_REPLY_CHECKER",
-      `Discovered ${followerUsernames.size} loaded followers.`
+      `Discovered ${totalDiscoveredFollowers} loaded followers.`
     );
 
-    let updatedCount = 0;
     const usernamesArray = Array.from(followerUsernames);
 
     for (const username of usernamesArray) {
@@ -560,23 +753,49 @@ async function checkFollowBacks() {
           "INSTAGRAM_REPLY_CHECKER",
           `Recorded follow-back state for lead @${username}`
         );
-        updatedCount++;
+        newFollowBacksCount++;
       }
     }
 
     logger.info(
       "INSTAGRAM_REPLY_CHECKER",
-      `Follow-back checks successfully completed. Marked ${updatedCount} profiles.`
+      `Follow-back checks successfully completed. Marked ${newFollowBacksCount} profiles.`
     );
-    return { success: true, newFollowBacksCount: updatedCount };
+    success = true;
+    return { success: true, newFollowBacksCount, totalDiscoveredFollowers };
   } catch (err) {
     logger.error(
       "INSTAGRAM_REPLY_CHECKER",
       "Fatal exception during checkFollowBacks scanning",
       err
     );
+    errMessage = err.message;
     throw err;
   } finally {
+    const durationMs = Date.now() - startTime;
+    try {
+      db.prepare(`
+        INSERT INTO telemetry_logs (platform, action_type, status, duration_ms, processed_count, success_count, error_count, details_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "instagram",
+        "check_follow_backs",
+        success ? "success" : "failed",
+        durationMs,
+        totalDiscoveredFollowers,
+        newFollowBacksCount,
+        success ? 0 : 1,
+        JSON.stringify({
+          newFollowBacksCount,
+          totalDiscoveredFollowers,
+          error: errMessage,
+          browserMode: browserState ? browserState.mode : "unknown"
+        })
+      );
+    } catch (telemetryErr) {
+      logger.error("INSTAGRAM_REPLY_CHECKER", "Failed to write checkFollowBacks telemetry", telemetryErr);
+    }
+
     if (browserState) {
       const { closeBrowser } = require("../automation/browserBase");
       await closeBrowser(

@@ -9,7 +9,9 @@ const fileMap = {
   CRM: 'crm.html',
   Scheduler: 'content-scheduler.html',
   Settings: 'settings.html',
-  InstagramWarmup: 'instagram-warmup.html'
+  InstagramWarmup: 'instagram-warmup.html',
+  Campaigns: 'campaigns.html',
+  CampaignDetail: 'campaign-detail.html'
 };
 
 function renderPage(res, page) {

@@ -11,8 +11,8 @@
  * T5 — Block detection triggers (ig_blocked_until settings lifecycle)
  * T6 — Settings API round-trip (GET & POST /api/settings/instagram)
  * T7 — Warmup pipeline API (GET /api/instagram/warmup-pipeline shape assertion)
+ * T8 — Playwright Context Diagnostics (Verifies headless Chromium execution & User-Agent injection)
  *
- * Pure logic and DB tests. No Playwright browsers are launched.
  */
 
 require("dotenv").config();
@@ -283,6 +283,36 @@ async function runTests() {
     assert(pipelineData.pipeline !== undefined, "Warmup-pipeline shape assertion failed: missing 'pipeline' key.");
     assert(Array.isArray(pipelineData.pipeline), "Warmup-pipeline shape assertion failed: 'pipeline' is not an array.");
     console.log("✅ T7 Warmup pipeline API — PASS\n");
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // T8 — Playwright Context Diagnostics
+    // ─────────────────────────────────────────────────────────────────────────
+    console.log("Running T8 — Playwright Context Diagnostics...");
+    const { chromium } = require("playwright");
+    
+    console.log("Initializing headless Playwright Chromium instance...");
+    const browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    
+    assert(browser !== null, "Playwright failed to launch Chromium browser.");
+    
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    });
+    
+    assert(context !== null, "Playwright failed to create browser context.");
+    
+    const page = await context.newPage();
+    assert(page !== null, "Playwright failed to create a new page.");
+    
+    const userAgentEvaluated = await page.evaluate(() => navigator.userAgent);
+    assert(userAgentEvaluated.includes("Chrome"), "User-Agent was not properly injected or evaluated.");
+    
+    await browser.close();
+    console.log("✅ T8 Playwright Context Diagnostics — PASS\n");
 
     // Cleanup & Shutdown successfully
     cleanupDb(db, testLeadId);
