@@ -122,11 +122,13 @@ async function humanTypeText(page, locatorOrSelector, text) {
   // Clear any existing text using keyboard select all if needed
   await page.keyboard.press("Control+A").catch(() => {});
   await page.keyboard.press("Backspace").catch(() => {});
-  
+
   for (let i = 0; i < text.length; i++) {
     await page.keyboard.type(text[i]);
     if (process.env.TEST_SPEEDUP !== "true") {
-      await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 100) + 50));
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.floor(Math.random() * 100) + 50),
+      );
     }
   }
 }
@@ -726,6 +728,51 @@ async function startTracing(context, platform, options = {}) {
   }
 }
 
+async function configureInstagramContext(context) {
+  await context.addInitScript(() => {
+    try {
+      const newProto = navigator.__proto__;
+      delete newProto.webdriver;
+    } catch (_) {}
+
+    try {
+      Object.defineProperty(navigator, "plugins", {
+        get: () => [
+          { name: "Chrome PDF Viewer" },
+          { name: "Chromium PDF Viewer" },
+          { name: "WebKit built-in PDF" },
+        ],
+      });
+    } catch (_) {}
+
+    try {
+      window.chrome = { runtime: {} };
+    } catch (_) {}
+  });
+
+  await context.grantPermissions(["geolocation"]).catch(() => {});
+  await context
+    .setGeolocation({ latitude: -1.2921, longitude: 36.8219 })
+    .catch(() => {});
+}
+
+function resolveInstagramCdpEndpoint(options = {}) {
+  const explicitEndpoint =
+    options.cdpEndpoint ||
+    getPlatformEnv("instagram", "CDP_ENDPOINT") ||
+    process.env.CDP_ENDPOINT;
+  if (explicitEndpoint) return explicitEndpoint;
+
+  const cdpPort =
+    options.cdpPort ||
+    getPlatformEnv("instagram", "CDP_PORT") ||
+    process.env.CDP_PORT ||
+    process.env.BROWSER_CDP_PORT;
+  if (cdpPort) return `http://127.0.0.1:${cdpPort}`;
+
+  return "http://127.0.0.1:9222";
+}
+
 async function captureFailureArtifact(page, platform, label) {
   if (!page || page.isClosed()) return null;
   const filePath = artifactPath(platform, label, "png");
@@ -935,17 +982,29 @@ async function closeBrowser(browser, platform, context, options = {}) {
   }
 
   try {
-    if (
-      options.shouldClosePageOnly &&
-      options.page &&
-      !options.page.isClosed()
-    ) {
-      // CDP mode: close only the automation tab, keep Chrome running
-      await options.page.close();
-      logger.info(
-        "BROWSER",
-        `Closed automation tab for ${platform} (Chrome stays open)`,
-      );
+    if (options.shouldClosePageOnly) {
+      const pageToClose =
+        options.page && !options.page.isClosed()
+          ? options.page
+          : context && typeof context.pages === "function"
+            ? context
+                .pages()
+                .filter((candidate) => candidate && !candidate.isClosed())
+                .pop()
+            : null;
+
+      if (pageToClose && !pageToClose.isClosed()) {
+        // CDP mode: close only the automation tab, keep Chrome running
+        await pageToClose.close();
+        logger.info(
+          "BROWSER",
+          `Closed automation tab for ${platform} (Chrome stays open)`,
+        );
+      } else {
+        logger.warn("BROWSER", "No automation tab found to close", {
+          platform,
+        });
+      }
     } else if (options.shouldCloseBrowser !== false) {
       if (context && options.mode === "persistent") {
         await context.close();
@@ -972,6 +1031,19 @@ async function closeBrowser(browser, platform, context, options = {}) {
   }
 }
 
+async function closeBrowserContext(platform, browserState) {
+  if (!browserState) return;
+
+  await closeBrowser(browserState.browser, platform, browserState.context, {
+    mode: browserState.mode,
+    tracePath: browserState.tracePath,
+    shouldCloseBrowser: browserState.shouldCloseBrowser,
+    shouldClosePageOnly: browserState.shouldClosePageOnly,
+    page: browserState.page,
+    lock: browserState.lock,
+  });
+}
+
 async function closeAllBrowsers() {
   const states = Array.from(ACTIVE_BROWSER_STATES);
   await Promise.allSettled(
@@ -991,21 +1063,21 @@ const INSTAGRAM_AUTH_SELECTORS = [
   'a[href="/"]',
   'a[href*="/direct/inbox/"]',
   'svg[aria-label="Home"]',
-  'svg[aria-label="New post"]'
+  'svg[aria-label="New post"]',
 ];
 
 const INSTAGRAM_LOGIN_SELECTORS = [
   'input[name="username"]',
   'input[name="password"]',
   'button[type="submit"]',
-  'form#loginForm'
+  "form#loginForm",
 ];
 
 const INSTAGRAM_CAPTCHA_SELECTORS = [
   'iframe[title*="recaptcha" i]',
-  '#recaptcha',
+  "#recaptcha",
   'iframe[src*="recaptcha" i]',
-  '.checkpoint-content'
+  ".checkpoint-content",
 ];
 
 const INSTAGRAM_BLOCK_PHRASES = [
@@ -1013,7 +1085,7 @@ const INSTAGRAM_BLOCK_PHRASES = [
   "try again later",
   "we limit how often you can",
   "temporarily blocked",
-  "restrict"
+  "restrict",
 ];
 
 // ── Instagram Helper Functions ───────────────────────────────────────────────
@@ -1038,26 +1110,31 @@ function getSelectorHealthReport() {
   const warnings = [];
   for (const [selector, count] of Object.entries(igSelectorFailures)) {
     if (count > 3) {
-      warnings.push(`[SELECTOR WARNING] Selector "${selector}" has failed ${count} times in this session.`);
+      warnings.push(
+        `[SELECTOR WARNING] Selector "${selector}" has failed ${count} times in this session.`,
+      );
     }
   }
   return {
     failures: igSelectorFailures,
-    warnings
+    warnings,
   };
 }
 
 function setInstagramBlockedUntil(hours = 24) {
   const db = getDb();
   const resumesAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
-  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('ig_blocked_until', ?)")
-    .run(resumesAt);
+  db.prepare(
+    "INSERT OR REPLACE INTO settings (key, value) VALUES ('ig_blocked_until', ?)",
+  ).run(resumesAt);
   return resumesAt;
 }
 
 function isInstagramBlocked() {
   const db = getDb();
-  const row = db.prepare("SELECT value FROM settings WHERE key = 'ig_blocked_until'").get();
+  const row = db
+    .prepare("SELECT value FROM settings WHERE key = 'ig_blocked_until'")
+    .get();
   if (!row || !row.value) {
     return { blocked: false, resumesAt: null };
   }
@@ -1077,7 +1154,7 @@ async function checkForInstagramBlock(page, emitter = null) {
   if (matchedPhrase) {
     const resumesAt = setInstagramBlockedUntil(24);
     const message = `Instagram action block detected: "${matchedPhrase}". Resuming at ${resumesAt}`;
-    
+
     if (emitter) {
       if (typeof emitter === "function") {
         try {
@@ -1094,13 +1171,21 @@ async function checkForInstagramBlock(page, emitter = null) {
     try {
       await sendNotification(
         "[GTSS] Instagram action block detected",
-        `An action block was encountered during Instagram automation.\n\nBlock Phrase: "${matchedPhrase}"\n\nAutomation will be paused until ${resumesAt} (24 hours).`
+        `An action block was encountered during Instagram automation.\n\nBlock Phrase: "${matchedPhrase}"\n\nAutomation will be paused until ${resumesAt} (24 hours).`,
       );
     } catch (err) {
-      logger.error("INSTAGRAM_BLOCK", "Failed to send block email notification", err);
+      logger.error(
+        "INSTAGRAM_BLOCK",
+        "Failed to send block email notification",
+        err,
+      );
     }
 
-    return { blocked: true, reason: `Instagram action block detected: "${matchedPhrase}"`, resumesAt };
+    return {
+      blocked: true,
+      reason: `Instagram action block detected: "${matchedPhrase}"`,
+      resumesAt,
+    };
   }
   return { blocked: false, reason: "", resumesAt: null };
 }
@@ -1115,7 +1200,7 @@ async function checkInstagramSessionState(page) {
 
   const blockCheck = await checkForInstagramBlock(page);
   if (blockCheck.blocked) {
-    return 'blocked';
+    return "blocked";
   }
 
   const url = page.url().toLowerCase();
@@ -1127,7 +1212,7 @@ async function checkInstagramSessionState(page) {
     (await firstVisible(page, INSTAGRAM_CAPTCHA_SELECTORS, 2000));
 
   if (captchaDetected) {
-    return 'captcha';
+    return "captcha";
   }
 
   // Check for logged_out / login page
@@ -1137,7 +1222,7 @@ async function checkInstagramSessionState(page) {
     (await firstVisible(page, INSTAGRAM_LOGIN_SELECTORS, 2000));
 
   if (loggedOutDetected) {
-    return 'logged_out';
+    return "logged_out";
   }
 
   // Check for authenticated
@@ -1146,10 +1231,10 @@ async function checkInstagramSessionState(page) {
     (await firstVisible(page, INSTAGRAM_AUTH_SELECTORS, 2000));
 
   if (authenticatedDetected) {
-    return 'authenticated';
+    return "authenticated";
   }
 
-  return 'unknown';
+  return "unknown";
 }
 
 /**
@@ -1210,7 +1295,10 @@ async function simulateOrganicBrowse(page, username = null) {
       const postUrl = await postElement.getAttribute("href").catch(() => "");
       const fullUrl = postUrl ? `https://www.instagram.com${postUrl}` : "";
 
-      logger.info("BROWSER", `Clicking post ${i + 1}/${targetCount} at index ${postIdx}`);
+      logger.info(
+        "BROWSER",
+        `Clicking post ${i + 1}/${targetCount} at index ${postIdx}`,
+      );
       try {
         await humanMouseMove(page, postElement);
         await humanDelay(300, 600);
@@ -1223,35 +1311,56 @@ async function simulateOrganicBrowse(page, username = null) {
         const closeBtnSelectors = [
           'svg[aria-label="Close"]',
           'div[role="button"] svg[aria-label="Close"]',
-          'button svg[aria-label="Close"]'
+          'button svg[aria-label="Close"]',
         ];
-        const closeBtn = await firstVisible(page, closeBtnSelectors, 2000).catch(() => null);
+        const closeBtn = await firstVisible(
+          page,
+          closeBtnSelectors,
+          2000,
+        ).catch(() => null);
         if (closeBtn) {
           await humanMouseMove(page, closeBtn);
           await humanDelay(300, 600);
           await closeBtn.click();
         } else {
-          logger.info("BROWSER", "Close button not found, performing back navigation.");
+          logger.info(
+            "BROWSER",
+            "Close button not found, performing back navigation.",
+          );
           await page.goBack({ waitUntil: "domcontentloaded" }).catch(() => {});
         }
         await humanDelay(2000, 4000);
 
         if (fullUrl) {
-          logger.info("BROWSER", `[viewed_post] Organically viewed post: ${fullUrl}`);
+          logger.info(
+            "BROWSER",
+            `[viewed_post] Organically viewed post: ${fullUrl}`,
+          );
         }
       } catch (err) {
-        logger.warn("BROWSER", `Failed during organic post browse for index ${postIdx}: ${err.message}`);
+        logger.warn(
+          "BROWSER",
+          `Failed during organic post browse for index ${postIdx}: ${err.message}`,
+        );
       }
     }
   } else {
-    logger.info("BROWSER", "Simulating organic browse on Instagram home feed...");
-    await page.goto("https://www.instagram.com/", { waitUntil: "domcontentloaded" });
+    logger.info(
+      "BROWSER",
+      "Simulating organic browse on Instagram home feed...",
+    );
+    await page.goto("https://www.instagram.com/", {
+      waitUntil: "domcontentloaded",
+    });
     await humanDelay(3000, 6000);
 
     const scrollCount = Math.floor(Math.random() * 2) + 2;
     for (let i = 0; i < scrollCount; i++) {
       await humanScroll(page);
-      logger.info("BROWSER", `Completed organic scroll ${i + 1}/${scrollCount}`);
+      logger.info(
+        "BROWSER",
+        `Completed organic scroll ${i + 1}/${scrollCount}`,
+      );
       await humanDelay(5000, 15000);
     }
   }
@@ -1262,10 +1371,13 @@ async function simulateOrganicBrowse(page, username = null) {
  */
 async function dailySessionWarmup(page, fastTrack = false) {
   const startTime = Date.now();
-  logger.info("BROWSER", `Starting daily Instagram session warmup (fastTrack: ${fastTrack})...`);
-  
+  logger.info(
+    "BROWSER",
+    `Starting daily Instagram session warmup (fastTrack: ${fastTrack})...`,
+  );
+
   await simulateOrganicBrowse(page);
-  
+
   const elapsed = Date.now() - startTime;
   const targetTotalMs = fastTrack
     ? Math.floor(Math.random() * 5000) + 5000
@@ -1273,7 +1385,10 @@ async function dailySessionWarmup(page, fastTrack = false) {
 
   const remainingWait = targetTotalMs - elapsed;
   if (remainingWait > 0) {
-    logger.info("BROWSER", `Warmup elapsed: ${elapsed}ms. Waiting remaining ${remainingWait}ms to complete...`);
+    logger.info(
+      "BROWSER",
+      `Warmup elapsed: ${elapsed}ms. Waiting remaining ${remainingWait}ms to complete...`,
+    );
     await humanDelay(remainingWait, remainingWait);
   } else {
     logger.info("BROWSER", `Warmup organic browse completed in ${elapsed}ms`);
@@ -1284,56 +1399,147 @@ async function dailySessionWarmup(page, fastTrack = false) {
 }
 
 /**
- * Headed custom browser configuration designed specifically for Instagram.
+ * Browser configuration designed specifically for Instagram.
  */
 async function createInstagramBrowser(options = {}) {
-  logger.info("BROWSER", "Launching Instagram browser (mandatory headed mode)...");
+  logger.info(
+    "BROWSER",
+    "Launching Instagram browser (prefers an existing Chrome tab when available)...",
+  );
 
-  // Mandatory headless: false
-  const headless = false;
-  
   const userAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-  
+  const cookies = loadSession("instagram");
+  const requestedMode = String(options.mode || "").toLowerCase();
+  const cdpEndpoint = resolveInstagramCdpEndpoint(options);
+
+  if (requestedMode !== "persistent" && cdpEndpoint) {
+    let lock = null;
+
+    try {
+      lock = acquireBrowserLock("instagram", "cdp", cdpEndpoint);
+      logger.info(
+        "BROWSER",
+        "Attaching Instagram automation to Chrome via CDP",
+        {
+          endpoint: cdpEndpoint,
+        },
+      );
+
+      const browser = await chromium.connectOverCDP(cdpEndpoint);
+      const context =
+        browser.contexts()[0] ||
+        (await browser.newContext({
+          userAgent,
+          viewport: { width: 1280, height: 800 },
+          locale: "en-US",
+          timezoneId: "Africa/Nairobi",
+          geolocation: { latitude: -1.2921, longitude: 36.8219 },
+          permissions: ["geolocation"],
+        }));
+
+      await configureInstagramContext(context);
+
+      if (cookies && cookies.length > 0) {
+        await context.addCookies(cookies);
+        logger.info(
+          "BROWSER",
+          `Loaded ${cookies.length} session cookies for Instagram`,
+        );
+      } else {
+        logger.info(
+          "BROWSER",
+          "No existing cookie session found for Instagram",
+        );
+      }
+
+      const page = await context.newPage();
+      await page.bringToFront().catch(() => {});
+      const tracePath = await startTracing(context, "instagram", options);
+
+      try {
+        logger.info(
+          "BROWSER",
+          "Navigating to Instagram home to check session...",
+        );
+        await page
+          .goto("https://www.instagram.com/", {
+            waitUntil: "domcontentloaded",
+          })
+          .catch(() => {});
+        await humanDelay(2000, 4000);
+
+        const sessionState = await checkInstagramSessionState(page);
+        logger.info(
+          "BROWSER",
+          `Instagram session state detected: ${sessionState}`,
+        );
+
+        if (sessionState === "authenticated") {
+          const db = getDb();
+          const settingRow = db
+            .prepare(
+              "SELECT value FROM settings WHERE key = 'ig_warmup_fast_track'",
+            )
+            .get();
+          const fastTrack = settingRow && String(settingRow.value) === "1";
+
+          await dailySessionWarmup(page, fastTrack);
+        }
+      } catch (err) {
+        logger.error(
+          "BROWSER",
+          `Failed during Instagram session recovery/warmup check: ${err.message}`,
+        );
+      }
+
+      return trackBrowserState({
+        platform: "instagram",
+        browser,
+        context,
+        page,
+        mode: "cdp",
+        tracePath,
+        shouldCloseBrowser: false,
+        shouldClosePageOnly: true,
+        lock,
+      });
+    } catch (error) {
+      releaseBrowserLock(lock);
+      logger.warn(
+        "BROWSER",
+        "Failed to attach Instagram automation to a running Chrome tab; falling back to standalone Chromium",
+        {
+          endpoint: cdpEndpoint,
+          error: error.message,
+        },
+      );
+    }
+  }
+
+  logger.info("BROWSER", "Launching standalone Instagram Chromium instance...");
+
   const browser = await chromium.launch({
-    headless,
-    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox']
+    headless: false,
+    args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"],
   });
 
   const context = await browser.newContext({
     userAgent,
     viewport: { width: 1280, height: 800 },
-    locale: 'en-US',
-    timezoneId: 'Africa/Nairobi',
+    locale: "en-US",
+    timezoneId: "Africa/Nairobi",
     geolocation: { latitude: -1.2921, longitude: 36.8219 },
-    permissions: ['geolocation']
+    permissions: ["geolocation"],
   });
 
-  // Injection script to minimize automation footprint
-  await context.addInitScript(() => {
-    try {
-      const newProto = navigator.__proto__;
-      delete newProto.webdriver;
-    } catch (_) {}
-    
-    try {
-      Object.defineProperty(navigator, 'plugins', {
-        get: () => [
-          { name: 'Chrome PDF Viewer' },
-          { name: 'Chromium PDF Viewer' },
-          { name: 'WebKit built-in PDF' }
-        ]
-      });
-    } catch (_) {}
-    
-    try {
-      window.chrome = { runtime: {} };
-    } catch (_) {}
-  });
+  await configureInstagramContext(context);
 
-  const cookies = loadSession("instagram");
   if (cookies && cookies.length > 0) {
     await context.addCookies(cookies);
-    logger.info("BROWSER", `Loaded ${cookies.length} session cookies for Instagram`);
+    logger.info(
+      "BROWSER",
+      `Loaded ${cookies.length} session cookies for Instagram`,
+    );
   } else {
     logger.info("BROWSER", "No existing cookie session found for Instagram");
   }
@@ -1343,21 +1549,30 @@ async function createInstagramBrowser(options = {}) {
 
   try {
     logger.info("BROWSER", "Navigating to Instagram home to check session...");
-    await page.goto("https://www.instagram.com/", { waitUntil: "domcontentloaded" }).catch(() => {});
+    await page
+      .goto("https://www.instagram.com/", { waitUntil: "domcontentloaded" })
+      .catch(() => {});
     await humanDelay(2000, 4000);
-    
+
     const sessionState = await checkInstagramSessionState(page);
     logger.info("BROWSER", `Instagram session state detected: ${sessionState}`);
-    
+
     if (sessionState === "authenticated") {
       const db = getDb();
-      const settingRow = db.prepare("SELECT value FROM settings WHERE key = 'ig_warmup_fast_track'").get();
+      const settingRow = db
+        .prepare(
+          "SELECT value FROM settings WHERE key = 'ig_warmup_fast_track'",
+        )
+        .get();
       const fastTrack = settingRow && String(settingRow.value) === "1";
-      
+
       await dailySessionWarmup(page, fastTrack);
     }
   } catch (err) {
-    logger.error("BROWSER", `Failed during Instagram session recovery/warmup check: ${err.message}`);
+    logger.error(
+      "BROWSER",
+      `Failed during Instagram session recovery/warmup check: ${err.message}`,
+    );
   }
 
   return trackBrowserState({
@@ -1375,6 +1590,7 @@ async function createInstagramBrowser(options = {}) {
 module.exports = {
   createBrowser,
   closeBrowser,
+  closeBrowserContext,
   humanDelay,
   humanTypeText,
   humanScroll,
@@ -1389,7 +1605,7 @@ module.exports = {
   releaseBrowserLock,
   closeAllBrowsers,
   normalizeHeadless,
-  
+
   // Instagram Extensions
   firstVisible,
   INSTAGRAM_AUTH_SELECTORS,

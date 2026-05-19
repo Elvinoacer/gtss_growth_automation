@@ -1,211 +1,789 @@
-<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="utf-8"/>
-<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Dashboard - GTSS Growth Engine</title>
-<meta name="description" content="GTSS Growth Engine analytics dashboard — track leads, outreach funnels, automation health, and content scheduling."/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com" rel="preconnect"/>
-<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet"/>
-<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-  tailwind.config = {
-    theme: {
-      extend: {
-        colors: {
-          "primary":"#004ac6","on-primary":"#fff","primary-container":"#2563eb","on-primary-container":"#eeefff",
-          "secondary":"#515f74","secondary-container":"#d5e3fd",
-          "surface":"#f7f9fb","on-surface":"#191c1e","surface-variant":"#e0e3e5","on-surface-variant":"#434655",
-          "outline":"#737686","outline-variant":"#c3c6d7",
-          "error":"#ba1a1a","error-container":"#ffdad6",
-          "inverse-surface":"#2d3133","surface-container-lowest":"#ffffff",
-          "surface-container-low":"#f2f4f6","surface-container":"#eceef0",
-          "primary-fixed":"#dbe1ff","primary-fixed-dim":"#b4c5ff","surface-bright":"#f7f9fb"
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dashboard - GTSS Growth Engine</title>
+    <meta
+      name="description"
+      content="GTSS Growth Engine analytics dashboard — track leads, outreach funnels, automation health, and content scheduling."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/css/style.css" />
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: "#0ea5e9",
+              "primary-strong": "#0369a1",
+              "primary-soft": "#cffafe",
+              surface: "#07111f",
+              "surface-strong": "#0b1727",
+              "surface-muted": "#132238",
+              "surface-card": "rgba(8, 15, 30, 0.72)",
+              "surface-card-strong": "rgba(10, 20, 38, 0.9)",
+              "on-surface": "#edf2ff",
+              "on-surface-muted": "#9fb0cf",
+              outline: "rgba(155, 176, 214, 0.22)",
+              success: "#22c55e",
+              warning: "#f59e0b",
+              danger: "#f87171",
+            },
+            fontFamily: {
+              body: ["Inter", "system-ui", "sans-serif"],
+              mono: ["JetBrains Mono", "monospace"],
+            },
+            boxShadow: {
+              glass: "0 24px 80px rgba(0, 0, 0, 0.35)",
+              glow: "0 0 0 1px rgba(255, 255, 255, 0.08), 0 24px 80px rgba(0, 0, 0, 0.35)",
+            },
+          },
         },
-        spacing:{"sidebar-width":"260px","margin-page":"1.5rem"},
-        fontFamily:{"body-sm":["Inter"],"headline-md":["Inter"],"label-caps":["Inter"],"mono-code":["JetBrains Mono"]},
-        fontSize:{
-          "headline-md":["20px",{lineHeight:"28px",letterSpacing:"-0.01em",fontWeight:"600"}],
-          "label-caps":["11px",{lineHeight:"16px",letterSpacing:"0.05em",fontWeight:"600"}],
-          "body-sm":["14px",{lineHeight:"20px",fontWeight:"400"}],
-          "body-xs":["12px",{lineHeight:"16px",fontWeight:"400"}],
-          "mono-code":["12px",{lineHeight:"18px",fontWeight:"400"}]
+      };
+    </script>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      body {
+        background:
+          radial-gradient(
+            circle at top left,
+            rgba(14, 165, 233, 0.22),
+            transparent 30%
+          ),
+          radial-gradient(
+            circle at top right,
+            rgba(96, 165, 250, 0.18),
+            transparent 26%
+          ),
+          linear-gradient(180deg, #050b15 0%, #081120 45%, #09101b 100%);
+        color: #edf2ff;
+        font-family: Inter, system-ui, sans-serif;
+      }
+
+      .material-symbols-outlined {
+        font-variation-settings:
+          "FILL" 0,
+          "wght" 400,
+          "GRAD" 0,
+          "opsz" 24;
+      }
+
+      .glass-panel {
+        background: linear-gradient(
+          180deg,
+          rgba(8, 15, 30, 0.9),
+          rgba(15, 23, 42, 0.82)
+        );
+        border: 1px solid rgba(148, 163, 184, 0.26);
+        backdrop-filter: blur(22px);
+        -webkit-backdrop-filter: blur(22px);
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.3);
+      }
+
+      .glass-panel-soft {
+        background: rgba(11, 18, 34, 0.78);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+      }
+
+      .hero-orb {
+        position: absolute;
+        inset: auto auto 0 0;
+        width: clamp(220px, 30vw, 420px);
+        height: clamp(220px, 30vw, 420px);
+        border-radius: 999px;
+        background: radial-gradient(
+          circle,
+          rgba(14, 165, 233, 0.28),
+          rgba(14, 165, 233, 0) 68%
+        );
+        filter: blur(8px);
+        pointer-events: none;
+      }
+
+      .hero-grid {
+        position: relative;
+        overflow: hidden;
+      }
+
+      .hero-grid::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image:
+          linear-gradient(rgba(148, 163, 184, 0.07) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(148, 163, 184, 0.07) 1px, transparent 1px);
+        background-size: 38px 38px;
+        mask-image: linear-gradient(
+          180deg,
+          rgba(0, 0, 0, 0.4),
+          transparent 90%
+        );
+        pointer-events: none;
+      }
+
+      @keyframes float-in {
+        0% {
+          opacity: 0;
+          transform: translateY(14px) scale(0.985);
+        }
+        100% {
+          opacity: 1;
+          transform: translateY(0) scale(1);
         }
       }
-    }
-  }
-</script>
-<style>
-  .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24}
-  .icon-fill{font-variation-settings:'FILL' 1}
-  @keyframes pulse-in{0%{opacity:0;transform:translateY(8px)}100%{opacity:1;transform:translateY(0)}}
-  .animate-card{animation:pulse-in .45s ease-out both}
-  .animate-card:nth-child(2){animation-delay:.06s}
-  .animate-card:nth-child(3){animation-delay:.12s}
-  .animate-card:nth-child(4){animation-delay:.18s}
-  .animate-card:nth-child(5){animation-delay:.24s}
-  .animate-card:nth-child(6){animation-delay:.30s}
-</style>
-<link rel="stylesheet" href="/css/style.css">
-</head>
-<body data-page-title="Dashboard">
-<main class="page-content">
-<!-- Sidebar -->
-<nav class="fixed left-0 top-0 h-full w-[260px] bg-inverse-surface border-r border-outline-variant flex flex-col py-6 z-20">
-  <div class="px-6 mb-8 flex items-center gap-3">
-    <div class="w-8 h-8 rounded bg-primary flex items-center justify-center text-on-primary font-bold">GE</div>
-    <div><h1 class="text-headline-md font-bold text-on-primary-container">Growth Engine</h1><p class="text-surface-variant text-body-xs opacity-70">GTSS Internal Ops</p></div>
-  </div>
-  <div class="flex flex-col flex-1 px-4 gap-1">
-    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-primary-fixed bg-primary-fixed-dim/20 font-bold border-l-4 border-primary" href="/"><span class="material-symbols-outlined text-[20px] icon-fill">dashboard</span>Dashboard</a>
-    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/discovery"><span class="material-symbols-outlined text-[20px]">search</span>Lead Discovery</a>
-    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/qualification"><span class="material-symbols-outlined text-[20px]">verified_user</span>Qualification</a>
-    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/messages"><span class="material-symbols-outlined text-[20px]">chat</span>Messages</a>
-    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/automation"><span class="material-symbols-outlined text-[20px]">smart_toy</span>Automation</a>
-    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/crm"><span class="material-symbols-outlined text-[20px]">account_tree</span>CRM Pipeline</a>
-    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/scheduler"><span class="material-symbols-outlined text-[20px]">calendar_month</span>Content Scheduler</a>
-    <a class="flex items-center gap-3 px-4 py-2.5 rounded text-surface-variant hover:text-white hover:bg-surface-variant/10 transition-colors" href="/settings"><span class="material-symbols-outlined text-[20px]">settings</span>Settings</a>
-  </div>
-</nav>
 
-<!-- Main area -->
-<div class="ml-[260px] flex-1 flex flex-col h-screen overflow-hidden bg-surface">
-  <!-- Top bar -->
-  <header class="flex justify-between items-center h-16 px-margin-page border-b border-outline-variant bg-surface-container-lowest z-10 flex-shrink-0">
-    <span class="font-headline-md font-bold text-on-surface">Dashboard</span>
-    <div class="flex items-center gap-3">
-      <div class="relative">
-        <button id="export-btn" class="flex items-center gap-1 px-3 py-1.5 border border-outline-variant rounded text-body-sm text-on-surface-variant hover:bg-surface-variant transition-colors">
-          <span class="material-symbols-outlined text-[16px]">download</span> Export
-        </button>
-        <div id="export-dropdown" class="hidden absolute right-0 top-10 bg-surface-container-lowest border border-outline-variant rounded shadow-lg z-30 w-44 py-1">
-          <a href="/api/dashboard/export?dataType=leads" class="block px-4 py-2 text-body-sm hover:bg-surface-container-low">Leads CSV</a>
-          <a href="/api/dashboard/export?dataType=messages" class="block px-4 py-2 text-body-sm hover:bg-surface-container-low">Messages CSV</a>
-          <a href="/api/dashboard/export?dataType=touchpoints" class="block px-4 py-2 text-body-sm hover:bg-surface-container-low">Touchpoints CSV</a>
-          <a href="/api/dashboard/export?dataType=posts" class="block px-4 py-2 text-body-sm hover:bg-surface-container-low">Posts CSV</a>
-          <a href="/api/dashboard/export?dataType=all" class="block px-4 py-2 text-body-sm hover:bg-surface-container-low border-t border-outline-variant">All Data CSV</a>
-        </div>
-      </div>
-    </div>
-  </header>
+      .animate-card {
+        animation: float-in 520ms ease-out both;
+      }
 
-  <!-- Scrollable content -->
-  <main class="flex-1 p-margin-page overflow-y-auto space-y-6">
+      .animate-card:nth-child(2) {
+        animation-delay: 70ms;
+      }
 
-    <!-- ══════ STAT CARDS ══════ -->
-    <div id="stat-cards" class="grid grid-cols-6 gap-4">
-      <div class="animate-card bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4">
-        <div class="text-body-xs text-on-surface-variant mb-1">Total Leads</div>
-        <div id="stat-total" class="text-2xl font-bold text-on-surface">—</div>
-        <div id="stat-delta" class="text-body-xs text-green-600 mt-1"></div>
-      </div>
-      <div class="animate-card bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4">
-        <div class="text-body-xs text-on-surface-variant mb-1">Qualified</div>
-        <div id="stat-qualified" class="text-2xl font-bold text-on-surface">—</div>
-        <div id="stat-qualified-pct" class="text-body-xs text-on-surface-variant mt-1"></div>
-      </div>
-      <div class="animate-card bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4">
-        <div class="text-body-xs text-on-surface-variant mb-1">Messages Sent</div>
-        <div id="stat-messaged" class="text-2xl font-bold text-on-surface">—</div>
-        <div id="stat-messaged-week" class="text-body-xs text-on-surface-variant mt-1"></div>
-      </div>
-      <div class="animate-card bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4">
-        <div class="text-body-xs text-on-surface-variant mb-1">Replies</div>
-        <div id="stat-replied" class="text-2xl font-bold text-on-surface">—</div>
-        <div id="stat-reply-rate" class="text-body-xs text-on-surface-variant mt-1"></div>
-      </div>
-      <div class="animate-card bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4">
-        <div class="text-body-xs text-on-surface-variant mb-1">Meetings Booked</div>
-        <div id="stat-meetings" class="text-2xl font-bold text-primary">—</div>
-      </div>
-      <div class="animate-card bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4">
-        <div class="text-body-xs text-on-surface-variant mb-1">Converted</div>
-        <div id="stat-converted" class="text-2xl font-bold text-green-600">—</div>
-      </div>
-    </div>
+      .animate-card:nth-child(3) {
+        animation-delay: 140ms;
+      }
 
-    <!-- ══════ ROW 2: Funnel + Actions ══════ -->
-    <div class="grid grid-cols-3 gap-6">
+      .animate-card:nth-child(4) {
+        animation-delay: 210ms;
+      }
 
-      <!-- Funnel Chart -->
-      <div class="col-span-2 bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-5">
-        <div class="flex justify-between items-center mb-4">
-          <h2 class="font-headline-md text-headline-md text-on-surface">Outreach Funnel</h2>
-          <div class="flex rounded border border-outline-variant overflow-hidden">
-            <button id="funnel-all-btn" class="px-3 py-1 text-body-xs bg-primary text-on-primary font-semibold">All Platforms</button>
-            <button id="funnel-platform-btn" class="px-3 py-1 text-body-xs bg-surface text-on-surface-variant hover:bg-surface-variant transition-colors">By Platform</button>
+      .animate-card:nth-child(5) {
+        animation-delay: 280ms;
+      }
+
+      .animate-card:nth-child(6) {
+        animation-delay: 350ms;
+      }
+
+      .animate-card:nth-child(7) {
+        animation-delay: 420ms;
+      }
+
+      .focus-ring:focus-visible,
+      .page-content a:focus-visible,
+      .page-content button:focus-visible,
+      .gtss-sidebar a:focus-visible,
+      .gtss-sidebar button:focus-visible {
+        outline: 2px solid #38bdf8;
+        outline-offset: 3px;
+      }
+
+      .page-content {
+        background:
+          radial-gradient(
+            circle at top left,
+            rgba(14, 165, 233, 0.12),
+            transparent 28%
+          ),
+          radial-gradient(
+            circle at top right,
+            rgba(96, 165, 250, 0.1),
+            transparent 24%
+          ),
+          linear-gradient(180deg, #050b15 0%, #08111f 100%) !important;
+        color: #e2e8f0 !important;
+      }
+
+      .page-content > main {
+        background: transparent !important;
+      }
+
+      .dashboard-shell {
+        color: #e2e8f0;
+      }
+
+      .dashboard-shell section,
+      .dashboard-shell article,
+      .dashboard-shell .glass-panel,
+      .dashboard-shell .glass-panel-soft {
+        border-radius: 28px !important;
+      }
+
+      .page-content .glass-panel,
+      .page-content .glass-panel-soft {
+        color: #e2e8f0;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.34);
+      }
+
+      .page-content .glass-panel {
+        background: linear-gradient(
+          180deg,
+          rgba(15, 23, 42, 0.96),
+          rgba(15, 23, 42, 0.84)
+        );
+        border: 1px solid rgba(148, 163, 184, 0.22);
+      }
+
+      .page-content .glass-panel-soft {
+        background: rgba(15, 23, 42, 0.78);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+      }
+
+      .page-content .gtss-card,
+      .page-content .gtss-stat-card {
+        background: rgba(15, 23, 42, 0.78);
+        border-color: rgba(148, 163, 184, 0.18);
+        color: #e2e8f0;
+      }
+
+      .page-content .gtss-stat-card span,
+      .page-content .gtss-stat-card small {
+        color: #cbd5e1;
+      }
+
+      .page-content .gtss-stat-card strong {
+        color: #f8fafc;
+      }
+
+      .page-content .gtss-sidebar {
+        background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
+        border-right-color: rgba(148, 163, 184, 0.16);
+      }
+
+      .page-content .gtss-brand-label,
+      .page-content .gtss-nav__link,
+      .page-content .gtss-session-row,
+      .page-content .gtss-notification-item {
+        color: #cbd5e1;
+      }
+
+      .page-content .gtss-nav__link:hover,
+      .page-content .gtss-nav__link.active {
+        background: rgba(14, 165, 233, 0.16);
+        color: #ffffff;
+        border-left-color: #38bdf8;
+      }
+
+      .page-content .gtss-sidebar-toggle,
+      .page-content .gtss-bell,
+      .page-content .gtss-logout {
+        background: rgba(15, 23, 42, 0.9);
+        border-color: rgba(148, 163, 184, 0.18);
+        color: #f8fafc;
+      }
+
+      .page-content .gtss-session-status,
+      .page-content .gtss-notification-dropdown {
+        background: rgba(15, 23, 42, 0.9);
+        border-color: rgba(148, 163, 184, 0.18);
+      }
+
+      .page-content .gtss-status-dot {
+        box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.12);
+      }
+
+      .page-content .data-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .page-content .data-table th,
+      .page-content .data-table td {
+        padding: 14px 16px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+        text-align: left;
+      }
+
+      .page-content .data-table th {
+        color: #94a3b8;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .page-content .data-table td {
+        color: #e2e8f0;
+      }
+
+      .page-content .gtss-empty-state,
+      .page-content #actions-panel p,
+      .page-content #replies-feed p,
+      .page-content #upcoming-posts p {
+        color: #cbd5e1;
+      }
+
+      @media (max-width: 1024px) {
+        .hero-stack {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 820px) {
+        .dashboard-shell {
+          padding: 18px;
+        }
+
+        .hero-title {
+          font-size: clamp(2rem, 8vw, 3.25rem);
+        }
+      }
+    </style>
+  </head>
+  <body data-page-title="Dashboard">
+    <!-- SHELL -->
+    <main class="page-content">
+      <div
+        class="dashboard-shell relative mx-auto flex w-full max-w-[1600px] flex-col gap-6 px-4 py-4 sm:px-6 lg:px-8 lg:py-6"
+      >
+        <section
+          class="hero-grid glass-panel relative rounded-[28px] p-6 sm:p-8 lg:p-10"
+        >
+          <div class="hero-orb"></div>
+          <div
+            class="relative z-10 grid gap-6 hero-stack lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)] lg:items-end"
+          >
+            <div class="space-y-6">
+              <div
+                class="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-100/90"
+              >
+                <span
+                  class="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_0_6px_rgba(34,197,94,0.14)]"
+                ></span>
+                Growth cockpit
+              </div>
+              <div class="max-w-3xl space-y-4">
+                <p
+                  class="text-sm font-semibold uppercase tracking-[0.2em] text-sky-200/70"
+                >
+                  Dashboard overview
+                </p>
+                <h1
+                  class="hero-title text-4xl font-extrabold leading-[0.96] text-white sm:text-5xl lg:text-6xl"
+                >
+                  A premium command center for outreach, pipeline, and content
+                  velocity.
+                </h1>
+                <p
+                  class="max-w-2xl text-base leading-7 text-slate-300 sm:text-lg"
+                >
+                  Track discovery, qualification, automation, publishing, and
+                  replies from a single responsive surface designed for fast
+                  scanning and clear decision-making.
+                </p>
+              </div>
+              <div class="flex flex-wrap gap-3">
+                <a
+                  href="/discovery"
+                  class="focus-ring inline-flex items-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-sky-500/20 transition-transform hover:-translate-y-0.5"
+                >
+                  <span class="material-symbols-outlined text-[18px]"
+                    >search</span
+                  >
+                  Launch discovery
+                </a>
+                <a
+                  href="/crm"
+                  class="focus-ring inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5 hover:bg-white/10"
+                >
+                  <span class="material-symbols-outlined text-[18px]"
+                    >account_tree</span
+                  >
+                  Review CRM
+                </a>
+                <button
+                  id="export-btn"
+                  type="button"
+                  class="focus-ring inline-flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/30 px-5 py-3 text-sm font-semibold text-slate-100 transition-transform hover:-translate-y-0.5 hover:bg-slate-950/50"
+                >
+                  <span class="material-symbols-outlined text-[18px]"
+                    >download</span
+                  >
+                  Export data
+                </button>
+                <div class="relative">
+                  <div
+                    id="export-dropdown"
+                    class="glass-panel-soft absolute right-0 top-2 z-30 hidden w-56 overflow-hidden rounded-2xl py-2 shadow-glow"
+                  >
+                    <a
+                      href="/api/dashboard/export?dataType=leads"
+                      class="block px-4 py-3 text-sm text-slate-100 hover:bg-white/10"
+                      >Leads CSV</a
+                    >
+                    <a
+                      href="/api/dashboard/export?dataType=messages"
+                      class="block px-4 py-3 text-sm text-slate-100 hover:bg-white/10"
+                      >Messages CSV</a
+                    >
+                    <a
+                      href="/api/dashboard/export?dataType=touchpoints"
+                      class="block px-4 py-3 text-sm text-slate-100 hover:bg-white/10"
+                      >Touchpoints CSV</a
+                    >
+                    <a
+                      href="/api/dashboard/export?dataType=posts"
+                      class="block px-4 py-3 text-sm text-slate-100 hover:bg-white/10"
+                      >Posts CSV</a
+                    >
+                    <a
+                      href="/api/dashboard/export?dataType=all"
+                      class="block border-t border-white/10 px-4 py-3 text-sm text-sky-200 hover:bg-white/10"
+                      >All data CSV</a
+                    >
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <aside class="glass-panel-soft rounded-[24px] p-5 sm:p-6">
+              <div
+                class="flex items-center justify-between gap-4 border-b border-white/10 pb-4"
+              >
+                <div>
+                  <p
+                    class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+                  >
+                    Today at a glance
+                  </p>
+                  <p class="mt-1 text-lg font-semibold text-white">
+                    Pipeline health
+                  </p>
+                </div>
+                <span
+                  class="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-300"
+                  >Live</span
+                >
+              </div>
+              <dl class="mt-5 grid gap-4 sm:grid-cols-2">
+                <div class="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <dt
+                    class="text-xs uppercase tracking-[0.18em] text-slate-400"
+                  >
+                    Total leads
+                  </dt>
+                  <dd
+                    id="stat-total"
+                    class="mt-2 text-3xl font-bold text-white"
+                  >
+                    —
+                  </dd>
+                  <p id="stat-delta" class="mt-1 text-xs text-slate-400"></p>
+                </div>
+                <div class="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <dt
+                    class="text-xs uppercase tracking-[0.18em] text-slate-400"
+                  >
+                    Converted
+                  </dt>
+                  <dd
+                    id="stat-converted"
+                    class="mt-2 text-3xl font-bold text-emerald-300"
+                  >
+                    —
+                  </dd>
+                  <p class="mt-1 text-xs text-slate-400">
+                    Closed deals in pipeline
+                  </p>
+                </div>
+                <div class="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <dt
+                    class="text-xs uppercase tracking-[0.18em] text-slate-400"
+                  >
+                    Replies
+                  </dt>
+                  <dd
+                    id="stat-replied"
+                    class="mt-2 text-3xl font-bold text-white"
+                  >
+                    —
+                  </dd>
+                  <p
+                    id="stat-reply-rate"
+                    class="mt-1 text-xs text-slate-400"
+                  ></p>
+                </div>
+                <div class="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <dt
+                    class="text-xs uppercase tracking-[0.18em] text-slate-400"
+                  >
+                    Meetings
+                  </dt>
+                  <dd
+                    id="stat-meetings"
+                    class="mt-2 text-3xl font-bold text-sky-200"
+                  >
+                    —
+                  </dd>
+                  <p class="mt-1 text-xs text-slate-400">Booked this cycle</p>
+                </div>
+              </dl>
+            </aside>
           </div>
-        </div>
-        <div class="h-[260px]"><canvas id="funnel-chart"></canvas></div>
-      </div>
+        </section>
 
-      <!-- Daily Actions -->
-      <div class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-5 flex flex-col">
-        <div class="flex justify-between items-center mb-4">
-          <h2 class="font-headline-md text-[16px] font-semibold text-on-surface">Daily Actions</h2>
-          <button id="refresh-actions-btn" class="text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined text-[18px]">refresh</span></button>
-        </div>
-        <div id="actions-panel" class="flex-1 flex flex-col gap-3"><!-- JS --></div>
-      </div>
-    </div>
+        <section
+          id="stat-cards"
+          class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6"
+        >
+          <article
+            class="animate-card glass-panel-soft gtss-stat-card rounded-[24px] p-5"
+          >
+            <span
+              class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+              >Qualified</span
+            >
+            <strong id="stat-qualified" class="text-3xl text-white">—</strong>
+            <small id="stat-qualified-pct">—</small>
+          </article>
+          <article
+            class="animate-card glass-panel-soft gtss-stat-card rounded-[24px] p-5"
+          >
+            <span
+              class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+              >Messages sent</span
+            >
+            <strong id="stat-messaged" class="text-3xl text-white">—</strong>
+            <small id="stat-messaged-week">—</small>
+          </article>
+          <article
+            class="animate-card glass-panel-soft gtss-stat-card rounded-[24px] p-5"
+          >
+            <span
+              class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+              >Replies</span
+            >
+            <strong id="stat-replied-inline" class="text-3xl text-white"
+              >—</strong
+            >
+            <small class="text-slate-400">Conversation momentum</small>
+          </article>
+          <article
+            class="animate-card glass-panel-soft gtss-stat-card rounded-[24px] p-5"
+          >
+            <span
+              class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+              >Reply rate</span
+            >
+            <strong id="stat-reply-rate-inline" class="text-3xl text-white"
+              >—</strong
+            >
+            <small class="text-slate-400">Messaging efficiency</small>
+          </article>
+          <article
+            class="animate-card glass-panel-soft gtss-stat-card rounded-[24px] p-5"
+          >
+            <span
+              class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+              >Delta</span
+            >
+            <strong id="stat-delta-inline" class="text-3xl text-white"
+              >—</strong
+            >
+            <small class="text-slate-400">Change from last week</small>
+          </article>
+          <article
+            class="animate-card glass-panel-soft gtss-stat-card rounded-[24px] p-5"
+          >
+            <span
+              class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+              >Qualified rate</span
+            >
+            <strong id="stat-qualified-inline" class="text-3xl text-white"
+              >—</strong
+            >
+            <small class="text-slate-400">Lead quality</small>
+          </article>
+        </section>
 
-    <!-- ══════ ROW 3: Replies + Upcoming + Sessions ══════ -->
-    <div class="grid grid-cols-3 gap-6">
+        <section
+          class="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.85fr)]"
+        >
+          <article class="glass-panel rounded-[28px] p-5 sm:p-6">
+            <div class="mb-5 flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p
+                  class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+                >
+                  Funnel intelligence
+                </p>
+                <h2 class="mt-1 text-2xl font-bold text-white">
+                  Outreach funnel
+                </h2>
+              </div>
+              <div
+                class="inline-flex rounded-full border border-white/10 bg-white/5 p-1"
+              >
+                <button
+                  id="funnel-all-btn"
+                  class="focus-ring rounded-full bg-sky-400 px-4 py-2 text-xs font-semibold text-slate-950 transition-colors"
+                >
+                  All platforms
+                </button>
+                <button
+                  id="funnel-platform-btn"
+                  class="focus-ring rounded-full px-4 py-2 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/10"
+                >
+                  By platform
+                </button>
+              </div>
+            </div>
+            <div class="h-[320px] sm:h-[360px]">
+              <canvas
+                id="funnel-chart"
+                aria-label="Outreach funnel chart"
+                role="img"
+              ></canvas>
+            </div>
+          </article>
 
-      <!-- Recent Replies -->
-      <div class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm flex flex-col">
-        <div class="p-4 border-b border-outline-variant flex justify-between items-center">
-          <h2 class="font-headline-md text-[16px] font-semibold text-on-surface">Recent Replies</h2>
-          <a href="/crm" class="text-primary text-body-xs font-semibold hover:underline">View All →</a>
-        </div>
-        <div id="replies-feed" class="flex-1 p-3 space-y-2 overflow-y-auto max-h-[320px]"><!-- JS --></div>
-      </div>
+          <article class="glass-panel rounded-[28px] p-5 sm:p-6">
+            <div class="mb-5 flex items-center justify-between gap-4">
+              <div>
+                <p
+                  class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+                >
+                  Daily capacity
+                </p>
+                <h2 class="mt-1 text-2xl font-bold text-white">Actions</h2>
+              </div>
+              <button
+                id="refresh-actions-btn"
+                type="button"
+                class="focus-ring inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10"
+              >
+                <span class="material-symbols-outlined text-[20px]"
+                  >refresh</span
+                >
+              </button>
+            </div>
+            <div
+              id="actions-panel"
+              class="flex flex-col gap-4"
+              aria-live="polite"
+            ></div>
+          </article>
+        </section>
 
-      <!-- Upcoming Posts -->
-      <div class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm flex flex-col">
-        <div class="p-4 border-b border-outline-variant flex justify-between items-center">
-          <h2 class="font-headline-md text-[16px] font-semibold text-on-surface">Upcoming Posts</h2>
-          <a href="/scheduler" class="text-primary text-body-xs font-semibold hover:underline">Scheduler →</a>
-        </div>
-        <div id="upcoming-posts" class="flex-1 p-3 space-y-2 overflow-y-auto max-h-[320px]"><!-- JS --></div>
-      </div>
+        <section class="grid gap-6 xl:grid-cols-3">
+          <article class="glass-panel rounded-[28px] p-5 sm:p-6">
+            <div
+              class="mb-4 flex items-center justify-between gap-4 border-b border-white/10 pb-4"
+            >
+              <div>
+                <p
+                  class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+                >
+                  Conversation feed
+                </p>
+                <h2 class="mt-1 text-xl font-bold text-white">
+                  Recent replies
+                </h2>
+              </div>
+              <a
+                href="/crm"
+                class="focus-ring text-sm font-semibold text-sky-200 hover:text-sky-100"
+                >View all</a
+              >
+            </div>
+            <div
+              id="replies-feed"
+              class="flex max-h-[360px] flex-col gap-3 overflow-y-auto pr-1"
+              aria-live="polite"
+            ></div>
+          </article>
 
-      <!-- System Status -->
-      <div class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm flex flex-col">
-        <div class="p-4 border-b border-outline-variant">
-          <h2 class="font-headline-md text-[16px] font-semibold text-on-surface">Platform Sessions</h2>
-        </div>
-        <div id="sessions-panel" class="flex-1 p-3 space-y-2 overflow-y-auto"><!-- JS --></div>
-      </div>
-    </div>
+          <article class="glass-panel rounded-[28px] p-5 sm:p-6">
+            <div
+              class="mb-4 flex items-center justify-between gap-4 border-b border-white/10 pb-4"
+            >
+              <div>
+                <p
+                  class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+                >
+                  Publishing queue
+                </p>
+                <h2 class="mt-1 text-xl font-bold text-white">
+                  Upcoming posts
+                </h2>
+              </div>
+              <a
+                href="/scheduler"
+                class="focus-ring text-sm font-semibold text-sky-200 hover:text-sky-100"
+                >Scheduler</a
+              >
+            </div>
+            <div
+              id="upcoming-posts"
+              class="flex max-h-[360px] flex-col gap-3 overflow-y-auto pr-1"
+              aria-live="polite"
+            ></div>
+          </article>
 
-    <!-- ══════ ROW 4: Template Performance ══════ -->
-    <div class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm">
-      <div class="p-4 border-b border-outline-variant">
-        <h2 class="font-headline-md text-[16px] font-semibold text-on-surface">Template Performance</h2>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-left text-sm">
-          <thead class="bg-surface-container-low border-b border-outline-variant">
-            <tr>
-              <th class="px-4 py-3 font-semibold text-on-surface-variant">Platform</th>
-              <th class="px-4 py-3 font-semibold text-on-surface-variant">Template</th>
-              <th class="px-4 py-3 font-semibold text-on-surface-variant">Sent</th>
-              <th class="px-4 py-3 font-semibold text-on-surface-variant">Replied</th>
-              <th class="px-4 py-3 font-semibold text-on-surface-variant">Acceptance Rate</th>
-            </tr>
-          </thead>
-          <tbody id="template-perf-body" class="divide-y divide-outline-variant"><!-- JS --></tbody>
-        </table>
-      </div>
-    </div>
+          <article class="glass-panel rounded-[28px] p-5 sm:p-6">
+            <div class="mb-4 border-b border-white/10 pb-4">
+              <p
+                class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+              >
+                Session status
+              </p>
+              <h2 class="mt-1 text-xl font-bold text-white">
+                Platform sessions
+              </h2>
+            </div>
+            <div
+              id="sessions-panel"
+              class="flex max-h-[360px] flex-col gap-3 overflow-y-auto pr-1"
+              aria-live="polite"
+            ></div>
+          </article>
+        </section>
 
-  </main>
-</div>
-</main>
-<script src="/socket.io/socket.io.js"></script>
+        <section class="glass-panel rounded-[28px] p-5 sm:p-6">
+          <div
+            class="mb-4 flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4"
+          >
+            <div>
+              <p
+                class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+              >
+                Template performance
+              </p>
+              <h2 class="mt-1 text-xl font-bold text-white">
+                Message variants
+              </h2>
+            </div>
+            <p class="text-sm text-slate-400">
+              Acceptance rate by platform and template
+            </p>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="data-table min-w-[720px] text-sm">
+              <thead>
+                <tr>
+                  <th>Platform</th>
+                  <th>Template</th>
+                  <th>Sent</th>
+                  <th>Replied</th>
+                  <th>Acceptance rate</th>
+                </tr>
+              </thead>
+              <tbody id="template-perf-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script src="/socket.io/socket.io.js"></script>
     <script src="/js/app.js"></script>
-<script src="/js/dashboard.js"></script>
-</body></html>
+    <script src="/js/dashboard.js"></script>
+  </body>
+</html>

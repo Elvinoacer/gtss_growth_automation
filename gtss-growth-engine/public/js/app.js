@@ -5,7 +5,11 @@ async function fetchJSON(url, options = {}) {
   };
 
   // Auto-set Content-Type for JSON bodies so callers don't have to
-  if (options.body && typeof options.body === "string" && !headers["Content-Type"]) {
+  if (
+    options.body &&
+    typeof options.body === "string" &&
+    !headers["Content-Type"]
+  ) {
     headers["Content-Type"] = "application/json";
   }
 
@@ -56,7 +60,7 @@ function initSSE(url, onMessage) {
     source.onerror = () => {
       source.close();
       if (!closed) {
-        showToast('Connection lost. Attempting to reconnect...', 'warning');
+        showToast("Connection lost. Attempting to reconnect...", "warning");
         retryTimer = window.setTimeout(connect, 3000);
       }
     };
@@ -82,32 +86,32 @@ function initSSE(url, onMessage) {
 let _socket = null;
 
 function getSocket() {
-  if (!_socket && typeof io !== 'undefined') {
+  if (!_socket && typeof io !== "undefined") {
     _socket = io({
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionAttempts: Infinity,
-      transports: ['websocket', 'polling'],
+      transports: ["websocket", "polling"],
     });
 
-    _socket.on('connect', () => {
-      console.log('[GTSS] Socket.IO connected:', _socket.id);
+    _socket.on("connect", () => {
+      console.log("[GTSS] Socket.IO connected:", _socket.id);
     });
 
-    _socket.on('disconnect', (reason) => {
-      console.warn('[GTSS] Socket.IO disconnected:', reason);
+    _socket.on("disconnect", (reason) => {
+      console.warn("[GTSS] Socket.IO disconnected:", reason);
     });
 
-    _socket.on('connect_error', (err) => {
-      console.warn('[GTSS] Socket.IO connection error:', err.message);
+    _socket.on("connect_error", (err) => {
+      console.warn("[GTSS] Socket.IO connection error:", err.message);
     });
 
     // Live updates for global UI elements
-    _socket.on('stats:updated', () => {
+    _socket.on("stats:updated", () => {
       updateActionBadge();
     });
 
-    _socket.on('sessions:updated', () => {
+    _socket.on("sessions:updated", () => {
       updateSessionDots();
     });
   }
@@ -121,7 +125,7 @@ function getSocket() {
 function initSocket(eventMap) {
   const socket = getSocket();
   if (!socket) {
-    console.warn('[GTSS] Socket.IO not available, falling back to polling');
+    console.warn("[GTSS] Socket.IO not available, falling back to polling");
     return { off() {} };
   }
 
@@ -145,12 +149,12 @@ function initSocket(eventMap) {
  */
 function joinRoom(room) {
   const socket = getSocket();
-  if (socket) socket.emit('subscribe', room);
+  if (socket) socket.emit("subscribe", room);
 }
 
 function leaveRoom(room) {
   const socket = getSocket();
-  if (socket) socket.emit('unsubscribe', room);
+  if (socket) socket.emit("unsubscribe", room);
 }
 
 async function updateSessionDots() {
@@ -243,6 +247,11 @@ function initShell() {
         ? window.location.pathname === "/"
         : window.location.pathname.startsWith(route);
     link.classList.toggle("active", active);
+    if (active) {
+      link.setAttribute("aria-current", "page");
+    } else {
+      link.removeAttribute("aria-current");
+    }
   });
 
   if (toggle && sidebar) {
