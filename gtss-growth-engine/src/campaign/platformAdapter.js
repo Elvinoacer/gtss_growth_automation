@@ -14,6 +14,7 @@ const instagram = require("../automation/instagram");
 const x = require("../automation/x");
 const facebook = require("../automation/facebook");
 const logger = require("../utils/logger");
+const { resolveInstagramUsername } = require("../utils/instagramUsername");
 const { classifyOutcome, queueLog } = require("./utils/campaignUtils");
 
 /**
@@ -23,14 +24,7 @@ const { classifyOutcome, queueLog } = require("./utils/campaignUtils");
  * @returns {string} Instagram username handle
  */
 function getInstagramUsername(lead) {
-  if (!lead) return "";
-  if (lead.x_handle) return String(lead.x_handle).trim();
-  if (lead.ig_username) return String(lead.ig_username).trim();
-  if (lead.profile_url) {
-    const match = lead.profile_url.match(/instagram\.com\/([a-zA-Z0-9_\.]+)/i);
-    if (match) return match[1].trim();
-  }
-  return lead.name ? String(lead.name).trim() : "";
+  return resolveInstagramUsername(lead);
 }
 
 /**
@@ -72,12 +66,17 @@ function classifyAndNormalizeError(platform, actionType, error) {
     errMsg.includes("unauthorized") ||
     errMsg.includes("auth")
   ) {
-    queueLog("error", "adapter", platform, `Expired or invalid session detected during ${actionType} action.`);
+    queueLog(
+      "error",
+      "adapter",
+      platform,
+      `Expired or invalid session detected during ${actionType} action.`,
+    );
     return {
       outcome: "session_required",
       error: error?.message || String(error),
       metadata: {},
-      retryable: false
+      retryable: false,
     };
   }
 
@@ -85,13 +84,18 @@ function classifyAndNormalizeError(platform, actionType, error) {
   const classification = classifyOutcome(error);
   const retryable = !classification.isTerminal;
 
-  queueLog("error", "adapter", platform, `${actionType} action failed: ${error?.message || String(error)} (Retryable: ${retryable})`);
+  queueLog(
+    "error",
+    "adapter",
+    platform,
+    `${actionType} action failed: ${error?.message || String(error)} (Retryable: ${retryable})`,
+  );
 
   return {
     outcome: "failed",
     error: error?.message || String(error),
     metadata: {},
-    retryable
+    retryable,
   };
 }
 
@@ -109,7 +113,12 @@ async function runConnectionAction(platform, page, lead, message, emitter) {
   const normPlatform = String(platform).toLowerCase().trim();
   const emit = getEmitCallback(emitter);
 
-  queueLog("info", "adapter", normPlatform, `Initiating connection action for lead ${lead.id}.`);
+  queueLog(
+    "info",
+    "adapter",
+    normPlatform,
+    `Initiating connection action for lead ${lead.id}.`,
+  );
 
   // Runtime validation for unsupported platforms
   if (!["linkedin", "instagram", "x", "facebook"].includes(normPlatform)) {
@@ -117,23 +126,42 @@ async function runConnectionAction(platform, page, lead, message, emitter) {
       outcome: "failed",
       error: `Unsupported platform: ${platform}`,
       metadata: {},
-      retryable: false
+      retryable: false,
     };
   }
 
   try {
     if (normPlatform === "linkedin") {
-      const res = await linkedin.sendConnectionRequest(page, lead.profile_url, message, emit);
+      const res = await linkedin.sendConnectionRequest(
+        page,
+        lead.profile_url,
+        message,
+        emit,
+      );
       if (res.outcome === "sent") {
         return { outcome: "sent", error: null, metadata: {}, retryable: false };
       }
       if (res.outcome === "already_connected") {
-        return { outcome: "skipped", error: null, metadata: {}, retryable: false };
+        return {
+          outcome: "skipped",
+          error: null,
+          metadata: {},
+          retryable: false,
+        };
       }
       if (res.outcome === "not_connected") {
-        return { outcome: "skipped", error: res.reason, metadata: {}, retryable: false };
+        return {
+          outcome: "skipped",
+          error: res.reason,
+          metadata: {},
+          retryable: false,
+        };
       }
-      return classifyAndNormalizeError("linkedin", "connection", res.reason || "LinkedIn connection failed");
+      return classifyAndNormalizeError(
+        "linkedin",
+        "connection",
+        res.reason || "LinkedIn connection failed",
+      );
     }
 
     if (normPlatform === "x") {
@@ -142,54 +170,125 @@ async function runConnectionAction(platform, page, lead, message, emitter) {
         return { outcome: "sent", error: null, metadata: {}, retryable: false };
       }
       if (res.outcome === "already_connected") {
-        return { outcome: "skipped", error: null, metadata: {}, retryable: false };
+        return {
+          outcome: "skipped",
+          error: null,
+          metadata: {},
+          retryable: false,
+        };
       }
       if (res.outcome === "failed") {
         if (res.failCategory === "suspended") {
-          return { outcome: "blocked", error: res.reason, metadata: { category: "suspended" }, retryable: false };
+          return {
+            outcome: "blocked",
+            error: res.reason,
+            metadata: { category: "suspended" },
+            retryable: false,
+          };
         }
         if (res.failCategory === "not_found") {
-          return { outcome: "failed", error: res.reason, metadata: { category: "not_found" }, retryable: false };
+          return {
+            outcome: "failed",
+            error: res.reason,
+            metadata: { category: "not_found" },
+            retryable: false,
+          };
         }
         if (res.failCategory === "rate_limited") {
-          return { outcome: "failed", error: res.reason, metadata: { category: "rate_limited" }, retryable: true };
+          return {
+            outcome: "failed",
+            error: res.reason,
+            metadata: { category: "rate_limited" },
+            retryable: true,
+          };
         }
-        return classifyAndNormalizeError("x", "connection", res.reason || "X connection failed");
+        return classifyAndNormalizeError(
+          "x",
+          "connection",
+          res.reason || "X connection failed",
+        );
       }
     }
 
     if (normPlatform === "instagram") {
       const username = getInstagramUsername(lead);
-      const res = await instagram.followAccount(page, { username, leadId: lead.id }, emit);
+      const res = await instagram.followAccount(
+        page,
+        { username, leadId: lead.id },
+        emit,
+      );
       if (res.success) {
-        return { outcome: "sent", error: null, metadata: { requestPending: res.requestPending }, retryable: false };
+        return {
+          outcome: "sent",
+          error: null,
+          metadata: { requestPending: res.requestPending },
+          retryable: false,
+        };
       } else {
         if (res.error === "account_blocked") {
-          return { outcome: "blocked", error: "Instagram account blocked", metadata: { resumesAt: res.resumesAt }, retryable: false };
+          return {
+            outcome: "blocked",
+            error: "Instagram account blocked",
+            metadata: { resumesAt: res.resumesAt },
+            retryable: false,
+          };
         }
-        return classifyAndNormalizeError("instagram", "connection", res.error || "Instagram connection failed");
+        return classifyAndNormalizeError(
+          "instagram",
+          "connection",
+          res.error || "Instagram connection failed",
+        );
       }
     }
 
     if (normPlatform === "facebook") {
-      const res = await facebook.sendConnectionRequest(page, lead.profile_url, message, emit);
+      const res = await facebook.sendConnectionRequest(
+        page,
+        lead.profile_url,
+        message,
+        emit,
+      );
       if (res.outcome === "sent") {
         return { outcome: "sent", error: null, metadata: {}, retryable: false };
       }
       if (res.outcome === "already_connected") {
-        return { outcome: "skipped", error: null, metadata: {}, retryable: false };
+        return {
+          outcome: "skipped",
+          error: null,
+          metadata: {},
+          retryable: false,
+        };
       }
       if (res.outcome === "failed") {
         if (res.failCategory === "restricted") {
-          return { outcome: "blocked", error: res.reason, metadata: { category: "restricted" }, retryable: false };
+          return {
+            outcome: "blocked",
+            error: res.reason,
+            metadata: { category: "restricted" },
+            retryable: false,
+          };
         }
         if (res.failCategory === "not_found") {
-          return { outcome: "failed", error: res.reason, metadata: { category: "not_found" }, retryable: false };
+          return {
+            outcome: "failed",
+            error: res.reason,
+            metadata: { category: "not_found" },
+            retryable: false,
+          };
         }
         if (res.failCategory === "rate_limited") {
-          return { outcome: "failed", error: res.reason, metadata: { category: "rate_limited" }, retryable: true };
+          return {
+            outcome: "failed",
+            error: res.reason,
+            metadata: { category: "rate_limited" },
+            retryable: true,
+          };
         }
-        return classifyAndNormalizeError("facebook", "connection", res.reason || "Facebook connection failed");
+        return classifyAndNormalizeError(
+          "facebook",
+          "connection",
+          res.reason || "Facebook connection failed",
+        );
       }
     }
   } catch (err) {
@@ -211,7 +310,12 @@ async function runDmAction(platform, page, lead, message, emitter) {
   const normPlatform = String(platform).toLowerCase().trim();
   const emit = getEmitCallback(emitter);
 
-  queueLog("info", "adapter", normPlatform, `Initiating DM action for lead ${lead.id}.`);
+  queueLog(
+    "info",
+    "adapter",
+    normPlatform,
+    `Initiating DM action for lead ${lead.id}.`,
+  );
 
   // Runtime validation for unsupported platforms
   if (!["linkedin", "instagram", "x", "facebook"].includes(normPlatform)) {
@@ -219,41 +323,84 @@ async function runDmAction(platform, page, lead, message, emitter) {
       outcome: "failed",
       error: `Unsupported platform: ${platform}`,
       metadata: {},
-      retryable: false
+      retryable: false,
     };
   }
 
   try {
     if (normPlatform === "linkedin") {
-      const res = await linkedin.sendDirectMessage(page, lead.profile_url, message, emit);
+      const res = await linkedin.sendDirectMessage(
+        page,
+        lead.profile_url,
+        message,
+        emit,
+      );
       if (res.outcome === "sent") {
         return { outcome: "sent", error: null, metadata: {}, retryable: false };
       }
       if (res.outcome === "not_connected") {
-        return { outcome: "skipped", error: res.reason, metadata: {}, retryable: false };
+        return {
+          outcome: "skipped",
+          error: res.reason,
+          metadata: {},
+          retryable: false,
+        };
       }
       if (res.outcome === "premium_required") {
-        return { outcome: "premium_required", error: res.reason, metadata: {}, retryable: false };
+        return {
+          outcome: "premium_required",
+          error: res.reason,
+          metadata: {},
+          retryable: false,
+        };
       }
-      return classifyAndNormalizeError("linkedin", "dm", res.reason || "LinkedIn DM failed");
+      return classifyAndNormalizeError(
+        "linkedin",
+        "dm",
+        res.reason || "LinkedIn DM failed",
+      );
     }
 
     if (normPlatform === "x") {
-      const res = await x.sendDirectMessage(page, lead.profile_url, message, emit);
+      const res = await x.sendDirectMessage(
+        page,
+        lead.profile_url,
+        message,
+        emit,
+      );
       if (res.outcome === "sent") {
         return { outcome: "sent", error: null, metadata: {}, retryable: false };
       }
       if (res.outcome === "not_connected") {
-        return { outcome: "skipped", error: res.reason, metadata: {}, retryable: false };
+        return {
+          outcome: "skipped",
+          error: res.reason,
+          metadata: {},
+          retryable: false,
+        };
       }
       if (res.outcome === "failed") {
         if (res.failCategory === "suspended") {
-          return { outcome: "blocked", error: res.reason, metadata: { category: "suspended" }, retryable: false };
+          return {
+            outcome: "blocked",
+            error: res.reason,
+            metadata: { category: "suspended" },
+            retryable: false,
+          };
         }
         if (res.failCategory === "not_found") {
-          return { outcome: "failed", error: res.reason, metadata: { category: "not_found" }, retryable: false };
+          return {
+            outcome: "failed",
+            error: res.reason,
+            metadata: { category: "not_found" },
+            retryable: false,
+          };
         }
-        return classifyAndNormalizeError("x", "dm", res.reason || "X DM failed");
+        return classifyAndNormalizeError(
+          "x",
+          "dm",
+          res.reason || "X DM failed",
+        );
       }
     }
 
@@ -262,39 +409,92 @@ async function runDmAction(platform, page, lead, message, emitter) {
       const res = await instagram.sendDM(page, { username, message }, emit);
       if (res.success) {
         if (res.hadReply) {
-          return { outcome: "skipped", error: "Lead has replied to us", metadata: { hadReply: true }, retryable: false };
+          return {
+            outcome: "skipped",
+            error: "Lead has replied to us",
+            metadata: { hadReply: true },
+            retryable: false,
+          };
         }
-        return { outcome: "sent", error: null, metadata: { isMessageRequest: res.isMessageRequest }, retryable: false };
+        return {
+          outcome: "sent",
+          error: null,
+          metadata: { isMessageRequest: res.isMessageRequest },
+          retryable: false,
+        };
       } else {
         if (res.error === "already_messaged") {
-          return { outcome: "skipped", error: "Already messaged", metadata: { threadUrl: res.threadUrl }, retryable: false };
+          return {
+            outcome: "skipped",
+            error: "Already messaged",
+            metadata: { threadUrl: res.threadUrl },
+            retryable: false,
+          };
         }
         if (res.error === "account_blocked") {
-          return { outcome: "blocked", error: "Instagram account blocked", metadata: { resumesAt: res.resumesAt }, retryable: false };
+          return {
+            outcome: "blocked",
+            error: "Instagram account blocked",
+            metadata: { resumesAt: res.resumesAt },
+            retryable: false,
+          };
         }
         if (res.error === "empty_message" || res.error === "message_too_long") {
-          return { outcome: "failed", error: res.error, metadata: {}, retryable: false };
+          return {
+            outcome: "failed",
+            error: res.error,
+            metadata: {},
+            retryable: false,
+          };
         }
-        return classifyAndNormalizeError("instagram", "dm", res.error || "Instagram DM failed");
+        return classifyAndNormalizeError(
+          "instagram",
+          "dm",
+          res.error || "Instagram DM failed",
+        );
       }
     }
 
     if (normPlatform === "facebook") {
-      const res = await facebook.sendDirectMessage(page, lead.profile_url, message, emit);
+      const res = await facebook.sendDirectMessage(
+        page,
+        lead.profile_url,
+        message,
+        emit,
+      );
       if (res.outcome === "sent") {
         return { outcome: "sent", error: null, metadata: {}, retryable: false };
       }
       if (res.outcome === "not_connected") {
-        return { outcome: "skipped", error: res.reason, metadata: {}, retryable: false };
+        return {
+          outcome: "skipped",
+          error: res.reason,
+          metadata: {},
+          retryable: false,
+        };
       }
       if (res.outcome === "failed") {
         if (res.failCategory === "restricted") {
-          return { outcome: "blocked", error: res.reason, metadata: { category: "restricted" }, retryable: false };
+          return {
+            outcome: "blocked",
+            error: res.reason,
+            metadata: { category: "restricted" },
+            retryable: false,
+          };
         }
         if (res.failCategory === "not_found") {
-          return { outcome: "failed", error: res.reason, metadata: { category: "not_found" }, retryable: false };
+          return {
+            outcome: "failed",
+            error: res.reason,
+            metadata: { category: "not_found" },
+            retryable: false,
+          };
         }
-        return classifyAndNormalizeError("facebook", "dm", res.reason || "Facebook DM failed");
+        return classifyAndNormalizeError(
+          "facebook",
+          "dm",
+          res.reason || "Facebook DM failed",
+        );
       }
     }
   } catch (err) {
@@ -304,5 +504,5 @@ async function runDmAction(platform, page, lead, message, emitter) {
 
 module.exports = {
   runConnectionAction,
-  runDmAction
+  runDmAction,
 };

@@ -6,10 +6,11 @@ const {
   humanTypeText,
   dailySessionWarmup,
   isInstagramBlocked,
-  getSelectorHealthReport
+  getSelectorHealthReport,
 } = require("./browserBase");
 const { getDb } = require("../db/database");
 const logger = require("../utils/logger");
+const { normalizeInstagramUsername } = require("../utils/instagramUsername");
 
 // ── CONSTANTS ───────────────────────────────────────────────────────────────
 
@@ -20,76 +21,68 @@ const IG_SELECTORS = {
     'button:has-text("Follow back")',
     'div[role="button"]:has-text("Follow")',
     'div[role="button"]:has-text("Follow Back")',
-    'div[role="button"]:has-text("Follow back")'
+    'div[role="button"]:has-text("Follow back")',
   ],
   unfollowButton: [
     'button:has-text("Following")',
     'button:has-text("Requested")',
     'div[role="button"]:has-text("Following")',
-    'div[role="button"]:has-text("Requested")'
+    'div[role="button"]:has-text("Requested")',
   ],
   unfollowConfirm: [
     'button:has-text("Unfollow")',
     'span:has-text("Unfollow")',
-    'button.xyb1x0',
-    'div[role="button"]:has-text("Unfollow")'
+    "button.xyb1x0",
+    'div[role="button"]:has-text("Unfollow")',
   ],
   dmComposer: [
     'div[role="textbox"][contenteditable="true"]',
     'textarea[placeholder*="Message..."]',
-    'div[aria-label*="Message" i]'
+    'div[aria-label*="Message" i]',
   ],
   dmSend: [
     'button:has-text("Send")',
     'div[role="button"]:has-text("Send")',
-    'svg[aria-label="Send"]'
+    'svg[aria-label="Send"]',
   ],
   newMessage: [
     'button[aria-label="New Message"]',
     'svg[aria-label="New message"]',
-    'a[href*="/direct/new"]'
+    'a[href*="/direct/new"]',
   ],
   recipientSearch: [
     'input[name="query"]',
     'input[placeholder*="Search..."]',
-    'input[type="text"]'
+    'input[type="text"]',
   ],
-  chatNext: [
-    'button:has-text("Next")',
-    'div[role="button"]:has-text("Next")'
-  ],
+  chatNext: ['button:has-text("Next")', 'div[role="button"]:has-text("Next")'],
   postCreate: [
     'svg[aria-label="New post"]',
     'svg[aria-label="Create"]',
-    'span:has-text("Create")'
+    'span:has-text("Create")',
   ],
-  fileInput: [
-    'input[type="file"]'
-  ],
+  fileInput: ['input[type="file"]'],
   captionBox: [
     'div[role="textbox"][contenteditable="true"]',
-    'div[aria-label*="Write a caption"]'
+    'div[aria-label*="Write a caption"]',
   ],
   shareButton: [
     'button:has-text("Share")',
-    'div[role="button"]:has-text("Share")'
+    'div[role="button"]:has-text("Share")',
   ],
   storyRing: [
     'canvas[style*="cursor: pointer"]',
     'div[role="button"][aria-label*="Story"]',
-    'header img[srcset]'
+    "header img[srcset]",
   ],
-  storyClose: [
-    'svg[aria-label="Close"]',
-    'button[aria-label="Close"]'
-  ],
+  storyClose: ['svg[aria-label="Close"]', 'button[aria-label="Close"]'],
   likeButton: [
     'span[class*="like"]',
     'svg[aria-label="Like"]',
     'svg[aria-label="Unlike"]',
     'button:has(svg[aria-label="Like"])',
-    'button:has(svg[aria-label="Unlike"])'
-  ]
+    'button:has(svg[aria-label="Unlike"])',
+  ],
 };
 
 const IG_DELAYS = {
@@ -98,7 +91,7 @@ const IG_DELAYS = {
   betweenLikes: { min: 20000, max: 60000 },
   betweenDMs: { min: 60000, max: 180000 },
   afterHashtagLoad: { min: 5000, max: 12000 },
-  afterAction: { min: 3000, max: 8000 }
+  afterAction: { min: 3000, max: 8000 },
 };
 
 // ── HELPERS ─────────────────────────────────────────────────────────────────
@@ -125,7 +118,8 @@ function safeEmit(emitter, type, message, data = {}) {
       emitter.emit(type, message, data);
     } catch (_) {}
   }
-  const logLevel = type === "error" ? "error" : type === "warn" ? "warn" : "info";
+  const logLevel =
+    type === "error" ? "error" : type === "warn" ? "warn" : "info";
   logger[logLevel]("INSTAGRAM_OUTREACH", message, data);
 }
 
@@ -141,30 +135,55 @@ function safeEmit(emitter, type, message, data = {}) {
  */
 async function followAccount(page, { username, leadId }, emitter) {
   try {
+    const resolvedUsername = normalizeInstagramUsername(username);
     const blockState = isInstagramBlocked();
     if (blockState.blocked) {
-      safeEmit(emitter, "error", `Instagram action aborted: account is blocked until ${blockState.resumesAt}`);
-      return { success: false, error: "account_blocked", resumesAt: blockState.resumesAt };
+      safeEmit(
+        emitter,
+        "error",
+        `Instagram action aborted: account is blocked until ${blockState.resumesAt}`,
+      );
+      return {
+        success: false,
+        error: "account_blocked",
+        resumesAt: blockState.resumesAt,
+      };
     }
 
-    safeEmit(emitter, "info", `Navigating to @${username}`);
-    const profileUrl = `https://www.instagram.com/${username}/`;
+    if (!resolvedUsername) {
+      return { success: false, error: "username_missing" };
+    }
+
+    safeEmit(emitter, "info", `Navigating to @${resolvedUsername}`);
+    const profileUrl = `https://www.instagram.com/${resolvedUsername}/`;
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
     await humanDelay(3000, 5000);
 
     // 1. Check for Action blocks
     const blockCheck = await checkForInstagramBlock(page);
     if (blockCheck.blocked) {
-      safeEmit(emitter, "error", `Instagram block detected: ${blockCheck.reason}`);
+      safeEmit(
+        emitter,
+        "error",
+        `Instagram block detected: ${blockCheck.reason}`,
+      );
       return { success: false, error: blockCheck.reason };
     }
 
     // 2. Identify current follow state
     const followBtn = await firstVisible(page, IG_SELECTORS.followButton, 4000);
-    const unfollowBtn = await firstVisible(page, IG_SELECTORS.unfollowButton, 4000);
+    const unfollowBtn = await firstVisible(
+      page,
+      IG_SELECTORS.unfollowButton,
+      4000,
+    );
 
     if (!followBtn && !unfollowBtn) {
-      safeEmit(emitter, "error", "Follow/Unfollow action buttons not found on profile.");
+      safeEmit(
+        emitter,
+        "error",
+        "Follow/Unfollow action buttons not found on profile.",
+      );
       return { success: false, error: "Follow button not found" };
     }
 
@@ -172,7 +191,11 @@ async function followAccount(page, { username, leadId }, emitter) {
     if (unfollowBtn) {
       const btnText = await unfollowBtn.innerText().catch(() => "");
       if (btnText.toLowerCase().includes("requested")) {
-        safeEmit(emitter, "info", `Follow request is already pending/requested for @${username}`);
+        safeEmit(
+          emitter,
+          "info",
+          `Follow request is already pending/requested for @${username}`,
+        );
         return { success: true, requestPending: true };
       }
       safeEmit(emitter, "info", `Already following @${username}`);
@@ -182,7 +205,11 @@ async function followAccount(page, { username, leadId }, emitter) {
     // Double check followBtn text in case it indicates requested/following state
     const followText = await followBtn.innerText().catch(() => "");
     if (followText.toLowerCase().includes("requested")) {
-      safeEmit(emitter, "info", `Follow request is already pending/requested for @${username}`);
+      safeEmit(
+        emitter,
+        "info",
+        `Follow request is already pending/requested for @${username}`,
+      );
       return { success: true, requestPending: true };
     }
     if (followText.toLowerCase().includes("following")) {
@@ -195,18 +222,28 @@ async function followAccount(page, { username, leadId }, emitter) {
     await humanMouseMove(page, followBtn);
     await humanDelay(300, 700);
     await followBtn.click();
-    await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+    await page
+      .waitForLoadState("domcontentloaded", { timeout: 5000 })
+      .catch(() => {});
 
     // 4. Handle private account dialogue or generic popup alerts if they appear
     await humanDelay(1500, 2500);
-    const popupConfirm = await firstVisible(page, [
-      'button:has-text("OK")',
-      'button:has-text("Confirm")',
-      'button:has-text("Dismiss")'
-    ], 1500).catch(() => null);
+    const popupConfirm = await firstVisible(
+      page,
+      [
+        'button:has-text("OK")',
+        'button:has-text("Confirm")',
+        'button:has-text("Dismiss")',
+      ],
+      1500,
+    ).catch(() => null);
 
     if (popupConfirm) {
-      safeEmit(emitter, "info", "Dismissing private confirmation or info dialogue...");
+      safeEmit(
+        emitter,
+        "info",
+        "Dismissing private confirmation or info dialogue...",
+      );
       await humanMouseMove(page, popupConfirm);
       await humanDelay(300, 600);
       await popupConfirm.click();
@@ -214,7 +251,11 @@ async function followAccount(page, { username, leadId }, emitter) {
     }
 
     // 5. Assert follow state transition
-    const postFollowBtn = await firstVisible(page, IG_SELECTORS.unfollowButton, 2000).catch(() => null);
+    const postFollowBtn = await firstVisible(
+      page,
+      IG_SELECTORS.unfollowButton,
+      2000,
+    ).catch(() => null);
     let requestPending = false;
     if (postFollowBtn) {
       const postText = await postFollowBtn.innerText().catch(() => "");
@@ -230,41 +271,72 @@ async function followAccount(page, { username, leadId }, emitter) {
     const db = getDb();
     let finalLeadId = leadId;
     if (!finalLeadId) {
-      const leadMatch = db.prepare("SELECT id FROM leads WHERE ig_username = ? OR profile_url LIKE ?").get(username, `%instagram.com/${username}%`);
+      const leadMatch = db
+        .prepare(
+          "SELECT id FROM leads WHERE LOWER(ig_username) = LOWER(?) OR LOWER(profile_url) LIKE LOWER(?)",
+        )
+        .get(resolvedUsername, `%instagram.com/${resolvedUsername}%`);
       if (leadMatch) {
         finalLeadId = leadMatch.id;
       } else {
-        const insertInfo = db.prepare(`
+        const insertInfo = db
+          .prepare(
+            `
           INSERT INTO leads (platform, name, profile_url, ig_username, status)
           VALUES (?, ?, ?, ?, ?)
-        `).run("instagram", username, profileUrl, username, "discovered");
+        `,
+          )
+          .run(
+            "instagram",
+            resolvedUsername,
+            profileUrl,
+            resolvedUsername,
+            "discovered",
+          );
         finalLeadId = insertInfo.lastInsertRowid;
       }
     }
 
     // Insert follow tracker entry
-    const leadRow = db.prepare("SELECT source_keyword FROM leads WHERE id = ?").get(finalLeadId);
+    const leadRow = db
+      .prepare("SELECT source_keyword FROM leads WHERE id = ?")
+      .get(finalLeadId);
     const sourceKeyword = leadRow ? leadRow.source_keyword : null;
 
     const finalStatus = requestPending ? "requested" : "following";
-    const trackerRecord = db.prepare("SELECT id FROM ig_follow_tracker WHERE lead_id = ? AND username = ?").get(finalLeadId, username);
+    const trackerRecord = db
+      .prepare(
+        "SELECT id FROM ig_follow_tracker WHERE lead_id = ? AND LOWER(username) = LOWER(?)",
+      )
+      .get(finalLeadId, resolvedUsername);
     if (trackerRecord) {
-      db.prepare(`
+      db.prepare(
+        `
         UPDATE ig_follow_tracker
         SET status = ?, followed_at = CURRENT_TIMESTAMP, unfollowed_at = NULL, follow_source = ?
         WHERE id = ?
-      `).run(finalStatus, sourceKeyword, trackerRecord.id);
+      `,
+      ).run(finalStatus, sourceKeyword, trackerRecord.id);
     } else {
-      db.prepare(`
+      db.prepare(
+        `
         INSERT INTO ig_follow_tracker (lead_id, username, status, followed_at, follow_source)
         VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
-      `).run(finalLeadId, username, finalStatus, sourceKeyword);
+      `,
+      ).run(finalLeadId, resolvedUsername, finalStatus, sourceKeyword);
     }
 
-    safeEmit(emitter, "done", `Successfully followed @${username} (State: ${finalStatus})`);
+    safeEmit(
+      emitter,
+      "done",
+      `Successfully followed @${resolvedUsername} (State: ${finalStatus})`,
+    );
     return { success: true, requestPending };
   } catch (err) {
-    logger.error("Instagram followAccount Failed", { username, error: err.message });
+    logger.error("Instagram followAccount Failed", {
+      username,
+      error: err.message,
+    });
     safeEmit(emitter, "error", `Follow action failed: ${err.message}`);
     return { success: false, error: err.message };
   }
@@ -280,19 +352,36 @@ async function followAccount(page, { username, leadId }, emitter) {
  */
 async function unfollowAccount(page, { username, leadId }, emitter) {
   try {
+    const resolvedUsername = normalizeInstagramUsername(username);
     const blockState = isInstagramBlocked();
     if (blockState.blocked) {
-      safeEmit(emitter, "error", `Instagram action aborted: account is blocked until ${blockState.resumesAt}`);
-      return { success: false, error: "account_blocked", resumesAt: blockState.resumesAt };
+      safeEmit(
+        emitter,
+        "error",
+        `Instagram action aborted: account is blocked until ${blockState.resumesAt}`,
+      );
+      return {
+        success: false,
+        error: "account_blocked",
+        resumesAt: blockState.resumesAt,
+      };
     }
 
-    safeEmit(emitter, "info", `Navigating to @${username} to unfollow`);
-    const profileUrl = `https://www.instagram.com/${username}/`;
+    if (!resolvedUsername) {
+      return { success: false, error: "username_missing" };
+    }
+
+    safeEmit(emitter, "info", `Navigating to @${resolvedUsername} to unfollow`);
+    const profileUrl = `https://www.instagram.com/${resolvedUsername}/`;
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
     await humanDelay(3000, 5000);
 
     // 1. Locate current Unfollow action
-    const unfollowBtn = await firstVisible(page, IG_SELECTORS.unfollowButton, 4000);
+    const unfollowBtn = await firstVisible(
+      page,
+      IG_SELECTORS.unfollowButton,
+      4000,
+    );
     if (!unfollowBtn) {
       safeEmit(emitter, "info", `Not currently following @${username}`);
       return { success: true, notFollowing: true };
@@ -306,7 +395,11 @@ async function unfollowAccount(page, { username, leadId }, emitter) {
     await humanDelay(1500, 2500);
 
     // 3. Confirm choice
-    const confirmBtn = await firstVisible(page, IG_SELECTORS.unfollowConfirm, 3500);
+    const confirmBtn = await firstVisible(
+      page,
+      IG_SELECTORS.unfollowConfirm,
+      3500,
+    );
     if (!confirmBtn) {
       safeEmit(emitter, "error", "Unfollow confirmation modal did not load.");
       return { success: false, error: "Unfollow confirm button not found" };
@@ -316,7 +409,9 @@ async function unfollowAccount(page, { username, leadId }, emitter) {
     await humanMouseMove(page, confirmBtn);
     await humanDelay(300, 600);
     await confirmBtn.click();
-    await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+    await page
+      .waitForLoadState("domcontentloaded", { timeout: 5000 })
+      .catch(() => {});
 
     // 4. Delay
     await igDelay("afterAction");
@@ -325,44 +420,61 @@ async function unfollowAccount(page, { username, leadId }, emitter) {
     const db = getDb();
     let finalLeadId = leadId;
     if (!finalLeadId) {
-      const leadMatch = db.prepare("SELECT id FROM leads WHERE ig_username = ? OR profile_url LIKE ?").get(username, `%instagram.com/${username}%`);
+      const leadMatch = db
+        .prepare(
+          "SELECT id FROM leads WHERE LOWER(ig_username) = LOWER(?) OR LOWER(profile_url) LIKE LOWER(?)",
+        )
+        .get(resolvedUsername, `%instagram.com/${resolvedUsername}%`);
       if (leadMatch) {
         finalLeadId = leadMatch.id;
       }
     }
 
     if (finalLeadId) {
-      const trackerRecord = db.prepare(`
+      const trackerRecord = db
+        .prepare(
+          `
         SELECT id FROM ig_follow_tracker
-        WHERE lead_id = ? AND username = ?
+        WHERE lead_id = ? AND LOWER(username) = LOWER(?)
         ORDER BY id DESC LIMIT 1
-      `).get(finalLeadId, username);
+      `,
+        )
+        .get(finalLeadId, resolvedUsername);
 
       if (trackerRecord) {
-        db.prepare(`
+        db.prepare(
+          `
           UPDATE ig_follow_tracker
           SET status = 'unfollowed', unfollowed_at = CURRENT_TIMESTAMP
           WHERE id = ?
-        `).run(trackerRecord.id);
+        `,
+        ).run(trackerRecord.id);
       } else {
-        db.prepare(`
+        db.prepare(
+          `
           INSERT INTO ig_follow_tracker (lead_id, username, status, unfollowed_at)
           VALUES (?, ?, 'unfollowed', CURRENT_TIMESTAMP)
-        `).run(finalLeadId, username);
+        `,
+        ).run(finalLeadId, resolvedUsername);
       }
     } else {
       // General match based on username alone
-      db.prepare(`
+      db.prepare(
+        `
         UPDATE ig_follow_tracker
         SET status = 'unfollowed', unfollowed_at = CURRENT_TIMESTAMP
         WHERE username = ? AND status != 'unfollowed'
-      `).run(username);
+      `,
+      ).run(resolvedUsername);
     }
 
-    safeEmit(emitter, "done", `Successfully unfollowed @${username}`);
+    safeEmit(emitter, "done", `Successfully unfollowed @${resolvedUsername}`);
     return { success: true };
   } catch (err) {
-    logger.error("Instagram unfollowAccount Failed", { username, error: err.message });
+    logger.error("Instagram unfollowAccount Failed", {
+      username,
+      error: err.message,
+    });
     safeEmit(emitter, "error", `Unfollow action failed: ${err.message}`);
     return { success: false, error: err.message };
   }
@@ -379,26 +491,49 @@ async function sendDM(page, { username, message }, emitter) {
     return { success: false, error: "message_too_long" };
   }
 
+  const resolvedUsername = normalizeInstagramUsername(username);
+  if (!resolvedUsername) {
+    return { success: false, error: "username_missing" };
+  }
+
   let dialogWasShown = false;
 
   try {
     const blockState = isInstagramBlocked();
     if (blockState.blocked) {
-      safeEmit(emitter, "error", `Instagram action aborted: account is blocked until ${blockState.resumesAt}`);
-      return { success: false, error: "account_blocked", resumesAt: blockState.resumesAt };
+      safeEmit(
+        emitter,
+        "error",
+        `Instagram action aborted: account is blocked until ${blockState.resumesAt}`,
+      );
+      return {
+        success: false,
+        error: "account_blocked",
+        resumesAt: blockState.resumesAt,
+      };
     }
 
     // 1. Existing Thread Check
-    safeEmit(emitter, "info", `Navigating to Instagram inbox to check for existing thread with @${username}`);
-    await page.goto("https://www.instagram.com/direct/inbox/", { waitUntil: "domcontentloaded" });
+    safeEmit(
+      emitter,
+      "info",
+      `Navigating to Instagram inbox to check for existing thread with @${resolvedUsername}`,
+    );
+    await page.goto("https://www.instagram.com/direct/inbox/", {
+      waitUntil: "domcontentloaded",
+    });
     await humanDelay(3000, 5000);
 
     // Search inbox using search input
-    const inboxSearchInput = await firstVisible(page, [
-      'input[placeholder*="Search"]',
-      'input[placeholder*="search" i]',
-      'input[type="text"]'
-    ], 5000).catch(() => null);
+    const inboxSearchInput = await firstVisible(
+      page,
+      [
+        'input[placeholder*="Search"]',
+        'input[placeholder*="search" i]',
+        'input[type="text"]',
+      ],
+      5000,
+    ).catch(() => null);
 
     let threadFound = false;
     let lastMessageSentByUs = false;
@@ -409,36 +544,51 @@ async function sendDM(page, { username, message }, emitter) {
       await inboxSearchInput.fill(""); // Clear
       await humanDelay(300, 700);
       const { humanTypeText } = require("./browserBase");
-      await humanTypeText(page, inboxSearchInput, username);
+      await humanTypeText(page, inboxSearchInput, resolvedUsername);
       await humanDelay(2000, 3000); // Wait for typeahead results
 
       // Look for a filtered thread list item containing username
-      const threadItem = await firstVisible(page, [
-        `a[href*="/direct/t/"]`,
-        `div[role="button"]:has-text("${username}")`
-      ], 4000).catch(() => null);
+      const threadItem = await firstVisible(
+        page,
+        [
+          `a[href*="/direct/t/"]`,
+          `div[role="button"]:has-text("${resolvedUsername}")`,
+        ],
+        4000,
+      ).catch(() => null);
 
       if (threadItem) {
         threadFound = true;
-        threadUrl = await threadItem.getAttribute("href").catch(() => "") || "";
+        threadUrl =
+          (await threadItem.getAttribute("href").catch(() => "")) || "";
         if (threadUrl && !threadUrl.startsWith("http")) {
           threadUrl = `https://www.instagram.com${threadUrl}`;
         }
-        safeEmit(emitter, "info", `Found existing conversation thread for @${username}. Inspecting history...`);
+        safeEmit(
+          emitter,
+          "info",
+          `Found existing conversation thread for @${resolvedUsername}. Inspecting history...`,
+        );
         await threadItem.click();
         await humanDelay(3000, 5000); // Wait for history to populate
 
         // Check if there are messages and who sent the last one
-        const messages = page.locator('div[role="row"], div[class*="message"], div[class*="bubble"]');
+        const messages = page.locator(
+          'div[role="row"], div[class*="message"], div[class*="bubble"]',
+        );
         const msgCount = await messages.count().catch(() => 0);
         if (msgCount > 0) {
           const lastMsg = messages.last();
-          const alignStr = await lastMsg.getAttribute("style").catch(() => "") || "";
-          const classStr = await lastMsg.getAttribute("class").catch(() => "") || "";
-          const alignSelf = await lastMsg.evaluate(el => {
-            const style = window.getComputedStyle(el);
-            return style.justifyContent || style.alignItems || "";
-          }).catch(() => "");
+          const alignStr =
+            (await lastMsg.getAttribute("style").catch(() => "")) || "";
+          const classStr =
+            (await lastMsg.getAttribute("class").catch(() => "")) || "";
+          const alignSelf = await lastMsg
+            .evaluate((el) => {
+              const style = window.getComputedStyle(el);
+              return style.justifyContent || style.alignItems || "";
+            })
+            .catch(() => "");
 
           if (
             alignStr.includes("flex-end") ||
@@ -457,11 +607,19 @@ async function sendDM(page, { username, message }, emitter) {
 
     if (threadFound) {
       if (lastMessageSentByUs) {
-        safeEmit(emitter, "skipped", `Already messaged @${username} (last message was sent by us)`);
+        safeEmit(
+          emitter,
+          "skipped",
+          `Already messaged @${username} (last message was sent by us)`,
+        );
         return { success: false, error: "already_messaged", threadUrl };
       }
       if (theyReplied) {
-        safeEmit(emitter, "info", `@${username} has replied to us. Skipping re-send.`);
+        safeEmit(
+          emitter,
+          "info",
+          `@${username} has replied to us. Skipping re-send.`,
+        );
         return { success: true, hadReply: true };
       }
     }
@@ -479,7 +637,11 @@ async function sendDM(page, { username, message }, emitter) {
     await humanDelay(1500, 2500);
 
     // Wait for recipient search input
-    const searchField = await firstVisible(page, IG_SELECTORS.recipientSearch, 5000);
+    const searchField = await firstVisible(
+      page,
+      IG_SELECTORS.recipientSearch,
+      5000,
+    );
     if (!searchField) {
       safeEmit(emitter, "error", "Recipient search field not found");
       return { success: false, error: "search_field_not_found" };
@@ -491,29 +653,39 @@ async function sendDM(page, { username, message }, emitter) {
     await humanDelay(2000, 3000);
 
     // Exact username match check
-    const results = page.locator(`span:has-text("${username}"), div:has-text("${username}")`);
+    const results = page.locator(
+      `span:has-text("${resolvedUsername}"), div:has-text("${resolvedUsername}")`,
+    );
     const resultsCount = await results.count().catch(() => 0);
     let exactResult = null;
     for (let i = 0; i < resultsCount; i++) {
       const el = results.nth(i);
       const text = await el.innerText().catch(() => "");
-      if (text.trim() === username) {
+      if (text.trim().toLowerCase() === resolvedUsername) {
         exactResult = el;
         break;
       }
     }
 
     if (!exactResult) {
-      exactResult = await firstVisible(page, [
-        `div[role="dialog"] span:has-text("${username}")`,
-        `div[role="dialog"] div:has-text("${username}")`,
-        `span:has-text("${username}")`,
-        `input[type="checkbox"]`
-      ], 3000).catch(() => null);
+      exactResult = await firstVisible(
+        page,
+        [
+          `div[role="dialog"] span:has-text("${resolvedUsername}")`,
+          `div[role="dialog"] div:has-text("${resolvedUsername}")`,
+          `span:has-text("${resolvedUsername}")`,
+          `input[type="checkbox"]`,
+        ],
+        3000,
+      ).catch(() => null);
     }
 
     if (!exactResult) {
-      safeEmit(emitter, "error", `Exact recipient match for @${username} not found in search results.`);
+      safeEmit(
+        emitter,
+        "error",
+        `Exact recipient match for @${resolvedUsername} not found in search results.`,
+      );
       return { success: false, error: "recipient_not_found" };
     }
 
@@ -534,12 +706,20 @@ async function sendDM(page, { username, message }, emitter) {
     await humanDelay(1500, 2500);
 
     // Wait for DM composer to appear (timeout 10s)
-    const composerElement = await firstVisible(page, IG_SELECTORS.dmComposer, 10000).catch(() => null);
+    const composerElement = await firstVisible(
+      page,
+      IG_SELECTORS.dmComposer,
+      10000,
+    ).catch(() => null);
     if (!composerElement) {
       safeEmit(emitter, "error", "Composer did not open within 10 seconds.");
       const { captureFailureArtifact } = require("./browserBase");
       if (captureFailureArtifact) {
-        await captureFailureArtifact(page, "instagram", `composer-timeout-${username}`);
+        await captureFailureArtifact(
+          page,
+          "instagram",
+          `composer-timeout-${username}`,
+        );
       }
       return { success: false, error: "composer_timeout" };
     }
@@ -550,15 +730,23 @@ async function sendDM(page, { username, message }, emitter) {
     await humanDelay(2000, 4000); // Simulate reading/reviewing
 
     // Check for message request dialog
-    const dialogBtn = await firstVisible(page, [
-      'button:has-text("Send Message Request")',
-      'button:has-text("Send anyway")',
-      'span:has-text("Send Message Request")',
-      'span:has-text("Send anyway")'
-    ], 2000).catch(() => null);
+    const dialogBtn = await firstVisible(
+      page,
+      [
+        'button:has-text("Send Message Request")',
+        'button:has-text("Send anyway")',
+        'span:has-text("Send Message Request")',
+        'span:has-text("Send anyway")',
+      ],
+      2000,
+    ).catch(() => null);
 
     if (dialogBtn) {
-      safeEmit(emitter, "info", "Message request confirmation dialog detected. Clicking send anyway/request...");
+      safeEmit(
+        emitter,
+        "info",
+        "Message request confirmation dialog detected. Clicking send anyway/request...",
+      );
       await humanMouseMove(page, dialogBtn);
       await humanDelay(300, 600);
       await dialogBtn.click();
@@ -567,7 +755,9 @@ async function sendDM(page, { username, message }, emitter) {
     }
 
     // Click DM Send button
-    const sendBtn = await firstVisible(page, IG_SELECTORS.dmSend, 5000).catch(() => null);
+    const sendBtn = await firstVisible(page, IG_SELECTORS.dmSend, 5000).catch(
+      () => null,
+    );
     if (!sendBtn) {
       safeEmit(emitter, "error", "Send button not found");
       return { success: false, error: "send_button_not_found" };
@@ -581,17 +771,24 @@ async function sendDM(page, { username, message }, emitter) {
 
     // Update messages table: status='sent', sent_at=now, ig_is_message_request
     const db = getDb();
-    db.prepare(`
+    db.prepare(
+      `
       UPDATE messages
       SET status = 'sent',
           sent_at = datetime('now', 'localtime'),
           ig_is_message_request = ?
-      WHERE (lead_id = (SELECT id FROM leads WHERE ig_username = ? LIMIT 1) OR lead_id = (SELECT id FROM leads WHERE profile_url LIKE ? LIMIT 1))
+      WHERE (lead_id = (SELECT id FROM leads WHERE LOWER(ig_username) = LOWER(?) LIMIT 1) OR lead_id = (SELECT id FROM leads WHERE LOWER(profile_url) LIKE LOWER(?) LIMIT 1))
         AND status IN ('pending', 'approved', 'draft')
         AND body = ?
-    `).run(dialogWasShown ? 1 : 0, username, `%instagram.com/${username}%`, message);
+    `,
+    ).run(
+      dialogWasShown ? 1 : 0,
+      resolvedUsername,
+      `%instagram.com/${resolvedUsername}%`,
+      message,
+    );
 
-    safeEmit(emitter, "done", `DM sent to @${username}`);
+    safeEmit(emitter, "done", `DM sent to @${resolvedUsername}`);
     return { success: true, isMessageRequest: dialogWasShown };
   } catch (err) {
     logger.error("Instagram sendDM Failed", { username, error: err.message });
@@ -604,26 +801,49 @@ async function sendDM(page, { username, message }, emitter) {
 }
 async function viewStory(page, { username }, emitter) {
   try {
+    const resolvedUsername = normalizeInstagramUsername(username);
     const blockState = isInstagramBlocked();
     if (blockState.blocked) {
-      safeEmit(emitter, "error", `Instagram action aborted: account is blocked until ${blockState.resumesAt}`);
-      return { success: false, error: "account_blocked", resumesAt: blockState.resumesAt };
+      safeEmit(
+        emitter,
+        "error",
+        `Instagram action aborted: account is blocked until ${blockState.resumesAt}`,
+      );
+      return {
+        success: false,
+        error: "account_blocked",
+        resumesAt: blockState.resumesAt,
+      };
     }
 
-    safeEmit(emitter, "info", `Navigating to @${username} to view story`);
-    const profileUrl = `https://www.instagram.com/${username}/`;
+    if (!resolvedUsername) {
+      return { success: false, error: "username_missing" };
+    }
+
+    safeEmit(
+      emitter,
+      "info",
+      `Navigating to @${resolvedUsername} to view story`,
+    );
+    const profileUrl = `https://www.instagram.com/${resolvedUsername}/`;
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
     await humanDelay(3000, 5000);
 
     // 1. Check for Action blocks
     const blockCheck = await checkForInstagramBlock(page);
     if (blockCheck.blocked) {
-      safeEmit(emitter, "error", `Instagram block detected: ${blockCheck.reason}`);
+      safeEmit(
+        emitter,
+        "error",
+        `Instagram block detected: ${blockCheck.reason}`,
+      );
       return { success: false, error: blockCheck.reason };
     }
 
     // 2. Scan profile for active story ring
-    const ringEl = await firstVisible(page, IG_SELECTORS.storyRing, 3000).catch(() => null);
+    const ringEl = await firstVisible(page, IG_SELECTORS.storyRing, 3000).catch(
+      () => null,
+    );
     if (!ringEl) {
       safeEmit(emitter, "info", "No active story found");
       return { success: true, hasStory: false };
@@ -638,7 +858,11 @@ async function viewStory(page, { username }, emitter) {
     try {
       await page.waitForSelector('div[role="progressbar"]', { timeout: 5000 });
     } catch (err) {
-      safeEmit(emitter, "info", "Story viewer did not open within timeout, assuming no active story.");
+      safeEmit(
+        emitter,
+        "info",
+        "Story viewer did not open within timeout, assuming no active story.",
+      );
       return { success: true, hasStory: false };
     }
 
@@ -647,7 +871,11 @@ async function viewStory(page, { username }, emitter) {
     await humanDelay(4000, 7000);
 
     // 6. Dismiss the story viewer
-    const closeBtn = await firstVisible(page, IG_SELECTORS.storyClose, 2000).catch(() => null);
+    const closeBtn = await firstVisible(
+      page,
+      IG_SELECTORS.storyClose,
+      2000,
+    ).catch(() => null);
     if (closeBtn) {
       await humanMouseMove(page, closeBtn);
       await humanDelay(300, 600);
@@ -659,10 +887,17 @@ async function viewStory(page, { username }, emitter) {
     // 7. Nairobi afterAction delay
     await igDelay("afterAction");
 
-    safeEmit(emitter, "done", `Successfully watched story for @${username}`);
+    safeEmit(
+      emitter,
+      "done",
+      `Successfully watched story for @${resolvedUsername}`,
+    );
     return { success: true, hasStory: true };
   } catch (err) {
-    logger.error("Instagram viewStory Failed", { username, error: err.message });
+    logger.error("Instagram viewStory Failed", {
+      username,
+      error: err.message,
+    });
     safeEmit(emitter, "error", `View story action failed: ${err.message}`);
     return { success: false, error: err.message };
   }
@@ -670,21 +905,42 @@ async function viewStory(page, { username }, emitter) {
 
 async function likeRecentPost(page, { username }, emitter) {
   try {
+    const resolvedUsername = normalizeInstagramUsername(username);
     const blockState = isInstagramBlocked();
     if (blockState.blocked) {
-      safeEmit(emitter, "error", `Instagram action aborted: account is blocked until ${blockState.resumesAt}`);
-      return { success: false, error: "account_blocked", resumesAt: blockState.resumesAt };
+      safeEmit(
+        emitter,
+        "error",
+        `Instagram action aborted: account is blocked until ${blockState.resumesAt}`,
+      );
+      return {
+        success: false,
+        error: "account_blocked",
+        resumesAt: blockState.resumesAt,
+      };
     }
 
-    safeEmit(emitter, "info", `Navigating to @${username} to like recent post`);
-    const profileUrl = `https://www.instagram.com/${username}/`;
+    if (!resolvedUsername) {
+      return { success: false, error: "username_missing" };
+    }
+
+    safeEmit(
+      emitter,
+      "info",
+      `Navigating to @${resolvedUsername} to like recent post`,
+    );
+    const profileUrl = `https://www.instagram.com/${resolvedUsername}/`;
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
     await humanDelay(3000, 5000);
 
     // 1. Check for Action blocks
     const blockCheck = await checkForInstagramBlock(page);
     if (blockCheck.blocked) {
-      safeEmit(emitter, "error", `Instagram block detected: ${blockCheck.reason}`);
+      safeEmit(
+        emitter,
+        "error",
+        `Instagram block detected: ${blockCheck.reason}`,
+      );
       return { success: false, error: blockCheck.reason };
     }
 
@@ -703,9 +959,17 @@ async function likeRecentPost(page, { username }, emitter) {
     await firstPost.click();
 
     // 4. Wait for post modal/page to load by searching for the Like button
-    const likeBtn = await firstVisible(page, IG_SELECTORS.likeButton, 5000).catch(() => null);
+    const likeBtn = await firstVisible(
+      page,
+      IG_SELECTORS.likeButton,
+      5000,
+    ).catch(() => null);
     if (!likeBtn) {
-      safeEmit(emitter, "warn", "Selector miss: Like button not found after clicking post.");
+      safeEmit(
+        emitter,
+        "warn",
+        "Selector miss: Like button not found after clicking post.",
+      );
       return { success: false, error: "selector_miss" };
     }
 
@@ -715,8 +979,12 @@ async function likeRecentPost(page, { username }, emitter) {
     if (selfLabel && selfLabel.toLowerCase() === "unlike") {
       isLiked = true;
     } else {
-      const descendantUnlike = await likeBtn.$('svg[aria-label="Unlike"]').catch(() => null);
-      const descendantUnlikeEl = await likeBtn.$('[aria-label="Unlike"]').catch(() => null);
+      const descendantUnlike = await likeBtn
+        .$('svg[aria-label="Unlike"]')
+        .catch(() => null);
+      const descendantUnlikeEl = await likeBtn
+        .$('[aria-label="Unlike"]')
+        .catch(() => null);
       if (descendantUnlike || descendantUnlikeEl) {
         isLiked = true;
       }
@@ -739,15 +1007,26 @@ async function likeRecentPost(page, { username }, emitter) {
     // 8. Close the post modal (Escape key)
     await page.keyboard.press("Escape").catch(() => {});
 
-    safeEmit(emitter, "done", `Successfully liked recent post for @${username}`);
+    safeEmit(
+      emitter,
+      "done",
+      `Successfully liked recent post for @${resolvedUsername}`,
+    );
     return { success: true, liked: true };
   } catch (err) {
-    logger.error("Instagram likeRecentPost Failed", { username, error: err.message });
+    logger.error("Instagram likeRecentPost Failed", {
+      username,
+      error: err.message,
+    });
     safeEmit(emitter, "error", `Like recent post failed: ${err.message}`);
     return { success: false, error: err.message };
   }
 }
-async function postImage(page, { imagePath, caption, locationTag } = {}, emitter) {
+async function postImage(
+  page,
+  { imagePath, caption, locationTag } = {},
+  emitter,
+) {
   if (!page) {
     return { success: false, error: "not implemented" };
   }
@@ -764,8 +1043,16 @@ async function postImage(page, { imagePath, caption, locationTag } = {}, emitter
   try {
     const blockState = isInstagramBlocked();
     if (blockState.blocked) {
-      safeEmit(emitter, "error", `Instagram action aborted: account is blocked until ${blockState.resumesAt}`);
-      return { success: false, error: "account_blocked", resumesAt: blockState.resumesAt };
+      safeEmit(
+        emitter,
+        "error",
+        `Instagram action aborted: account is blocked until ${blockState.resumesAt}`,
+      );
+      return {
+        success: false,
+        error: "account_blocked",
+        resumesAt: blockState.resumesAt,
+      };
     }
 
     // 1. validateForFeed(imagePath)
@@ -782,7 +1069,7 @@ async function postImage(page, { imagePath, caption, locationTag } = {}, emitter
     // 2. Navigate to instagram.com/
     await page.goto("https://www.instagram.com/", {
       waitUntil: "domcontentloaded",
-      timeout: 30000
+      timeout: 30000,
     });
     await humanDelay(2000, 4000);
 
@@ -806,7 +1093,8 @@ async function postImage(page, { imagePath, caption, locationTag } = {}, emitter
     await page.evaluate(() => {
       const i = document.querySelector('input[type="file"]');
       if (i) {
-        i.style.cssText = "display:block!important;opacity:1;position:fixed;top:0;left:0";
+        i.style.cssText =
+          "display:block!important;opacity:1;position:fixed;top:0;left:0";
       }
     });
     await humanDelay(500, 1000);
@@ -843,17 +1131,27 @@ async function postImage(page, { imagePath, caption, locationTag } = {}, emitter
     // 12. Handle location Tag
     if (locationTag) {
       safeEmit(emitter, "info", `Adding location tag: ${locationTag}`);
-      const addLocationBtn = page.locator('span:has-text("Add location"), input[placeholder*="Add location"]');
-      if (await addLocationBtn.count() > 0) {
+      const addLocationBtn = page.locator(
+        'span:has-text("Add location"), input[placeholder*="Add location"]',
+      );
+      if ((await addLocationBtn.count()) > 0) {
         await addLocationBtn.first().click();
         await humanDelay(1000, 1500);
 
-        const locationInput = page.locator('input[placeholder*="Add location"], input[name="query"]');
+        const locationInput = page.locator(
+          'input[placeholder*="Add location"], input[name="query"]',
+        );
         await humanTypeText(page, locationInput, locationTag);
         await humanDelay(2000, 3000);
 
-        const firstResult = page.locator('div[role="button"]:has-text("' + locationTag.substring(0, 3) + '"), div[role="button"] span').first();
-        if (await firstResult.count() > 0) {
+        const firstResult = page
+          .locator(
+            'div[role="button"]:has-text("' +
+              locationTag.substring(0, 3) +
+              '"), div[role="button"] span',
+          )
+          .first();
+        if ((await firstResult.count()) > 0) {
           await firstResult.click();
           await humanDelay(1500, 2500);
         }
@@ -873,10 +1171,17 @@ async function postImage(page, { imagePath, caption, locationTag } = {}, emitter
     // 14. Wait for success
     let postUrl = null;
     try {
-      await page.waitForSelector('[aria-label*="Post shared"], :has-text("Post shared"), :has-text("Your post has been shared")', { timeout: 30000 });
+      await page.waitForSelector(
+        '[aria-label*="Post shared"], :has-text("Post shared"), :has-text("Your post has been shared")',
+        { timeout: 30000 },
+      );
       safeEmit(emitter, "info", "Post shared notification detected.");
     } catch (_) {
-      safeEmit(emitter, "info", "Post shared not explicitly detected; checking URL...");
+      safeEmit(
+        emitter,
+        "info",
+        "Post shared not explicitly detected; checking URL...",
+      );
     }
 
     const currentUrl = page.url();
@@ -889,17 +1194,24 @@ async function postImage(page, { imagePath, caption, locationTag } = {}, emitter
 
     // 15. Update posts table
     const db = getDb();
-    const postRow = db.prepare("SELECT id FROM posts WHERE media_path = ? OR body = ? ORDER BY id DESC LIMIT 1").get(imagePath, caption);
+    const postRow = db
+      .prepare(
+        "SELECT id FROM posts WHERE media_path = ? OR body = ? ORDER BY id DESC LIMIT 1",
+      )
+      .get(imagePath, caption);
     if (postRow) {
       db.prepare(
-        "UPDATE posts SET status = 'published', published_at = CURRENT_TIMESTAMP, ig_post_url = ? WHERE id = ?"
+        "UPDATE posts SET status = 'published', published_at = CURRENT_TIMESTAMP, ig_post_url = ? WHERE id = ?",
       ).run(postUrl, postRow.id);
-      safeEmit(emitter, "info", `Updated posts table for post ID ${postRow.id}`);
+      safeEmit(
+        emitter,
+        "info",
+        `Updated posts table for post ID ${postRow.id}`,
+      );
     }
 
     safeEmit(emitter, "done", `Post published: ${postUrl}`);
     return { success: true, postUrl };
-
   } catch (err) {
     safeEmit(emitter, "error", `Instagram postImage failed: ${err.message}`);
     return { success: false, error: err.message };
@@ -923,17 +1235,31 @@ async function postStory(page, { imagePath } = {}, emitter) {
   try {
     const blockState = isInstagramBlocked();
     if (blockState.blocked) {
-      safeEmit(emitter, "error", `Instagram action aborted: account is blocked until ${blockState.resumesAt}`);
-      return { success: false, error: "account_blocked", resumesAt: blockState.resumesAt };
+      safeEmit(
+        emitter,
+        "error",
+        `Instagram action aborted: account is blocked until ${blockState.resumesAt}`,
+      );
+      return {
+        success: false,
+        error: "account_blocked",
+        resumesAt: blockState.resumesAt,
+      };
     }
 
     // 1. validateForStory(imagePath)
     const { validateForStory } = require("../utils/imageValidator");
     const validation = await validateForStory(imagePath);
     if (!validation.valid) {
-      const isOnlyRatioError = validation.errors.every(e => e.includes("aspect ratio") || e.includes("9:16"));
+      const isOnlyRatioError = validation.errors.every(
+        (e) => e.includes("aspect ratio") || e.includes("9:16"),
+      );
       if (isOnlyRatioError) {
-        safeEmit(emitter, "warning", `Story aspect ratio is not 9:16, but proceeding anyway: ${validation.errors.join(", ")}`);
+        safeEmit(
+          emitter,
+          "warning",
+          `Story aspect ratio is not 9:16, but proceeding anyway: ${validation.errors.join(", ")}`,
+        );
       } else {
         const errStr = validation.errors.join(", ");
         safeEmit(emitter, "error", `Validation failed: ${errStr}`);
@@ -946,14 +1272,16 @@ async function postStory(page, { imagePath } = {}, emitter) {
     // 2. Navigate to instagram.com/
     await page.goto("https://www.instagram.com/", {
       waitUntil: "domcontentloaded",
-      timeout: 30000
+      timeout: 30000,
     });
     await humanDelay(2000, 4000);
 
     // 3. Navigate to stories/create directly or click avatar
-    let storyAvatar = page.locator('section > div > div button:has(img[alt*="profile"]):first-child');
+    let storyAvatar = page.locator(
+      'section > div > div button:has(img[alt*="profile"]):first-child',
+    );
     let avatarClicked = false;
-    if (await storyAvatar.count() > 0 && await storyAvatar.isVisible()) {
+    if ((await storyAvatar.count()) > 0 && (await storyAvatar.isVisible())) {
       try {
         await storyAvatar.click({ timeout: 5000 });
         avatarClicked = true;
@@ -963,7 +1291,7 @@ async function postStory(page, { imagePath } = {}, emitter) {
     if (!avatarClicked) {
       await page.goto("https://www.instagram.com/stories/create/", {
         waitUntil: "domcontentloaded",
-        timeout: 30000
+        timeout: 30000,
       });
       await humanDelay(2000, 3000);
     }
@@ -975,7 +1303,8 @@ async function postStory(page, { imagePath } = {}, emitter) {
     await page.evaluate(() => {
       const i = document.querySelector('input[type="file"]');
       if (i) {
-        i.style.cssText = "display:block!important;opacity:1;position:fixed;top:0;left:0";
+        i.style.cssText =
+          "display:block!important;opacity:1;position:fixed;top:0;left:0";
       }
     });
     await humanDelay(500, 1000);
@@ -985,7 +1314,9 @@ async function postStory(page, { imagePath } = {}, emitter) {
     await humanDelay(2000, 4000);
 
     // 6. Wait for editor and click share button
-    const shareStoryBtn = page.locator('button:has-text("Your story"), button:has-text("Share"), [aria-label*="Your story"], [aria-label*="Share"]');
+    const shareStoryBtn = page.locator(
+      'button:has-text("Your story"), button:has-text("Share"), [aria-label*="Your story"], [aria-label*="Share"]',
+    );
     await shareStoryBtn.first().waitFor({ state: "visible", timeout: 20000 });
     await humanDelay(1500, 2500);
 
@@ -994,17 +1325,24 @@ async function postStory(page, { imagePath } = {}, emitter) {
 
     // 7. Update posts table
     const db = getDb();
-    const postRow = db.prepare("SELECT id FROM posts WHERE media_path = ? ORDER BY id DESC LIMIT 1").get(imagePath);
+    const postRow = db
+      .prepare(
+        "SELECT id FROM posts WHERE media_path = ? ORDER BY id DESC LIMIT 1",
+      )
+      .get(imagePath);
     if (postRow) {
       db.prepare(
-        "UPDATE posts SET status = 'published', published_at = CURRENT_TIMESTAMP, ig_post_type = 'story', ig_story_expires_at = datetime('now', '+24 hours') WHERE id = ?"
+        "UPDATE posts SET status = 'published', published_at = CURRENT_TIMESTAMP, ig_post_type = 'story', ig_story_expires_at = datetime('now', '+24 hours') WHERE id = ?",
       ).run(postRow.id);
-      safeEmit(emitter, "info", `Updated posts table for story post ID ${postRow.id}`);
+      safeEmit(
+        emitter,
+        "info",
+        `Updated posts table for story post ID ${postRow.id}`,
+      );
     }
 
     safeEmit(emitter, "done", "Story post successfully published.");
     return { success: true };
-
   } catch (err) {
     safeEmit(emitter, "error", `Instagram postStory failed: ${err.message}`);
     return { success: false, error: err.message };
@@ -1014,13 +1352,25 @@ async function postStory(page, { imagePath } = {}, emitter) {
 async function postCarousel(page, params, emitter) {
   const blockState = isInstagramBlocked();
   if (blockState.blocked) {
-    safeEmit(emitter, "error", `Instagram action aborted: account is blocked until ${blockState.resumesAt}`);
-    return { success: false, error: "account_blocked", resumesAt: blockState.resumesAt };
+    safeEmit(
+      emitter,
+      "error",
+      `Instagram action aborted: account is blocked until ${blockState.resumesAt}`,
+    );
+    return {
+      success: false,
+      error: "account_blocked",
+      resumesAt: blockState.resumesAt,
+    };
   }
   return { success: false, error: "not implemented" };
 }
-async function checkInbox() { return { success: false, error: "not implemented" }; }
-async function scrapeProfile() { return { success: false, error: "not implemented" }; }
+async function checkInbox() {
+  return { success: false, error: "not implemented" };
+}
+async function scrapeProfile() {
+  return { success: false, error: "not implemented" };
+}
 
 module.exports = {
   followAccount,
@@ -1033,5 +1383,5 @@ module.exports = {
   postCarousel,
   checkInbox,
   scrapeProfile,
-  getSelectorHealthReport
+  getSelectorHealthReport,
 };

@@ -7,6 +7,7 @@ const {
 } = require("../automation/browserBase");
 const { getPlatformKeys } = require("./platformCatalog");
 const { broadcast } = require("./socketService");
+const { resolveInstagramUsername } = require("../utils/instagramUsername");
 
 const MAX_PROFILE_VISITS_PER_HOUR = 50;
 const DEFAULT_MIN_DELAY_MS = 3000;
@@ -383,6 +384,11 @@ function inferLocationFromLines(lines, text) {
 function mapInstagramLead(igLead, kw) {
   const bio = igLead.bio || igLead.ig_bio || "";
   const { role, company } = inferRoleCompanyFromBio(bio);
+  const igUsername = resolveInstagramUsername({
+    ig_username: igLead.username || igLead.ig_username || "",
+    profile_url: igLead.profile_url || "",
+    x_handle: igLead.x_handle || "",
+  });
 
   let location = "";
   if (kw.startsWith("geolocation:")) {
@@ -395,22 +401,37 @@ function mapInstagramLead(igLead, kw) {
 
   return {
     platform: "instagram",
-    name: igLead.display_name || igLead.name || igLead.username || igLead.ig_username || "",
-    role: role || igLead.business_category || igLead.ig_business_category || "Owner",
+    name: igLead.display_name || igLead.name || igUsername || "",
+    role:
+      role ||
+      igLead.business_category ||
+      igLead.ig_business_category ||
+      "Owner",
     company: company || igLead.display_name || igLead.name || "",
     location: location,
-    profile_url: igLead.profile_url || `https://www.instagram.com/${igLead.username || igLead.ig_username}/`,
+    profile_url:
+      igLead.profile_url ||
+      (igUsername ? `https://www.instagram.com/${igUsername}/` : ""),
     website: igLead.website || "",
     source_keyword: kw,
     // Add extra ig_ fields to ensure compatibility and full context
-    ig_username: igLead.username || igLead.ig_username || "",
+    ig_username: igUsername,
     ig_follower_count: igLead.follower_count || igLead.ig_follower_count || 0,
-    ig_following_count: igLead.following_count || igLead.ig_following_count || 0,
+    ig_following_count:
+      igLead.following_count || igLead.ig_following_count || 0,
     ig_post_count: igLead.post_count || igLead.ig_post_count || 0,
-    ig_is_business: igLead.is_business !== undefined ? (igLead.is_business ? 1 : 0) : (igLead.ig_is_business ? 1 : 0),
-    ig_business_category: igLead.business_category || igLead.ig_business_category || null,
-    ig_has_email: (igLead.email || igLead.ig_has_email) ? 1 : 0,
-    ig_has_phone: (igLead.phone || igLead.ig_has_phone) ? 1 : 0,
+    ig_is_business:
+      igLead.is_business !== undefined
+        ? igLead.is_business
+          ? 1
+          : 0
+        : igLead.ig_is_business
+          ? 1
+          : 0,
+    ig_business_category:
+      igLead.business_category || igLead.ig_business_category || null,
+    ig_has_email: igLead.email || igLead.ig_has_email ? 1 : 0,
+    ig_has_phone: igLead.phone || igLead.ig_has_phone ? 1 : 0,
     ig_bio: bio,
   };
 }
@@ -521,11 +542,11 @@ async function captureXSearchSnapshots(page, maxCards) {
           String(value || "")
             .replace(/\s+/g, " ")
             .trim();
-        const container = document.querySelector('[data-testid="primaryColumn"]') || document;
-        const cards = Array.from(container.querySelectorAll(cardSelector)).slice(
-          0,
-          Math.max(0, limit),
-        );
+        const container =
+          document.querySelector('[data-testid="primaryColumn"]') || document;
+        const cards = Array.from(
+          container.querySelectorAll(cardSelector),
+        ).slice(0, Math.max(0, limit));
 
         return cards
           .map((card) => ({
