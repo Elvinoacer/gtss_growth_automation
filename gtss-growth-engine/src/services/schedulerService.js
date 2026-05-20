@@ -44,7 +44,7 @@ function emitJobEvent(jobId, event) {
 
   // Broadcast via Socket.IO
   const { broadcast } = require("./socketService");
-  broadcast('scheduler:event', event);
+  broadcast("scheduler:event", event);
 
   // Legacy SSE
   const streams = jobStreams.get(key);
@@ -182,6 +182,58 @@ function resolveMediaFilePath(mediaPath) {
   }
 
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+function getPostMediaPaths(post) {
+  const raw = post?.media_paths ?? post?.media_path;
+  if (!raw) return [];
+
+  if (Array.isArray(raw)) {
+    return raw.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item || "").trim()).filter(Boolean);
+      }
+    } catch (_) {
+      // Keep legacy singular media_path values.
+    }
+
+    return [trimmed];
+  }
+
+  return [];
+}
+
+function getPrimaryPostMediaPath(post) {
+  return getPostMediaPaths(post)[0] || null;
+}
+
+function getPostLocationTag(post) {
+  return post?.location_tag || null;
+}
+
+async function deleteMediaFiles(mediaPaths) {
+  await Promise.all(
+    mediaPaths.map(async (mediaPath) => {
+      try {
+        await fs.promises.unlink(mediaPath);
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          logger.warn("Could not delete media file after publish", {
+            path: mediaPath,
+            error: error.message,
+          });
+        }
+      }
+    }),
+  );
 }
 
 async function dismissBlockingOverlays(page) {
@@ -800,22 +852,43 @@ async function publishPost(postId, emit, browserOptions = {}) {
   if (!post) throw new Error(`Post ${postId} not found`);
 
   // ── Media pre-flight ──────────────────────────────────────────────────────
-  if (post.media_path) {
-    const resolvedMediaPath = resolveMediaFilePath(post.media_path);
-    if (!resolvedMediaPath) {
+  const mediaPaths = getPostMediaPaths(post);
+  if (mediaPaths.length > 0) {
+    const resolvedMediaPaths = mediaPaths
+      .map((mediaPath) => resolveMediaFilePath(mediaPath))
+      .filter(Boolean);
+
+    if (resolvedMediaPaths.length === 0) {
       emit({
         type: "error",
-        message: `Media file not found on disk: ${post.media_path}. Post will be published without media.`,
+        message: `Media file not found on disk: ${mediaPaths.join(", ")}. Post will be published without media.`,
       });
+      post.media_paths = null;
       post.media_path = null;
+    } else if (
+      resolvedMediaPaths.length < mediaPaths.length &&
+      post.ig_post_type === "carousel"
+    ) {
+      emit({
+        type: "error",
+        message: `Missing files for Instagram carousel. Found ${resolvedMediaPaths.length} of ${mediaPaths.length} files. Post failed.`,
+      });
+      if (!skipPostStatusUpdate) {
+        db.prepare(
+          "UPDATE posts SET status = 'failed', last_error = ? WHERE id = ?",
+        ).run("Missing carousel media files", postId);
+      }
+      return { success: [], failed: JSON.parse(post.platforms) };
     } else {
-      post.media_path = resolvedMediaPath;
+      post.media_paths = JSON.stringify(resolvedMediaPaths);
+      post.media_path = resolvedMediaPaths[0];
       const ALLOWED_EXT = /\.(jpe?g|png|gif|webp|mp4|mov|avi|mkv|m4v)$/i;
       if (!ALLOWED_EXT.test(post.media_path)) {
         emit({
           type: "warning",
           message: `Unexpected file extension for media: ${post.media_path}. Skipping media.`,
         });
+        post.media_paths = null;
         post.media_path = null;
       }
     }
@@ -870,17 +943,30 @@ async function publishPost(postId, emit, browserOptions = {}) {
         case "instagram":
           {
             const instagram = require("../automation/instagram");
+            const locationTag = getPostLocationTag(post);
             if (post.ig_post_type === "story") {
-              const res = await instagram.postStory(page, { imagePath: post.media_path }, emit);
+              const res = await instagram.postStory(
+                page,
+                { imagePath: post.media_path },
+                emit,
+              );
               success = res.success;
             } else if (post.ig_post_type === "carousel") {
-              const res = await instagram.postCarousel(page, { imagePaths: post.media_paths }, emit);
+              const res = await instagram.postCarousel(
+                page,
+                {
+                  imagePaths: getPostMediaPaths(post),
+                  caption: post.body,
+                  locationTag,
+                },
+                emit,
+              );
               success = res.success;
             } else {
               const res = await instagram.postImage(
                 page,
-                { imagePath: post.media_path, caption: post.body, locationTag: post.location_tag },
-                emit
+                { imagePath: post.media_path, caption: post.body, locationTag },
+                emit,
               );
               success = res.success;
             }
@@ -937,10 +1023,11 @@ async function publishPost(postId, emit, browserOptions = {}) {
   }
 
   // Cleanup uploaded media file
-  if (post.media_path && failed.length === 0) {
-    await deleteMediaFile(post.media_path);
-  } else if (post.media_path && failed.length > 0) {
-    logger.info("Keeping media file for retry", { path: post.media_path });
+  const cleanupMediaPaths = getPostMediaPaths(post);
+  if (cleanupMediaPaths.length > 0 && failed.length === 0) {
+    await deleteMediaFiles(cleanupMediaPaths);
+  } else if (cleanupMediaPaths.length > 0 && failed.length > 0) {
+    logger.info("Keeping media file for retry", { path: cleanupMediaPaths[0] });
   }
 
   return { success: succeeded, failed };
@@ -972,4 +1059,7 @@ module.exports = {
   emitJobEvent,
   closeJobStream,
   POST_CHAR_LIMITS,
+  getPostMediaPaths,
+  getPrimaryPostMediaPath,
+  getPostLocationTag,
 };

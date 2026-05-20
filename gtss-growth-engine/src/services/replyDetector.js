@@ -9,6 +9,7 @@ const {
   captureFailureArtifact,
 } = require("../automation/browserBase");
 const { isSessionValid } = require("../automation/sessionManager");
+const { checkInbox: checkInstagramInbox } = require("./instagramReplyChecker");
 const logger = require("../utils/logger");
 
 const INBOX_URLS = {
@@ -290,9 +291,25 @@ async function detectReplies(platform, emit = () => {}, browserOptions = {}) {
           unreadConversations.push({ sender: nameText, text: snippetText });
         }
       }
+    } else if (platform === "instagram") {
+      const result = await checkInstagramInbox().catch((error) => {
+        emit(
+          "warn",
+          `Instagram inbox scan fell back to the dedicated checker: ${error.message}`,
+        );
+        return { primaryUnreadCount: 0, requestsCount: 0 };
+      });
+      const totalItems =
+        (result.primaryUnreadCount || 0) + (result.requestsCount || 0);
+      unreadConversations = Array.from({ length: totalItems }, () => ({
+        sender: "instagram",
+        text: "inbox item processed",
+      }));
     } else {
-      // Stub for Instagram/Facebook
-      emit("info", `${platform} selector logic stub executed.`);
+      emit(
+        "info",
+        `${platform} inbox scanning is not implemented for this platform.`,
+      );
     }
 
     emit(

@@ -8,6 +8,7 @@ const {
 const { getPlatformKeys } = require("./platformCatalog");
 const { broadcast } = require("./socketService");
 const { resolveInstagramUsername } = require("../utils/instagramUsername");
+const logger = require("../utils/logger");
 
 const MAX_PROFILE_VISITS_PER_HOUR = 50;
 const DEFAULT_MIN_DELAY_MS = 3000;
@@ -620,6 +621,140 @@ function normalizeLinkedInProfileUrl(url) {
   }
 }
 
+function normalizeOptionalText(value) {
+  const text = cleanText(value);
+  return text ? text : null;
+}
+
+function normalizeOptionalInteger(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function normalizeOptionalFlag(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return null;
+    if (["1", "true", "yes", "y"].includes(normalized)) return 1;
+    if (["0", "false", "no", "n"].includes(normalized)) return 0;
+  }
+
+  return value ? 1 : 0;
+}
+
+function buildLeadPersistenceRecord(profile) {
+  const platform = cleanText(profile.platform).toLowerCase();
+  const name =
+    normalizeOptionalText(
+      profile.name || profile.display_name || profile.handle,
+    ) || null;
+  const role = normalizeOptionalText(profile.role) || null;
+  const company = normalizeOptionalText(profile.company) || null;
+  const location = normalizeOptionalText(profile.location) || null;
+  const website = normalizeOptionalText(profile.website) || null;
+  const sourceKeyword = normalizeOptionalText(profile.source_keyword) || null;
+  let profileUrl = normalizeOptionalText(profile.profile_url);
+  let xHandle = null;
+  let igUsername = null;
+  let igFollowerCount = null;
+  let igFollowingCount = null;
+  let igPostCount = null;
+  let igIsBusiness = null;
+  let igBusinessCategory = null;
+  let igHasEmail = null;
+  let igHasPhone = null;
+  let igBio = null;
+
+  if (platform === "instagram") {
+    igUsername = resolveInstagramUsername(profile) || null;
+    if (!profileUrl && igUsername) {
+      profileUrl = `https://www.instagram.com/${igUsername}/`;
+    }
+    igFollowerCount = normalizeOptionalInteger(
+      profile.ig_follower_count ?? profile.follower_count,
+    );
+    igFollowingCount = normalizeOptionalInteger(
+      profile.ig_following_count ?? profile.following_count,
+    );
+    igPostCount = normalizeOptionalInteger(
+      profile.ig_post_count ?? profile.post_count,
+    );
+    igIsBusiness = normalizeOptionalFlag(
+      profile.ig_is_business ?? profile.is_business,
+    );
+    igBusinessCategory =
+      normalizeOptionalText(
+        profile.ig_business_category ?? profile.business_category,
+      ) || null;
+    igHasEmail = normalizeOptionalFlag(profile.ig_has_email ?? profile.email);
+    igHasPhone = normalizeOptionalFlag(profile.ig_has_phone ?? profile.phone);
+    igBio = normalizeOptionalText(profile.ig_bio ?? profile.bio) || null;
+  } else if (platform === "x") {
+    xHandle =
+      normalizeXHandle(profile.x_handle || profile.handle || "") || null;
+    if (!profileUrl && xHandle) {
+      profileUrl = `https://x.com/${xHandle}`;
+    }
+  } else {
+    xHandle = normalizeOptionalText(profile.x_handle || profile.handle) || null;
+  }
+
+  return {
+    platform,
+    name,
+    role,
+    company,
+    location,
+    profile_url: profileUrl,
+    website,
+    source_keyword: sourceKeyword,
+    status: normalizeOptionalText(profile.status) || "discovered",
+    x_handle: xHandle,
+    ig_username: igUsername,
+    ig_follower_count: igFollowerCount,
+    ig_following_count: igFollowingCount,
+    ig_post_count: igPostCount,
+    ig_is_business: igIsBusiness,
+    ig_business_category: igBusinessCategory,
+    ig_has_email: igHasEmail,
+    ig_has_phone: igHasPhone,
+    ig_bio: igBio,
+  };
+}
+
+function validateLeadPersistenceRecord(record) {
+  const issues = [];
+
+  if (!record.platform) {
+    issues.push("missing platform");
+  }
+
+  if (!record.profile_url) {
+    issues.push("missing profile_url");
+  }
+
+  if (record.platform === "instagram" && !record.ig_username) {
+    issues.push("missing ig_username");
+  }
+
+  if (record.platform === "x" && !record.x_handle) {
+    issues.push("missing x_handle");
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues,
+  };
+}
+
 async function extractLinkedInSearchResults(page, max) {
   const rawLeads = await page.evaluate((limit) => {
     function clean(value) {
@@ -722,7 +857,9 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
   const emit = (e) => emitJobEvent(jobId, { ...e, jobId });
   const selected = platforms.filter((p) => listDiscoverySources().includes(p));
   let totalNewCollected = 0;
+  let prePersistedNew = 0;
   const rawProfiles = [];
+  const platformErrors = [];
 
   emit({
     type: "info",
@@ -759,6 +896,12 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
         );
 
         found.forEach((p) => {
+          if (p && p.__prePersistedByDiscovery) {
+            prePersistedNew++;
+            totalNewCollected++;
+            return;
+          }
+
           // Check if this profile is already in our collected list or in the DB
           const isInBatch = rawProfiles.some(
             (rp) => rp.profile_url === p.profile_url,
@@ -784,11 +927,25 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
           break;
         }
       } catch (e) {
+        platformErrors.push(e);
         emit({ type: "error", platform, message: e.message });
       }
     }
 
+    if (
+      rawProfiles.length === 0 &&
+      prePersistedNew === 0 &&
+      platformErrors.length > 0 &&
+      platformErrors.length >= selected.length
+    ) {
+      throw platformErrors[platformErrors.length - 1];
+    }
+
     const result = insertLeads(rawProfiles);
+    if (prePersistedNew > 0) {
+      result.total += prePersistedNew;
+      result.new += prePersistedNew;
+    }
     db.prepare(
       "UPDATE discovery_runs SET leads_found = ?, status = ? WHERE id = ?",
     ).run(result.new, isJobStopped(jobId) ? "stopped" : "completed", jobId);
@@ -810,21 +967,57 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
 function insertLeads(profiles) {
   const db = getDb();
   const insert = db.prepare(`
-    INSERT INTO leads (platform, name, role, company, location, profile_url, website, source_keyword, status)
-    SELECT @platform, @name, @role, @company, @location, @profile_url, @website, @source_keyword, 'discovered'
+    INSERT INTO leads (
+      platform, name, role, company, location, profile_url, website, source_keyword, status,
+      x_handle, ig_username, ig_follower_count, ig_following_count, ig_post_count,
+      ig_is_business, ig_business_category, ig_has_email, ig_has_phone, ig_bio
+    )
+    SELECT
+      @platform, @name, @role, @company, @location, @profile_url, @website, @source_keyword, @status,
+      @x_handle, @ig_username, @ig_follower_count, @ig_following_count, @ig_post_count,
+      @ig_is_business, @ig_business_category, @ig_has_email, @ig_has_phone, @ig_bio
     WHERE NOT EXISTS (SELECT 1 FROM leads WHERE profile_url = @profile_url)
   `);
   let inserted = 0;
+  let duplicates = 0;
+  let invalid = 0;
   const tx = db.transaction((list) => {
-    list.forEach((p) => {
-      if (insert.run(p).changes > 0) inserted++;
+    list.forEach((profile, index) => {
+      const record = buildLeadPersistenceRecord(profile || {});
+      const validation = validateLeadPersistenceRecord(record);
+
+      if (!validation.valid) {
+        invalid++;
+        logger.warn("DISCOVERY_PERSISTENCE", "Skipping invalid lead payload", {
+          index,
+          platform: record.platform || "unknown",
+          issues: validation.issues,
+        });
+        return;
+      }
+
+      const result = insert.run(record);
+      if (result.changes > 0) {
+        inserted++;
+      } else {
+        duplicates++;
+      }
     });
   });
-  tx(profiles);
+  tx(Array.isArray(profiles) ? profiles : []);
+
+  logger.info("DISCOVERY_PERSISTENCE", "Lead persistence batch completed", {
+    total: Array.isArray(profiles) ? profiles.length : 0,
+    inserted,
+    duplicates,
+    invalid,
+  });
+
   return {
-    total: profiles.length,
+    total: Array.isArray(profiles) ? profiles.length : 0,
     new: inserted,
-    duplicates: profiles.length - inserted,
+    duplicates,
+    invalid,
   };
 }
 
@@ -1225,14 +1418,13 @@ const platformDiscoveryMap = {
     }
   },
   instagram: async (kw, max, emit, jobId) => {
-    const { createInstagramBrowser } = require("../automation/browserBase");
     const {
       discoverViaHashtag,
       discoverViaGeolocation,
       discoverViaCompetitorFollowers,
     } = require("../automation/instagramDiscovery");
 
-    const browserState = await createInstagramBrowser();
+    const browserState = await createBrowserContext("instagram");
     const page = browserState.page;
     let rawLeads = [];
 
@@ -1284,8 +1476,15 @@ const platformDiscoveryMap = {
         );
       }
 
+      if (result && result.success === false) {
+        throw new Error(result.error || "Instagram discovery failed");
+      }
+
       if (result && result.leads) {
-        rawLeads = result.leads.map((lead) => mapInstagramLead(lead, kw));
+        rawLeads = result.leads.map((lead) => ({
+          ...mapInstagramLead(lead, kw),
+          __prePersistedByDiscovery: true,
+        }));
       }
       return rawLeads;
     } catch (error) {
@@ -1311,8 +1510,12 @@ module.exports = {
   closeJobStream,
   stopDiscovery,
   __private: {
+    mapInstagramLead,
     parseXSearchLeadSnapshot,
     inferRoleCompanyFromBio,
     normalizeXProfileUrl,
+    buildLeadPersistenceRecord,
+    validateLeadPersistenceRecord,
+    insertLeads,
   },
 };

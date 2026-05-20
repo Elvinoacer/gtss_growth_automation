@@ -1,7 +1,12 @@
 const cron = require("node-cron");
 const fs = require("fs");
 const { getDb } = require("../db/database");
-const { publishPost } = require("../services/schedulerService");
+const {
+  publishPost,
+  getPostMediaPaths,
+  getPrimaryPostMediaPath,
+  getPostLocationTag,
+} = require("../services/schedulerService");
 const logger = require("../utils/logger");
 
 const MAX_RETRIES = 5;
@@ -27,6 +32,10 @@ async function deleteMediaFile(mediaPath) {
       });
     }
   }
+}
+
+async function deleteMediaFiles(mediaPaths) {
+  await Promise.all(mediaPaths.map((mediaPath) => deleteMediaFile(mediaPath)));
 }
 
 // Initializes the cron job to publish scheduled posts.
@@ -130,7 +139,7 @@ function initScheduledPoster() {
                      last_error = ?
                  WHERE id = ?`,
               ).run(newRetryCount, failureSummary, post.id);
-              await deleteMediaFile(post.media_path);
+              await deleteMediaFiles(getPostMediaPaths(post));
               logger.error(
                 `Cron: Post ${post.id} permanently failed after ${MAX_RETRIES} retries.`,
               );
@@ -169,7 +178,7 @@ function initScheduledPoster() {
                      last_error = ?
                  WHERE id = ?`,
               ).run(newRetryCount, err.message, post.id);
-              await deleteMediaFile(post.media_path);
+              await deleteMediaFiles(getPostMediaPaths(post));
             } else {
               const delayMinutes = backoffMinutes(newRetryCount);
               const nextRetryAt = new Date(
@@ -198,8 +207,12 @@ function initScheduledPoster() {
 
 async function postToInstagram(post, browser, emitter) {
   const db = getDb();
-  const loadedPost = db.prepare("SELECT * FROM posts WHERE id = ?").get(post.id) || post;
+  const loadedPost =
+    db.prepare("SELECT * FROM posts WHERE id = ?").get(post.id) || post;
   const igPostType = loadedPost.ig_post_type || "feed";
+  const mediaPaths = getPostMediaPaths(loadedPost);
+  const primaryMediaPath = getPrimaryPostMediaPath(loadedPost);
+  const locationTag = getPostLocationTag(loadedPost);
 
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -209,17 +222,29 @@ async function postToInstagram(post, browser, emitter) {
     const instagram = require("../automation/instagram");
     switch (igPostType) {
       case "story":
-        result = await instagram.postStory(page, { imagePath: loadedPost.media_path }, emitter);
+        result = await instagram.postStory(
+          page,
+          { imagePath: primaryMediaPath },
+          emitter,
+        );
         break;
       case "carousel":
-        result = await instagram.postCarousel(page, { imagePaths: loadedPost.media_paths }, emitter);
+        result = await instagram.postCarousel(
+          page,
+          { imagePaths: mediaPaths },
+          emitter,
+        );
         break;
       case "feed":
       default:
         result = await instagram.postImage(
           page,
-          { imagePath: loadedPost.media_path, caption: loadedPost.body, locationTag: loadedPost.location_tag },
-          emitter
+          {
+            imagePath: primaryMediaPath,
+            caption: loadedPost.body,
+            locationTag,
+          },
+          emitter,
         );
         break;
     }
@@ -242,5 +267,5 @@ async function postToPlatform(platform, post, browser, emitter) {
 module.exports = {
   initScheduledPoster,
   postToInstagram,
-  postToPlatform
+  postToPlatform,
 };

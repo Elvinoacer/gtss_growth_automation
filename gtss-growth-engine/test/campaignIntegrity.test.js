@@ -269,7 +269,11 @@ async function runCampaignIntegrityTests() {
   console.log("🎉 ALL CAMPAIGN INTEGRITY & RELIABILITY TESTS PASSED SUCCESSFULLY! EXITING 0.");
 }
 
-runCampaignIntegrityTests().catch(err => {
-  console.error("❌ CAMPAIGN INTEGRITY TESTS FAILED:", err);
-  process.exit(1);
-});
+runCampaignIntegrityTests()
+  .then(() => {
+    process.exit(0);
+  })
+  .catch(err => {
+    console.error("❌ CAMPAIGN INTEGRITY TESTS FAILED:", err);
+    process.exit(1);
+  });

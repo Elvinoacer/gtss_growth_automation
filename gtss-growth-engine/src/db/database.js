@@ -111,21 +111,59 @@ function initializeSchema(database) {
         finished_at DATETIME
       );
     `);
-  } catch (_) { /* table exists */ }
+  } catch (_) {
+    /* table exists */
+  }
   try {
-    database.exec('ALTER TABLE leads ADD COLUMN pipeline_run_id INTEGER REFERENCES pipeline_runs(id)');
+    database.exec(
+      "ALTER TABLE leads ADD COLUMN pipeline_run_id INTEGER REFERENCES pipeline_runs(id)",
+    );
   } catch (_) {}
   try {
-    database.exec('ALTER TABLE leads ADD COLUMN x_handle TEXT');
+    database.exec("ALTER TABLE leads ADD COLUMN x_handle TEXT");
   } catch (_) {}
   try {
-    database.exec('ALTER TABLE leads ADD COLUMN ig_username TEXT');
+    database.exec("ALTER TABLE leads ADD COLUMN ig_username TEXT");
   } catch (_) {}
   try {
-    database.exec('ALTER TABLE discovery_runs ADD COLUMN pipeline_run_id INTEGER REFERENCES pipeline_runs(id)');
+    database.exec("ALTER TABLE leads ADD COLUMN ig_follower_count INTEGER");
   } catch (_) {}
   try {
-    database.exec("ALTER TABLE messages ADD COLUMN generated_by TEXT DEFAULT 'ai'");
+    database.exec("ALTER TABLE leads ADD COLUMN ig_following_count INTEGER");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE leads ADD COLUMN ig_post_count INTEGER");
+  } catch (_) {}
+  try {
+    database.exec(
+      "ALTER TABLE leads ADD COLUMN ig_is_business INTEGER DEFAULT 0",
+    );
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE leads ADD COLUMN ig_business_category TEXT");
+  } catch (_) {}
+  try {
+    database.exec(
+      "ALTER TABLE leads ADD COLUMN ig_has_email INTEGER DEFAULT 0",
+    );
+  } catch (_) {}
+  try {
+    database.exec(
+      "ALTER TABLE leads ADD COLUMN ig_has_phone INTEGER DEFAULT 0",
+    );
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE leads ADD COLUMN ig_bio TEXT");
+  } catch (_) {}
+  try {
+    database.exec(
+      "ALTER TABLE discovery_runs ADD COLUMN pipeline_run_id INTEGER REFERENCES pipeline_runs(id)",
+    );
+  } catch (_) {}
+  try {
+    database.exec(
+      "ALTER TABLE messages ADD COLUMN generated_by TEXT DEFAULT 'ai'",
+    );
   } catch (_) {}
 
   // Instagram warmup safe migrations
@@ -133,22 +171,37 @@ function initializeSchema(database) {
     database.exec("ALTER TABLE ig_warmup_sequences ADD COLUMN next_step TEXT");
   } catch (_) {}
   try {
-    database.exec("ALTER TABLE ig_warmup_sequences ADD COLUMN next_step_after DATETIME");
+    database.exec(
+      "ALTER TABLE ig_warmup_sequences ADD COLUMN next_step_after DATETIME",
+    );
   } catch (_) {}
   try {
-    database.exec("ALTER TABLE ig_warmup_sequences ADD COLUMN attempt_count INTEGER DEFAULT 0");
+    database.exec(
+      "ALTER TABLE ig_warmup_sequences ADD COLUMN attempt_count INTEGER DEFAULT 0",
+    );
   } catch (_) {}
   try {
-    database.exec("ALTER TABLE ig_warmup_sequences ADD COLUMN completed_at DATETIME");
+    database.exec(
+      "ALTER TABLE ig_warmup_sequences ADD COLUMN completed_at DATETIME",
+    );
   } catch (_) {}
   try {
     database.exec("ALTER TABLE leads ADD COLUMN ig_follow_back_at DATETIME");
   } catch (_) {}
   try {
-    database.exec("ALTER TABLE ig_follow_tracker ADD COLUMN eligible_for_unfollow INTEGER DEFAULT 1");
+    database.exec(
+      "ALTER TABLE leads ADD COLUMN ig_warmup_status TEXT DEFAULT 'pending'",
+    );
   } catch (_) {}
   try {
-    database.exec("ALTER TABLE ig_follow_tracker ADD COLUMN follow_status TEXT GENERATED ALWAYS AS (status)");
+    database.exec(
+      "ALTER TABLE ig_follow_tracker ADD COLUMN eligible_for_unfollow INTEGER DEFAULT 1",
+    );
+  } catch (_) {}
+  try {
+    database.exec(
+      "ALTER TABLE ig_follow_tracker ADD COLUMN follow_status TEXT GENERATED ALWAYS AS (status)",
+    );
   } catch (_) {}
   try {
     database.exec("ALTER TABLE messages ADD COLUMN action_type TEXT");
@@ -163,7 +216,9 @@ function initializeSchema(database) {
     database.exec("ALTER TABLE leads ADD COLUMN replied_at DATETIME");
   } catch (_) {}
   try {
-    database.exec("ALTER TABLE ig_follow_tracker ADD COLUMN follow_back_at DATETIME");
+    database.exec(
+      "ALTER TABLE ig_follow_tracker ADD COLUMN follow_back_at DATETIME",
+    );
   } catch (_) {}
   try {
     database.exec("ALTER TABLE posts ADD COLUMN ig_post_url TEXT");
@@ -175,7 +230,15 @@ function initializeSchema(database) {
     database.exec("ALTER TABLE posts ADD COLUMN ig_story_expires_at DATETIME");
   } catch (_) {}
   try {
-    database.exec("ALTER TABLE ig_follow_tracker ADD COLUMN follow_source TEXT");
+    database.exec("ALTER TABLE posts ADD COLUMN media_paths TEXT");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE posts ADD COLUMN location_tag TEXT");
+  } catch (_) {}
+  try {
+    database.exec(
+      "ALTER TABLE ig_follow_tracker ADD COLUMN follow_source TEXT",
+    );
   } catch (_) {}
 
   try {
@@ -252,21 +315,31 @@ function initializeSchema(database) {
   } catch (_) {}
 
   try {
-    const cols = database.prepare("PRAGMA table_info(campaigns)").all().map(c => c.name);
+    const cols = database
+      .prepare("PRAGMA table_info(campaigns)")
+      .all()
+      .map((c) => c.name);
     if (!cols.includes("platform")) {
       database.exec("ALTER TABLE campaigns ADD COLUMN platform TEXT");
     }
   } catch (_) {}
 
   try {
-    const cols = database.prepare("PRAGMA table_info(daily_actions)").all().map(c => c.name);
+    const cols = database
+      .prepare("PRAGMA table_info(daily_actions)")
+      .all()
+      .map((c) => c.name);
     if (!cols.includes("campaign_id")) {
-      database.exec("ALTER TABLE daily_actions ADD COLUMN campaign_id INTEGER REFERENCES campaigns(id)");
+      database.exec(
+        "ALTER TABLE daily_actions ADD COLUMN campaign_id INTEGER REFERENCES campaigns(id)",
+      );
     }
   } catch (_) {}
 
   try {
-    database.exec("CREATE INDEX IF NOT EXISTS idx_daily_actions_campaign_id ON daily_actions(campaign_id)");
+    database.exec(
+      "CREATE INDEX IF NOT EXISTS idx_daily_actions_campaign_id ON daily_actions(campaign_id)",
+    );
   } catch (_) {}
 
   seedDefaultSettings(database);
@@ -290,7 +363,9 @@ function seedDefaultSettings(database) {
     .get();
   if (!queueLockRow) {
     database
-      .prepare("INSERT INTO settings (key, value) VALUES ('campaign_queue_lock', ?) ON CONFLICT(key) DO NOTHING")
+      .prepare(
+        "INSERT INTO settings (key, value) VALUES ('campaign_queue_lock', ?) ON CONFLICT(key) DO NOTHING",
+      )
       .run("false");
   }
 
@@ -300,7 +375,9 @@ function seedDefaultSettings(database) {
     .get();
   if (!xOutreachModeRow) {
     database
-      .prepare("INSERT INTO settings (key, value) VALUES ('x_outreach_mode', ?) ON CONFLICT(key) DO NOTHING")
+      .prepare(
+        "INSERT INTO settings (key, value) VALUES ('x_outreach_mode', ?) ON CONFLICT(key) DO NOTHING",
+      )
       .run("follow_first");
   }
 
@@ -309,7 +386,9 @@ function seedDefaultSettings(database) {
     .get();
   if (!linkedinOutreachModeRow) {
     database
-      .prepare("INSERT INTO settings (key, value) VALUES ('linkedin_outreach_mode', ?) ON CONFLICT(key) DO NOTHING")
+      .prepare(
+        "INSERT INTO settings (key, value) VALUES ('linkedin_outreach_mode', ?) ON CONFLICT(key) DO NOTHING",
+      )
       .run("connect_first");
   }
 }
@@ -333,10 +412,13 @@ function getDailyActionCount(platform, actionType) {
 
 function isWithinLimit(platform, actionType) {
   const normalizedActionType = normalizeActionType(actionType);
-  
+
   let limit;
   // First, check limits.js config (especially for Instagram as requested)
-  if (limits[platform] && typeof limits[platform][normalizedActionType] === "number") {
+  if (
+    limits[platform] &&
+    typeof limits[platform][normalizedActionType] === "number"
+  ) {
     limit = limits[platform][normalizedActionType];
   } else {
     // Fall back to database settings limits
@@ -387,11 +469,16 @@ function normalizeActionType(actionType) {
   return aliases[actionType] || actionType;
 }
 
-function increment_action_count(platform, actionType, leadId = null, outcome = "sent") {
+function increment_action_count(
+  platform,
+  actionType,
+  leadId = null,
+  outcome = "sent",
+) {
   const normalizedActionType = normalizeActionType(actionType);
   const insert = db.prepare(
     `INSERT INTO daily_actions (platform, action_type, lead_id, outcome, performed_at)
-     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`
+     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
   );
   insert.run(platform, normalizedActionType, leadId, outcome);
 }

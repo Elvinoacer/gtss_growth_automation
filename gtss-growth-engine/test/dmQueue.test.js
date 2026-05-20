@@ -1,6 +1,7 @@
 process.env.DB_PATH = "./data/test_dm_queue.db";
 const assert = require("assert");
 const { getDb } = require("../src/db/database");
+require("../src/campaign/connectionQueue"); // Ensure schema upgrades run for connection_jobs
 const platformAdapter = require("../src/campaign/platformAdapter");
 const platformPolicies = require("../src/config/platformPolicies");
 const limits = require("../src/config/limits");

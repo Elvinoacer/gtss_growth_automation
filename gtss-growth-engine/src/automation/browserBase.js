@@ -826,6 +826,11 @@ async function createBrowser(platform, options = {}) {
         browser.contexts()[0] ||
         (await browser.newContext({ locale: "en-KE" }));
 
+      // Apply platform-specific context configuration
+      if (platform === "instagram") {
+        await configureInstagramContext(context);
+      }
+
       // Always open a NEW tab for automation — never hijack existing tabs
       const page = await context.newPage();
       logger.info("BROWSER", `Opened new CDP tab for ${platform} automation`);
@@ -865,6 +870,12 @@ async function createBrowser(platform, options = {}) {
         viewport: null,
         locale: "en-KE",
       });
+
+      // Apply platform-specific context configuration
+      if (platform === "instagram") {
+        await configureInstagramContext(context);
+      }
+
       const page =
         context.pages().find((candidate) => !candidate.isClosed()) ||
         (await context.newPage());
@@ -893,6 +904,11 @@ async function createBrowser(platform, options = {}) {
     viewport: { width: 1280, height: 800 },
     locale: "en-KE",
   });
+
+  // Apply platform-specific context configuration
+  if (platform === "instagram") {
+    await configureInstagramContext(context);
+  }
 
   const cookies = loadSession(platform);
   if (cookies && cookies.length > 0) {
