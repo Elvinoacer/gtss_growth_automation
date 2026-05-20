@@ -8,10 +8,7 @@ const { getDb, initializeDatabase } = require("../db/database");
 const defaultTemplates = require("../config/templates.json");
 const defaultLimits = require("../config/limits");
 const { upsertEnvValue } = require("../utils/envWriter");
-const {
-  getPlatformCatalog,
-  getLimitFields,
-} = require("../services/platformCatalog");
+const { getPlatformCatalog, getLimitFields } = require("../services/platformCatalog");
 
 const pageRouter = express.Router();
 const apiRouter = express.Router();
@@ -23,16 +20,13 @@ pageRouter.get("/", (req, res) => {
   renderPage(res, {
     title: "Settings",
     primaryHeading: "Configure growth engine",
-    primaryCopy:
-      "Update limits, templates, account credentials, and platform session storage settings.",
+    primaryCopy: "Update limits, templates, account credentials, and platform session storage settings.",
   });
 });
 
 apiRouter.get("/", (req, res) => {
   const catalog = getPlatformCatalog();
-  const rows = getDb()
-    .prepare("SELECT key, value FROM settings ORDER BY key")
-    .all();
+  const rows = getDb().prepare("SELECT key, value FROM settings ORDER BY key").all();
   const settings = {};
 
   rows.forEach((row) => {
@@ -40,9 +34,7 @@ apiRouter.get("/", (req, res) => {
       return;
     }
 
-    settings[row.key] = shouldMask(row.key)
-      ? maskSecret(row.value)
-      : parseSettingValue(row.value);
+    settings[row.key] = shouldMask(row.key) ? maskSecret(row.value) : parseSettingValue(row.value);
   });
 
   settings.limits = getStoredLimits();
@@ -69,8 +61,7 @@ apiRouter.post("/gemini-key", (req, res) => {
 
 apiRouter.post("/test-gemini", async (req, res) => {
   try {
-    const apiKey =
-      getRawSetting("gemini_api_key") || process.env.GEMINI_API_KEY;
+    const apiKey = getRawSetting("gemini_api_key") || process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return res.json({
         valid: false,
@@ -93,9 +84,7 @@ apiRouter.post("/test-gemini", async (req, res) => {
     if (!response.ok) {
       return res.json({
         valid: false,
-        error: data.error
-          ? data.error.message
-          : `Gemini returned ${response.status}`,
+        error: data.error ? data.error.message : `Gemini returned ${response.status}`,
       });
     }
 
@@ -110,9 +99,7 @@ apiRouter.post("/gmail", (req, res) => {
   const appPassword = String(req.body.appPassword || "");
 
   if (!email || !appPassword) {
-    return res
-      .status(400)
-      .json({ error: "Gmail address and app password are required" });
+    return res.status(400).json({ error: "Gmail address and app password are required" });
   }
 
   upsertSetting("gmail_user", email);
@@ -125,8 +112,7 @@ apiRouter.post("/gmail", (req, res) => {
 apiRouter.post("/test-email", async (req, res) => {
   try {
     const email = getRawSetting("gmail_user") || process.env.GMAIL_USER;
-    const appPassword =
-      getRawSetting("gmail_app_password") || process.env.GMAIL_APP_PASSWORD;
+    const appPassword = getRawSetting("gmail_app_password") || process.env.GMAIL_APP_PASSWORD;
 
     if (!email || !appPassword) {
       return res.status(400).json({ error: "Gmail is not configured" });
@@ -187,9 +173,7 @@ apiRouter.post("/passphrase", async (req, res) => {
   }
 
   if (!newPassphrase || newPassphrase.length < 8) {
-    return res
-      .status(400)
-      .json({ error: "New passphrase must be at least 8 characters" });
+    return res.status(400).json({ error: "New passphrase must be at least 8 characters" });
   }
 
   if (newPassphrase !== confirmPassphrase) {
@@ -237,12 +221,16 @@ apiRouter.post("/templates/apply-all", (req, res) => {
   const templates = getTemplates();
 
   // Get all non-follow-up messages with FULL lead info for variable substitution
-  const messages = db.prepare(`
+  const messages = db
+    .prepare(
+      `
     SELECT m.id, m.lead_id, m.platform, l.name, l.company, l.role, l.location, l.score_reason
     FROM messages m
     JOIN leads l ON l.id = m.lead_id
     WHERE m.is_follow_up = 0 OR m.is_follow_up IS NULL
-  `).all();
+  `,
+    )
+    .all();
 
   if (messages.length === 0) {
     return res.json({ success: true, updated: 0, message: "No messages to update" });
@@ -261,8 +249,12 @@ apiRouter.post("/templates/apply-all", (req, res) => {
       if (!template) continue;
 
       // Substitute ALL template variables
+      const firstName =
+        String(msg.name || "there")
+          .trim()
+          .split(/\s+/)[0] || "there";
       const body = template
-        .replace(/\{\{lead_name\}\}/g, msg.name || "there")
+        .replace(/\{\{lead_name\}\}/g, firstName)
         .replace(/\{\{company\}\}/g, msg.company || "your business")
         .replace(/\{\{role\}\}/g, msg.role || "")
         .replace(/\{\{location\}\}/g, msg.location || "Kenya")
@@ -284,11 +276,7 @@ apiRouter.post("/clear-data", (req, res) => {
   }
 
   const db = getDb();
-  const tables = db
-    .prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-    )
-    .all();
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all();
 
   db.exec("PRAGMA foreign_keys = OFF");
   tables.forEach((table) => {
@@ -311,9 +299,7 @@ function upsertSetting(key, value) {
 }
 
 function getRawSetting(key) {
-  const row = getDb()
-    .prepare("SELECT value FROM settings WHERE key = ?")
-    .get(key);
+  const row = getDb().prepare("SELECT value FROM settings WHERE key = ?").get(key);
   return row ? row.value : null;
 }
 
@@ -332,9 +318,7 @@ function getStoredLimits() {
 
 function getTemplates() {
   const templates = { ...defaultTemplates };
-  const rows = getDb()
-    .prepare("SELECT key, value FROM settings WHERE key LIKE 'template_%'")
-    .all();
+  const rows = getDb().prepare("SELECT key, value FROM settings WHERE key LIKE 'template_%'").all();
 
   rows.forEach((row) => {
     templates[row.key.replace("template_", "")] = row.value;
@@ -404,39 +388,40 @@ function clone(value) {
 // ---------------------------------------------------------------------------
 // Pipeline settings
 // ---------------------------------------------------------------------------
-const pipelineConfig = require('../config/pipelineConfig');
+const pipelineConfig = require("../config/pipelineConfig");
 
-apiRouter.get('/pipeline', (req, res) => {
+apiRouter.get("/pipeline", (req, res) => {
   const db = getDb();
   const getSettingValue = (key) => db.prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value;
   res.json({
-    pipelineMode: process.env.PIPELINE_MODE || 'ai',
-    discoveryMode: process.env.DISCOVERY_MODE || '',
-    qualificationMode: process.env.QUALIFICATION_MODE || '',
-    messageMode: process.env.MESSAGE_MODE || '',
-    sendMode: process.env.SEND_MODE || '',
+    pipelineMode: process.env.PIPELINE_MODE || "ai",
+    discoveryMode: process.env.DISCOVERY_MODE || "",
+    qualificationMode: process.env.QUALIFICATION_MODE || "",
+    messageMode: process.env.MESSAGE_MODE || "",
+    sendMode: process.env.SEND_MODE || "",
     qualificationThreshold: pipelineConfig.qualificationThreshold(),
     qualificationManualScore: pipelineConfig.manualQualificationScore(),
     autoApproveVariant: pipelineConfig.autoApproveVariant(),
     pipelineCron: pipelineConfig.pipelineCron(),
     xOutreachMode: process.env.X_OUTREACH_MODE || getSettingValue("x_outreach_mode") || "follow_first",
-    linkedinOutreachMode: process.env.LINKEDIN_OUTREACH_MODE || getSettingValue("linkedin_outreach_mode") || "connect_first",
+    linkedinOutreachMode:
+      process.env.LINKEDIN_OUTREACH_MODE || getSettingValue("linkedin_outreach_mode") || "connect_first",
   });
 });
 
-apiRouter.patch('/pipeline', (req, res) => {
+apiRouter.patch("/pipeline", (req, res) => {
   const fields = {
-    pipelineMode: 'PIPELINE_MODE',
-    discoveryMode: 'DISCOVERY_MODE',
-    qualificationMode: 'QUALIFICATION_MODE',
-    messageMode: 'MESSAGE_MODE',
-    sendMode: 'SEND_MODE',
-    qualificationThreshold: 'QUALIFICATION_THRESHOLD',
-    qualificationManualScore: 'QUALIFICATION_MANUAL_SCORE',
-    autoApproveVariant: 'MESSAGE_AUTO_APPROVE_VARIANT',
-    pipelineCron: 'PIPELINE_CRON',
-    xOutreachMode: 'X_OUTREACH_MODE',
-    linkedinOutreachMode: 'LINKEDIN_OUTREACH_MODE',
+    pipelineMode: "PIPELINE_MODE",
+    discoveryMode: "DISCOVERY_MODE",
+    qualificationMode: "QUALIFICATION_MODE",
+    messageMode: "MESSAGE_MODE",
+    sendMode: "SEND_MODE",
+    qualificationThreshold: "QUALIFICATION_THRESHOLD",
+    qualificationManualScore: "QUALIFICATION_MANUAL_SCORE",
+    autoApproveVariant: "MESSAGE_AUTO_APPROVE_VARIANT",
+    pipelineCron: "PIPELINE_CRON",
+    xOutreachMode: "X_OUTREACH_MODE",
+    linkedinOutreachMode: "LINKEDIN_OUTREACH_MODE",
   };
 
   const updated = [];
@@ -449,10 +434,14 @@ apiRouter.patch('/pipeline', (req, res) => {
       process.env[envKey] = value;
 
       // Synchronize back to the settings table
-      if (bodyKey === 'xOutreachMode') {
-        db.prepare("INSERT INTO settings (key, value) VALUES ('x_outreach_mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(value);
-      } else if (bodyKey === 'linkedinOutreachMode') {
-        db.prepare("INSERT INTO settings (key, value) VALUES ('linkedin_outreach_mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(value);
+      if (bodyKey === "xOutreachMode") {
+        db.prepare(
+          "INSERT INTO settings (key, value) VALUES ('x_outreach_mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        ).run(value);
+      } else if (bodyKey === "linkedinOutreachMode") {
+        db.prepare(
+          "INSERT INTO settings (key, value) VALUES ('linkedin_outreach_mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        ).run(value);
       }
 
       updated.push(bodyKey);
@@ -460,7 +449,7 @@ apiRouter.patch('/pipeline', (req, res) => {
   }
 
   if (updated.length === 0) {
-    return res.status(400).json({ error: 'No pipeline settings provided' });
+    return res.status(400).json({ error: "No pipeline settings provided" });
   }
 
   return res.json({ success: true, updated });

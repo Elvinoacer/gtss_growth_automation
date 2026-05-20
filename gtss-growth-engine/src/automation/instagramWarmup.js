@@ -48,9 +48,7 @@ function loadTemplates() {
 function getTemplate(platform, type) {
   const db = getDb();
   const settingKey = `template_${platform}_${type || "dm"}`;
-  const row = db
-    .prepare("SELECT value FROM settings WHERE key = ?")
-    .get(settingKey);
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(settingKey);
   if (row && row.value) return row.value;
 
   const templates = loadTemplates();
@@ -66,15 +64,18 @@ function fillTemplate(template, vars) {
   return result;
 }
 
+function getFirstName(name) {
+  const cleaned = String(name || "").trim();
+  if (!cleaned) return "there";
+  return cleaned.split(/\s+/)[0];
+}
+
 function extractPainPoint(scoreReason) {
   if (!scoreReason) return "managing restaurant operations more efficiently";
   const lower = scoreReason.toLowerCase();
-  if (lower.includes("restaurant") || lower.includes("food"))
-    return "streamlining restaurant operations and orders";
-  if (lower.includes("hotel"))
-    return "optimising hotel staff scheduling and guest management";
-  if (lower.includes("cafe") || lower.includes("coffee"))
-    return "managing café orders and inventory efficiently";
+  if (lower.includes("restaurant") || lower.includes("food")) return "streamlining restaurant operations and orders";
+  if (lower.includes("hotel")) return "optimising hotel staff scheduling and guest management";
+  if (lower.includes("cafe") || lower.includes("coffee")) return "managing café orders and inventory efficiently";
   if (lower.includes("sme") || lower.includes("enterprise"))
     return "simplifying business operations with smart software";
   return "managing business operations more efficiently";
@@ -91,9 +92,7 @@ function extractPainPoint(scoreReason) {
  */
 function startWarmupSequence(leadId) {
   const db = getDb();
-  const existing = db
-    .prepare("SELECT id FROM ig_warmup_sequences WHERE lead_id = ?")
-    .get(leadId);
+  const existing = db.prepare("SELECT id FROM ig_warmup_sequences WHERE lead_id = ?").get(leadId);
   if (existing) {
     return { success: false, error: "already_started" };
   }
@@ -109,7 +108,7 @@ function startWarmupSequence(leadId) {
         story_views_count, post_likes_count, comments_count, attempt_count,
         created_at, updated_at
       ) VALUES (?, 'pending', 'follow', ?, 0, 0, 0, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `
+    `,
     )
     .run(leadId, nextStepAfterStr);
 
@@ -119,7 +118,7 @@ function startWarmupSequence(leadId) {
     UPDATE leads
     SET ig_warmup_status = 'pending'
     WHERE id = ?
-  `
+  `,
   ).run(leadId);
 
   return { success: true, sequenceId: result.lastInsertRowid };
@@ -142,7 +141,7 @@ function getLeadsDueForStep() {
       JOIN leads l ON s.lead_id = l.id
       WHERE s.next_step_after <= datetime('now')
         AND s.status NOT IN ('warmup_complete', 'failed', 'skipped')
-    `
+    `,
     )
     .all();
   return rows;
@@ -158,9 +157,7 @@ function getLeadsDueForStep() {
  */
 async function advanceWarmupStep(page, { leadId }, emitter) {
   const db = getDb();
-  const sequence = db
-    .prepare("SELECT * FROM ig_warmup_sequences WHERE lead_id = ?")
-    .get(leadId);
+  const sequence = db.prepare("SELECT * FROM ig_warmup_sequences WHERE lead_id = ?").get(leadId);
   if (!sequence) {
     return { success: false, error: "sequence_not_found" };
   }
@@ -249,20 +246,12 @@ async function advanceWarmupStep(page, { leadId }, emitter) {
           last_action_at = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE lead_id = ?
-    `
-    ).run(
-      nextStatus,
-      nextStep,
-      nextStepAfterStr,
-      stepExecuted,
-      stepExecuted,
-      lastActionAtStr,
-      leadId
-    );
+    `,
+    ).run(nextStatus, nextStep, nextStepAfterStr, stepExecuted, stepExecuted, lastActionAtStr, leadId);
 
     // Record action in daily_actions for strict limit enforcement
     const dailyActionType = stepExecuted === "follow" ? "follows" : "likes";
-    increment_action_count('instagram', dailyActionType, leadId, 'sent');
+    increment_action_count("instagram", dailyActionType, leadId, "sent");
 
     // Sync status to leads.ig_warmup_status
     db.prepare(
@@ -270,13 +259,13 @@ async function advanceWarmupStep(page, { leadId }, emitter) {
       UPDATE leads
       SET ig_warmup_status = ?
       WHERE id = ?
-    `
+    `,
     ).run(nextStatus, leadId);
 
     safeEmit(
       emitter,
       "done",
-      `[WARMUP] Transitioned lead #${leadId} to status: ${nextStatus}. Next step: ${nextStep} scheduled for +${delayHours}h`
+      `[WARMUP] Transitioned lead #${leadId} to status: ${nextStatus}. Next step: ${nextStep} scheduled for +${delayHours}h`,
     );
 
     return { success: true, stepExecuted, nextStep };
@@ -301,7 +290,7 @@ async function advanceWarmupStep(page, { leadId }, emitter) {
             last_action_at = ?,
             updated_at = CURRENT_TIMESTAMP
         WHERE lead_id = ?
-      `
+      `,
       ).run(attempt, lastActionAtStr, leadId);
 
       db.prepare(
@@ -309,13 +298,13 @@ async function advanceWarmupStep(page, { leadId }, emitter) {
         UPDATE leads
         SET ig_warmup_status = 'skipped'
         WHERE id = ?
-      `
+      `,
       ).run(leadId);
 
       safeEmit(
         emitter,
         "error",
-        `[WARMUP] Step '${stepExecuted}' failed permanently after ${attempt} attempts: ${errorMsg}. Warmup status marked failed.`
+        `[WARMUP] Step '${stepExecuted}' failed permanently after ${attempt} attempts: ${errorMsg}. Warmup status marked failed.`,
       );
     } else {
       db.prepare(
@@ -326,13 +315,13 @@ async function advanceWarmupStep(page, { leadId }, emitter) {
             last_action_at = ?,
             updated_at = CURRENT_TIMESTAMP
         WHERE lead_id = ?
-      `
+      `,
       ).run(attempt, nextStepAfterStr, lastActionAtStr, leadId);
 
       safeEmit(
         emitter,
         "warn",
-        `[WARMUP] Step '${stepExecuted}' failed (Attempt ${attempt}/3): ${errorMsg}. Retrying in 2 hours.`
+        `[WARMUP] Step '${stepExecuted}' failed (Attempt ${attempt}/3): ${errorMsg}. Retrying in 2 hours.`,
       );
     }
 
@@ -361,7 +350,7 @@ function completeWarmup(leadId, emitter) {
         completed_at = CURRENT_TIMESTAMP,
         updated_at = CURRENT_TIMESTAMP
     WHERE lead_id = ?
-  `
+  `,
   ).run(leadId);
 
   // Sync leads warmup status
@@ -370,7 +359,7 @@ function completeWarmup(leadId, emitter) {
     UPDATE leads
     SET ig_warmup_status = 'warmup_complete'
     WHERE id = ?
-  `
+  `,
   ).run(leadId);
 
   // Fetch the lead to check if they followed back
@@ -380,15 +369,12 @@ function completeWarmup(leadId, emitter) {
   }
 
   // ig_is_message_request is 1 if follow_back_at is null, else 0
-  const ig_is_message_request =
-    lead.ig_follow_back_at === null || lead.ig_follow_back_at === undefined
-      ? 1
-      : 0;
+  const ig_is_message_request = lead.ig_follow_back_at === null || lead.ig_follow_back_at === undefined ? 1 : 0;
 
   // Generate personalized DM using template and details
   const template = getTemplate("instagram", "dm");
   const templateVars = {
-    lead_name: lead.name || "there",
+    lead_name: getFirstName(lead.name),
     role: lead.role || "",
     company: lead.company || "your business",
     location: lead.location || "Kenya",
@@ -410,13 +396,13 @@ function completeWarmup(leadId, emitter) {
     INSERT INTO messages (
       lead_id, platform, status, variant, is_follow_up, body, action_type, ig_is_message_request, generated_at
     ) VALUES (?, 'instagram', 'draft', 'A', 0, ?, 'instagram_dm', ?, CURRENT_TIMESTAMP)
-  `
+  `,
   ).run(leadId, body, ig_is_message_request);
 
   safeEmit(
     emitter,
     "info",
-    `Warm-up complete for lead #${leadId} — DM draft created (Message Request: ${ig_is_message_request === 1 ? "Yes" : "No"})`
+    `Warm-up complete for lead #${leadId} — DM draft created (Message Request: ${ig_is_message_request === 1 ? "Yes" : "No"})`,
   );
 
   return { success: true };

@@ -4,10 +4,7 @@ const { getDb } = require("../db/database");
 const { getPrimaryPlatform } = require("./platformCatalog");
 const { callGeminiText } = require("./aiService");
 const logger = require("../utils/logger");
-const {
-  stageMode,
-  autoApproveVariant,
-} = require("../config/pipelineConfig");
+const { stageMode, autoApproveVariant } = require("../config/pipelineConfig");
 
 // ---------------------------------------------------------------------------
 // SSE infrastructure (mirrors qualificationService pattern)
@@ -44,7 +41,7 @@ function emitJobEvent(jobId, event) {
 
   // Broadcast via Socket.IO
   const { broadcast } = require("./socketService");
-  broadcast('messages:event', event);
+  broadcast("messages:event", event);
 
   // Legacy SSE
   const streams = jobStreams.get(key);
@@ -100,9 +97,7 @@ function loadTemplates() {
 function getTemplate(platform, type) {
   const db = getDb();
   const settingKey = `template_${platform}_${type || "dm"}`;
-  const row = db
-    .prepare("SELECT value FROM settings WHERE key = ?")
-    .get(settingKey);
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(settingKey);
   if (row && row.value) return row.value;
 
   const templates = loadTemplates();
@@ -118,15 +113,18 @@ function fillTemplate(template, vars) {
   return result;
 }
 
+function getFirstName(name) {
+  const cleaned = String(name || "").trim();
+  if (!cleaned) return "there";
+  return cleaned.split(/\s+/)[0];
+}
+
 function extractPainPoint(scoreReason) {
   if (!scoreReason) return "managing restaurant operations more efficiently";
   const lower = scoreReason.toLowerCase();
-  if (lower.includes("restaurant") || lower.includes("food"))
-    return "streamlining restaurant operations and orders";
-  if (lower.includes("hotel"))
-    return "optimising hotel staff scheduling and guest management";
-  if (lower.includes("cafe") || lower.includes("coffee"))
-    return "managing café orders and inventory efficiently";
+  if (lower.includes("restaurant") || lower.includes("food")) return "streamlining restaurant operations and orders";
+  if (lower.includes("hotel")) return "optimising hotel staff scheduling and guest management";
+  if (lower.includes("cafe") || lower.includes("coffee")) return "managing café orders and inventory efficiently";
   if (lower.includes("sme") || lower.includes("enterprise"))
     return "simplifying business operations with smart software";
   return "managing business operations more efficiently";
@@ -162,7 +160,7 @@ function generateFromTemplate(lead, productPitch) {
   const template = getTemplate(resolvedPlatform, messageType);
 
   const templateVars = {
-    lead_name: lead.name || "there",
+    lead_name: getFirstName(lead.name),
     role: lead.role || "",
     company: lead.company || "your business",
     location: lead.location || "Kenya",
@@ -228,12 +226,7 @@ async function generateFollowUp(leadId) {
 
   const daysSince = originalMsg
     ? Math.floor(
-        (Date.now() -
-          new Date(
-            originalMsg.sent_at ||
-              originalMsg.approved_at ||
-              originalMsg.generated_at,
-          ).getTime()) /
+        (Date.now() - new Date(originalMsg.sent_at || originalMsg.approved_at || originalMsg.generated_at).getTime()) /
           86400000,
       )
     : 7;
@@ -262,11 +255,7 @@ Return ONLY the message body (max 300 chars).`;
 
     return { id: result.lastInsertRowid, body: cleanBody };
   } catch (error) {
-    logger.error(
-      "MESSAGES",
-      `Failed to generate follow-up for lead ${leadId}`,
-      error,
-    );
+    logger.error("MESSAGES", `Failed to generate follow-up for lead ${leadId}`, error);
     throw error;
   }
 }
@@ -307,12 +296,7 @@ async function generateAllMessages(jobId, productPitch, tone) {
 
       for (const lead of batch) {
         try {
-          const result = await generateMessages(
-            lead.id,
-            lead.platform,
-            productPitch,
-            tone,
-          );
+          const result = await generateMessages(lead.id, lead.platform, productPitch, tone);
           succeeded++;
           emit({
             type: "generated",
@@ -356,34 +340,46 @@ async function generateAllMessages(jobId, productPitch, tone) {
  */
 async function runMessageStage(jobId, emit) {
   const db = getDb();
-  const mode = stageMode('message');
+  const mode = stageMode("message");
   const variant = autoApproveVariant();
 
   // Get all qualified leads that don't yet have an approved message
-  const leads = db.prepare(`
+  const leads = db
+    .prepare(
+      `
     SELECT l.* FROM leads l
     LEFT JOIN messages m ON m.lead_id = l.id AND m.status = 'approved'
     WHERE l.status = 'qualified' AND m.id IS NULL
     ORDER BY l.lead_score DESC
-  `).all();
+  `,
+    )
+    .all();
 
   if (leads.length === 0) {
-    emit({ type: 'info', message: 'No qualified leads need messages' });
+    emit({ type: "info", message: "No qualified leads need messages" });
     return { generated: 0, approved: 0 };
   }
 
   let generated = 0;
   let approved = 0;
 
-  emit({ type: 'info', message: `Generating messages for ${leads.length} leads (mode: ${mode}, auto-approve: variant ${variant})` });
+  emit({
+    type: "info",
+    message: `Generating messages for ${leads.length} leads (mode: ${mode}, auto-approve: variant ${variant})`,
+  });
 
   for (let i = 0; i < leads.length; i++) {
     const lead = leads[i];
-    emit({ type: 'progress', message: `Generating message for ${lead.name || lead.id}...`, processed: i, total: leads.length });
+    emit({
+      type: "progress",
+      message: `Generating message for ${lead.name || lead.id}...`,
+      processed: i,
+      total: leads.length,
+    });
 
     try {
       let result;
-      if (mode === 'manual') {
+      if (mode === "manual") {
         result = generateFromTemplate(lead);
       } else {
         // AI mode with automatic template fallback (handled inside generateMessages)
@@ -393,18 +389,22 @@ async function runMessageStage(jobId, emit) {
       generated++;
 
       // Auto-approve configured variant
-      const updated = db.prepare(`
+      const updated = db
+        .prepare(
+          `
         UPDATE messages
         SET status = 'approved',
             approved_by = 'pipeline-auto',
             approved_at = CURRENT_TIMESTAMP
         WHERE lead_id = ? AND variant = ? AND status = 'pending'
-      `).run(lead.id, variant);
+      `,
+        )
+        .run(lead.id, variant);
 
       if (updated.changes > 0) {
         approved++;
         emit({
-          type: 'generated',
+          type: "generated",
           leadId: lead.id,
           name: lead.name,
           autoApproved: variant,
@@ -413,7 +413,7 @@ async function runMessageStage(jobId, emit) {
         });
       }
     } catch (err) {
-      emit({ type: 'warn', message: `Failed for ${lead.name || lead.id}: ${err.message}` });
+      emit({ type: "warn", message: `Failed for ${lead.name || lead.id}: ${err.message}` });
     }
 
     // Batch delay every BATCH_SIZE leads
@@ -423,7 +423,7 @@ async function runMessageStage(jobId, emit) {
   }
 
   emit({
-    type: 'complete',
+    type: "complete",
     message: `Generated ${generated} messages, ${approved} auto-approved as variant ${variant}`,
   });
 
