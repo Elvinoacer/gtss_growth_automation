@@ -31,36 +31,17 @@ const SELECTORS = {
   follow: ['button:has-text("Follow")', 'button[aria-label*="Follow"]'],
   pending: ['button:has-text("Pending")', 'button[aria-label*="Pending"]'],
   more: ['button[aria-label="More actions"]', 'button[aria-label*="More"]'],
-  actionDropdown: [
-    ".artdeco-dropdown__content",
-    ".artdeco-dropdown__content-inner",
-    '[role="menu"]',
-  ],
+  actionDropdown: [".artdeco-dropdown__content", ".artdeco-dropdown__content-inner", '[role="menu"]'],
   modal: ['[role="dialog"]', ".artdeco-modal", ".send-invite"],
   premiumDialog: [
     '[role="dialog"]:has-text("Grow Your Business with Premium")',
     '[role="dialog"]:has-text("With Premium, you can message anyone")',
     '.artdeco-modal:has-text("Premium")',
   ],
-  modalClose: [
-    'button[aria-label="Dismiss"]',
-    'button[aria-label="Close"]',
-    'button:has-text("×")',
-  ],
-  addNote: [
-    'button:has-text("Add a note")',
-    'button[aria-label*="Add a note"]',
-  ],
-  noteTextarea: [
-    'textarea[name="message"]',
-    "textarea#custom-message",
-    "textarea",
-  ],
-  modalSend: [
-    'button:has-text("Send")',
-    'button[aria-label*="Send"]',
-    "button.artdeco-button--primary",
-  ],
+  modalClose: ['button[aria-label="Dismiss"]', 'button[aria-label="Close"]', 'button:has-text("×")'],
+  addNote: ['button:has-text("Add a note")', 'button[aria-label*="Add a note"]'],
+  noteTextarea: ['textarea[name="message"]', "textarea#custom-message", "textarea"],
+  modalSend: ['button:has-text("Send")', 'button[aria-label*="Send"]', "button.artdeco-button--primary"],
   dmEditor: [
     '.msg-form__contenteditable[contenteditable="true"]',
     ".msg-form textarea",
@@ -161,11 +142,7 @@ async function getProfileHeader(page) {
 async function firstVisibleOnProfile(page, selectors, timeout = 1500) {
   const headerMatch = await getProfileHeader(page);
   if (headerMatch) {
-    const scopedMatch = await firstVisibleIn(
-      headerMatch.locator,
-      selectors,
-      timeout,
-    );
+    const scopedMatch = await firstVisibleIn(headerMatch.locator, selectors, timeout);
     if (scopedMatch) {
       return {
         ...scopedMatch,
@@ -174,11 +151,7 @@ async function firstVisibleOnProfile(page, selectors, timeout = 1500) {
     }
   }
 
-  const mainAreaMatch = await firstVisibleInMainProfileArea(
-    page,
-    selectors,
-    timeout,
-  );
+  const mainAreaMatch = await firstVisibleInMainProfileArea(page, selectors, timeout);
   if (mainAreaMatch) return mainAreaMatch;
 
   return null;
@@ -207,8 +180,7 @@ async function firstVisibleInMainProfileArea(page, selectors, timeout = 1500) {
         const box = await candidate.boundingBox();
         if (!box) continue;
 
-        const isMainProfileAction =
-          box.x >= 0 && box.x < maxX && box.y >= 80 && box.y < maxY;
+        const isMainProfileAction = box.x >= 0 && box.x < maxX && box.y >= 80 && box.y < maxY;
 
         if (isMainProfileAction) {
           return {
@@ -225,12 +197,7 @@ async function firstVisibleInMainProfileArea(page, selectors, timeout = 1500) {
   return null;
 }
 
-async function firstVisibleOverlay(
-  page,
-  overlaySelectors,
-  selectors,
-  timeout = 1500,
-) {
+async function firstVisibleOverlay(page, overlaySelectors, selectors, timeout = 1500) {
   const overlay = await firstVisible(page, overlaySelectors, timeout);
   if (!overlay) return null;
 
@@ -240,13 +207,40 @@ async function firstVisibleOverlay(
   return { ...match, selector: `${overlay.selector} >> ${match.selector}` };
 }
 
+async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 4) {
+  const PER_ATTEMPT_TIMEOUT = 6000;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (dmOverlayMatch) {
+      const scoped = await firstVisibleIn(dmOverlayMatch.locator, SELECTORS.dmEditor, PER_ATTEMPT_TIMEOUT);
+      if (scoped) return scoped;
+    }
+
+    const pageLevel = await firstVisible(page, SELECTORS.dmEditor, PER_ATTEMPT_TIMEOUT);
+    if (pageLevel) return pageLevel;
+
+    if (dmOverlayMatch && attempt <= 2) {
+      await dmOverlayMatch.locator.click({ force: true }).catch(() => {});
+      await humanDelay(1000, 1500);
+    }
+
+    const freshOverlay = await firstVisible(page, SELECTORS.dmOverlay, 3000);
+    if (freshOverlay) {
+      const scoped = await firstVisibleIn(freshOverlay.locator, SELECTORS.dmEditor, PER_ATTEMPT_TIMEOUT);
+      if (scoped) return scoped;
+    }
+
+    if (attempt < maxAttempts) {
+      await humanDelay(1500 * attempt, 2000 * attempt);
+    }
+  }
+
+  return null;
+}
+
 async function closeOverlay(page, overlayMatch) {
   if (!overlayMatch) return;
-  const closeMatch = await firstVisibleIn(
-    overlayMatch.locator,
-    SELECTORS.modalClose,
-    1000,
-  );
+  const closeMatch = await firstVisibleIn(overlayMatch.locator, SELECTORS.modalClose, 1000);
   if (closeMatch) {
     await closeMatch.locator.click().catch(() => {});
   }
@@ -256,9 +250,7 @@ async function detectPremiumRequired(page) {
   const premiumMatch = await firstVisible(page, SELECTORS.premiumDialog, 1500);
   if (!premiumMatch) return null;
 
-  const text = await premiumMatch.locator
-    .innerText({ timeout: 1000 })
-    .catch(() => "");
+  const text = await premiumMatch.locator.innerText({ timeout: 1000 }).catch(() => "");
   await closeOverlay(page, premiumMatch);
   return {
     outcome: "premium_required",
@@ -284,9 +276,7 @@ async function pageContainsAny(page, phrases) {
     .innerText({ timeout: 2000 })
     .catch(() => "");
   const normalized = text.toLowerCase();
-  return (
-    phrases.find((phrase) => normalized.includes(phrase.toLowerCase())) || null
-  );
+  return phrases.find((phrase) => normalized.includes(phrase.toLowerCase())) || null;
 }
 
 async function detectActionWarning(page) {
@@ -311,10 +301,7 @@ function messageSnippet(message) {
 
 async function verifyDmSent(page, editorTarget, message) {
   const snippet = messageSnippet(message);
-  const editorLocator =
-    typeof editorTarget === "string"
-      ? page.locator(editorTarget).first()
-      : editorTarget;
+  const editorLocator = typeof editorTarget === "string" ? page.locator(editorTarget).first() : editorTarget;
 
   // Poll up to 8 seconds for the message to appear or the composer to clear
   const POLL_INTERVAL = 800;
@@ -357,15 +344,13 @@ async function verifyDmSent(page, editorTarget, message) {
 
     // Check for visible warning before giving up
     const warning = await detectActionWarning(page);
-    if (warning)
-      return { verified: false, reason: `LinkedIn warning: ${warning}` };
+    if (warning) return { verified: false, reason: `LinkedIn warning: ${warning}` };
   }
 
   return {
     verified: false,
     unknown: true,
-    reason:
-      "Send verification ambiguous - message not visible and composer did not clear",
+    reason: "Send verification ambiguous - message not visible and composer did not clear",
   };
 }
 
@@ -374,10 +359,7 @@ async function verifyDmSent(page, editorTarget, message) {
  */
 async function typeLikeHuman(page, locatorOrSelector, text) {
   // Accept both a locator object and a CSS selector string
-  const locator =
-    typeof locatorOrSelector === "string"
-      ? page.locator(locatorOrSelector).first()
-      : locatorOrSelector;
+  const locator = typeof locatorOrSelector === "string" ? page.locator(locatorOrSelector).first() : locatorOrSelector;
 
   await locator.scrollIntoViewIfNeeded();
   await locator.click(); // Places cursor in contenteditable
@@ -393,9 +375,7 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
 async function typeIntoFirstVisible(page, selectors, text) {
   const match = await firstVisible(page, selectors, 2000);
   if (!match) {
-    throw new Error(
-      `No visible input found for selectors: ${selectors.join(", ")}`,
-    );
+    throw new Error(`No visible input found for selectors: ${selectors.join(", ")}`);
   }
 
   await match.locator.focus();
@@ -411,9 +391,7 @@ async function typeIntoFirstVisible(page, selectors, text) {
 async function typeIntoFirstVisibleIn(page, scope, selectors, text) {
   const match = await firstVisibleIn(scope, selectors, 2000);
   if (!match) {
-    throw new Error(
-      `No visible input found for selectors: ${selectors.join(", ")}`,
-    );
+    throw new Error(`No visible input found for selectors: ${selectors.join(", ")}`);
   }
 
   await match.locator.focus();
@@ -439,10 +417,7 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
 
     emit("info", "Page loaded. Locating Connect action...");
 
-    const messageBtnVisible = await isAnyVisibleOnProfile(
-      page,
-      SELECTORS.message,
-    );
+    const messageBtnVisible = await isAnyVisibleOnProfile(page, SELECTORS.message);
     const isPending = await isAnyVisibleOnProfile(page, SELECTORS.pending);
 
     if (isPending) {
@@ -454,33 +429,21 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
 
     // Sometimes Connect is hidden under a "More" menu
     if (!connectMatch) {
-      emit(
-        "info",
-        "Connect action not immediately visible. Checking More menu...",
-      );
+      emit("info", "Connect action not immediately visible. Checking More menu...");
       const moreMatch = await firstVisibleOnProfile(page, SELECTORS.more, 1000);
       if (moreMatch) {
         await moreMatch.locator.click();
         await humanDelay(1000, 2000);
-        connectMatch = await firstVisibleOverlay(
-          page,
-          SELECTORS.actionDropdown,
-          SELECTORS.connect,
-          2000,
-        );
+        connectMatch = await firstVisibleOverlay(page, SELECTORS.actionDropdown, SELECTORS.connect, 2000);
       }
     }
 
     if (!connectMatch) {
-      emit(
-        "warn",
-        "Could not find Connect action. Maybe already connected or followed?",
-      );
+      emit("warn", "Could not find Connect action. Maybe already connected or followed?");
       if (messageBtnVisible) {
         return {
           outcome: "not_connected",
-          reason:
-            "Profile has Message but no Connect action in the main profile header",
+          reason: "Profile has Message but no Connect action in the main profile header",
         };
       }
       return { outcome: "failed", reason: "Button not found" };
@@ -493,9 +456,7 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
     // If there's a message, look for "Add a note"
     if (message) {
       const modalMatch = await firstVisible(page, SELECTORS.modal, 3000);
-      const addNoteMatch = modalMatch
-        ? await firstVisibleIn(modalMatch.locator, SELECTORS.addNote, 2000)
-        : null;
+      const addNoteMatch = modalMatch ? await firstVisibleIn(modalMatch.locator, SELECTORS.addNote, 2000) : null;
       if (addNoteMatch) {
         emit("info", "Adding connection note...");
         await addNoteMatch.locator.click();
@@ -506,32 +467,16 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
         if (!noteModalMatch) {
           throw new Error("Connection note modal not visible");
         }
-        await typeIntoFirstVisibleIn(
-          page,
-          noteModalMatch.locator,
-          SELECTORS.noteTextarea,
-          message,
-        );
+        await typeIntoFirstVisibleIn(page, noteModalMatch.locator, SELECTORS.noteTextarea, message);
         await humanDelay(1000, 2000);
       } else {
-        emit(
-          "warn",
-          "Add-note option not found. This request may send without a note.",
-        );
+        emit("warn", "Add-note option not found. This request may send without a note.");
       }
     }
 
     // Look for the "Send" button (can be "Send" or "Send without a note")
-    const sendMatch = await firstVisibleOverlay(
-      page,
-      SELECTORS.modal,
-      SELECTORS.modalSend,
-      3000,
-    );
-    if (
-      sendMatch &&
-      !(await sendMatch.locator.isDisabled().catch(() => false))
-    ) {
+    const sendMatch = await firstVisibleOverlay(page, SELECTORS.modal, SELECTORS.modalSend, 3000);
+    if (sendMatch && !(await sendMatch.locator.isDisabled().catch(() => false))) {
       emit("info", `Clicking Send (${sendMatch.selector})...`);
       await sendMatch.locator.click();
       await humanDelay(2000, 4000);
@@ -552,9 +497,7 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
       return { outcome: "sent" };
     } else {
       // Maybe we hit a limit or email is required
-      const isEmailRequired = await page
-        .locator('input[type="email"]')
-        .isVisible();
+      const isEmailRequired = await page.locator('input[type="email"]').isVisible();
       if (isEmailRequired) {
         emit("error", "LinkedIn requires an email to connect with this user.");
         return { outcome: "failed", reason: "Email required" };
@@ -584,26 +527,18 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
     await humanDelay(500, 1000);
 
-    const messageMatch = await firstVisibleOnProfile(
-      page,
-      SELECTORS.message,
-      3000,
-    );
+    const messageMatch = await firstVisibleOnProfile(page, SELECTORS.message, 3000);
     if (!messageMatch) {
-      emit(
-        "warn",
-        'Could not find "Message" button. Ensure you are connected 1st-degree.',
-      );
+      emit("warn", 'Could not find "Message" button. Ensure you are connected 1st-degree.');
       return {
         outcome: "not_connected",
-        reason:
-          "Message button not visible - connection may not be accepted yet",
+        reason: "Message button not visible - connection may not be accepted yet",
       };
     }
 
     emit("info", `Clicking Message (${messageMatch.selector})...`);
     await messageMatch.locator.click();
-    await humanDelay(2000, 3000);
+    await humanDelay(3000, 4500);
 
     const premiumRequired = await detectPremiumRequired(page);
     if (premiumRequired) {
@@ -611,29 +546,17 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
       return premiumRequired;
     }
 
-    const premiumAfterWait = await detectPremiumRequired(page);
-    if (premiumAfterWait) {
-      emit("warn", premiumAfterWait.reason);
-      return premiumAfterWait;
+    const dmOverlayMatch = await firstVisible(page, SELECTORS.dmOverlay, 7000);
+    if (!dmOverlayMatch) {
+      emit("warn", "DM overlay container not detected — trying editor directly.");
     }
 
-    // The messaging overlay should pop up. Find the editor.
-    const dmOverlayMatch = await firstVisible(page, SELECTORS.dmOverlay, 5000);
-    let editorMatch = dmOverlayMatch
-      ? await firstVisibleIn(dmOverlayMatch.locator, SELECTORS.dmEditor, 5000)
-      : null;
+    emit("info", "Waiting for DM editor to become available...");
+    const editorMatch = await waitForDmEditor(page, dmOverlayMatch, 4);
 
     if (!editorMatch) {
-      emit(
-        "warn",
-        "DM editor not found inside overlay, trying page-level fallback selectors.",
-      );
-      editorMatch = await firstVisible(page, SELECTORS.dmEditor, 5000);
-    }
-
-    if (!editorMatch) {
-      emit("error", "Could not find message textarea in the chat overlay.");
-      return { outcome: "failed", reason: "Textarea not found" };
+      emit("error", "Could not find message textarea after 4 attempts across all strategies.");
+      return { outcome: "failed", reason: "Textarea not found after retry" };
     }
 
     emit("info", `Typing DM using ${editorMatch.selector}...`);
@@ -641,20 +564,11 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     await humanDelay(1000, 2000);
 
     // Find the Send button
-    const sendMatch = dmOverlayMatch
-      ? await firstVisibleIn(dmOverlayMatch.locator, SELECTORS.dmSend, 3000)
-      : null;
-    if (
-      sendMatch &&
-      !(await sendMatch.locator.isDisabled().catch(() => false))
-    ) {
+    const sendMatch = dmOverlayMatch ? await firstVisibleIn(dmOverlayMatch.locator, SELECTORS.dmSend, 3000) : null;
+    if (sendMatch && !(await sendMatch.locator.isDisabled().catch(() => false))) {
       emit("info", `Clicking Send (${sendMatch.selector})...`);
       await sendMatch.locator.click();
-      const verification = await verifyDmSent(
-        page,
-        editorMatch.locator,
-        message,
-      );
+      const verification = await verifyDmSent(page, editorMatch.locator, message);
       if (!verification.verified) {
         emit("error", `DM send could not be verified: ${verification.reason}`);
         return {
@@ -665,20 +579,12 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
       emit("info", `DM sent successfully (${verification.reason}).`);
       return { outcome: "sent" };
     } else {
-      const sendShortcut =
-        process.platform === "darwin" ? "Meta+Enter" : "Control+Enter";
+      const sendShortcut = process.platform === "darwin" ? "Meta+Enter" : "Control+Enter";
       emit("info", `Pressing ${sendShortcut} to send...`);
       await page.keyboard.press(sendShortcut);
-      const verification = await verifyDmSent(
-        page,
-        editorMatch.locator,
-        message,
-      );
+      const verification = await verifyDmSent(page, editorMatch.locator, message);
       if (!verification.verified) {
-        emit(
-          "error",
-          `DM send via Enter could not be verified: ${verification.reason}`,
-        );
+        emit("error", `DM send via Enter could not be verified: ${verification.reason}`);
         return {
           outcome: verification.unknown ? "unknown" : "failed",
           reason: verification.reason,
@@ -716,10 +622,7 @@ async function likeRecentPost(page, profileUrl, emit) {
       return { outcome: "no_posts" };
     }
 
-    emit(
-      "info",
-      `Found an unliked post (${likeMatch.selector}). Liking the most recent one...`,
-    );
+    emit("info", `Found an unliked post (${likeMatch.selector}). Liking the most recent one...`);
 
     // Scroll element into view
     await likeMatch.locator.scrollIntoViewIfNeeded();

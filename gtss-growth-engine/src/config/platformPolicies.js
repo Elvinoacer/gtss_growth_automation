@@ -20,30 +20,30 @@ module.exports = {
     name: "LinkedIn",
     // Acceptable time ranges in local time where automation is permitted to execute
     activeWindow: {
-      startHour: 9,       // Permissible start hour (24h format, e.g., 9 AM)
-      endHour: 18,        // Permissible end hour (24h format, e.g., 6 PM)
-      timezone: "local"   // Enforce bounds matching system's local clock
+      startHour: 9, // Permissible start hour (24h format, e.g., 9 AM)
+      endHour: 18, // Permissible end hour (24h format, e.g., 6 PM)
+      timezone: "local", // Enforce bounds matching system's local clock
     },
     // Randomization delay parameters (jitter) between successive steps to mimic organic browsing behavior
     delays: {
-      actionMinSeconds: 30,   // Floor delay for any micro-action (visits, follows, connections)
-      actionMaxSeconds: 90,   // Ceiling delay with applied random distribution
-      sessionPauseMinutes: 15 // Hold duration after a batch of queue items before polling again
+      actionMinSeconds: 30, // Floor delay for any micro-action (visits, follows, connections)
+      actionMaxSeconds: 45, // Ceiling delay with applied random distribution
+      sessionPauseMinutes: 5, // Hold duration after a batch of queue items before polling again
     },
     // Ramp-up sequence parameters to slowly transition cold profiles into high qualification limits
     warmup: {
-      enabled: true,          // Is progressive warmup active for LinkedIn?
-      startDailyCount: 5,     // Initial daily allowance upon warmup kickoff
-      dailyIncrement: 2,      // Increment factor applied to daily limits per day
-      warmupDays: 14          // Number of progressive ramp days before full limits apply
+      enabled: true, // Is progressive warmup active for LinkedIn?
+      startDailyCount: 5, // Initial daily allowance upon warmup kickoff
+      dailyIncrement: 2, // Increment factor applied to daily limits per day
+      warmupDays: 14, // Number of progressive ramp days before full limits apply
     },
     // Rate limit thresholds to prevent rate-limit blocks
     hourlyLimits: {
-      connections: 3,         // Max connections per hour
-      dms: 4,                 // Max messages sent per hour
-      likes: 2,               // Max profile updates/likes per hour
-      visits: 5               // Max target profile visits per hour
-    }
+      connections: 3, // Max connections per hour
+      dms: 4, // Max messages sent per hour
+      likes: 2, // Max profile updates/likes per hour
+      visits: 5, // Max target profile visits per hour
+    },
   },
 
   // ── X (TWITTER) POLICY PROFILE ───────────────────────────────────────────
@@ -52,24 +52,24 @@ module.exports = {
     activeWindow: {
       startHour: 8,
       endHour: 22,
-      timezone: "local"
+      timezone: "local",
     },
     delays: {
       actionMinSeconds: 20,
       actionMaxSeconds: 60,
-      sessionPauseMinutes: 10
+      sessionPauseMinutes: 10,
     },
     warmup: {
       enabled: true,
       startDailyCount: 3,
       dailyIncrement: 1,
-      warmupDays: 20
+      warmupDays: 20,
     },
     hourlyLimits: {
       dms: 2,
       follows: 5,
-      likes: 4
-    }
+      likes: 4,
+    },
   },
 
   // ── INSTAGRAM POLICY PROFILE ──────────────────────────────────────────────
@@ -78,24 +78,24 @@ module.exports = {
     activeWindow: {
       startHour: 8,
       endHour: 20,
-      timezone: "local"
+      timezone: "local",
     },
     delays: {
       actionMinSeconds: 45,
       actionMaxSeconds: 120,
-      sessionPauseMinutes: 20
+      sessionPauseMinutes: 20,
     },
     warmup: {
       enabled: true,
       startDailyCount: 5,
       dailyIncrement: 2,
-      warmupDays: 10
+      warmupDays: 10,
     },
     hourlyLimits: {
       dms: 3,
       follows: 4,
-      likes: 3
-    }
+      likes: 3,
+    },
   },
 
   // ── FACEBOOK POLICY PROFILE ───────────────────────────────────────────────
@@ -104,22 +104,22 @@ module.exports = {
     activeWindow: {
       startHour: 9,
       endHour: 17,
-      timezone: "local"
+      timezone: "local",
     },
     delays: {
       actionMinSeconds: 60,
       actionMaxSeconds: 180,
-      sessionPauseMinutes: 30
+      sessionPauseMinutes: 30,
     },
     warmup: {
       enabled: false,
       startDailyCount: 5,
       dailyIncrement: 1,
-      warmupDays: 7
+      warmupDays: 7,
     },
     hourlyLimits: {
       dms: 2,
-      likes: 2
-    }
-  }
+      likes: 2,
+    },
+  },
 };
