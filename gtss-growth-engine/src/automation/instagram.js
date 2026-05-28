@@ -1360,9 +1360,9 @@ async function postImage(
       }
     }
 
-    // 3. dailySessionWarmup check
-    await dailySessionWarmup(page);
-    await humanDelay(1000, 2000);
+    // Scroll to top to ensure the full left navigation sidebar is visible
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+    await humanDelay(500, 1000);
 
     // 4. Click Create ("+") button
     let createBtn = await firstVisible(page, IG_SELECTORS.postCreate, 8000);
@@ -1584,6 +1584,10 @@ async function postStory(page, { imagePath } = {}, emitter) {
     });
     await humanDelay(2000, 4000);
 
+    // Scroll to top to ensure the full left navigation sidebar is visible
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+    await humanDelay(500, 1000);
+
     // 3. Navigate to stories/create directly or click avatar
     let storyAvatar = page.locator(
       'section > div > div button:has(img[alt*="profile"]):first-child',
@@ -1767,9 +1771,9 @@ async function postCarousel(
     });
     await humanDelay(2000, 4000);
 
-    // 3. dailySessionWarmup check
-    await dailySessionWarmup(page);
-    await humanDelay(1000, 2000);
+    // Scroll to top to ensure the full left navigation sidebar is visible
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+    await humanDelay(500, 1000);
 
     // 4. Click Create ("+") button
     const createBtn = await firstVisible(page, IG_SELECTORS.postCreate);

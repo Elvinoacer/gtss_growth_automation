@@ -11,6 +11,9 @@ const { markSessionInvalid } = require("./sessionManager");
 const { sendNotification } = require("../services/notificationService");
 const { getDb } = require("../db/database");
 
+// Tracks the last date warmup was completed (format: "YYYY-MM-DD")
+let _lastWarmupDate = null;
+
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -1386,6 +1389,15 @@ async function simulateOrganicBrowse(page, username = null) {
  * Performs daily account/session warmup before triggering automated scripts.
  */
 async function dailySessionWarmup(page, fastTrack = false) {
+  const todayStr = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+  if (_lastWarmupDate === todayStr) {
+    logger.info(
+      "BROWSER",
+      "dailySessionWarmup already completed today — skipping.",
+    );
+    return { completed: false, skipped: true };
+  }
+
   const startTime = Date.now();
   logger.info(
     "BROWSER",
@@ -1410,6 +1422,7 @@ async function dailySessionWarmup(page, fastTrack = false) {
     logger.info("BROWSER", `Warmup organic browse completed in ${elapsed}ms`);
   }
 
+  _lastWarmupDate = todayStr; // Mark warmup as done for today
   const durationMs = Date.now() - startTime;
   return { completed: true, durationMs };
 }
@@ -1470,14 +1483,20 @@ async function createInstagramBrowser(options = {}) {
 
       const existingPages = context.pages().filter((candidate) => {
         if (!candidate || candidate.isClosed()) return false;
-        const url = String(candidate.url?.() || candidate.url || "").toLowerCase();
+        const url = String(
+          candidate.url?.() || candidate.url || "",
+        ).toLowerCase();
         return url && url !== "about:blank";
       });
       let page = existingPages.find((candidate) =>
-        String(candidate.url?.() || candidate.url || "").toLowerCase().includes("instagram.com"),
+        String(candidate.url?.() || candidate.url || "")
+          .toLowerCase()
+          .includes("instagram.com"),
       );
       if (!page) {
-        page = existingPages[0] || (await context.newPage());
+        // Always open a dedicated new tab for Instagram automation
+        // so we never hijack existing app or unrelated tabs
+        page = await context.newPage();
       }
       await page.bringToFront().catch(() => {});
       const tracePath = await startTracing(context, "instagram", options);
