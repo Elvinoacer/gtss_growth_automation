@@ -1468,7 +1468,17 @@ async function createInstagramBrowser(options = {}) {
         );
       }
 
-      const page = await context.newPage();
+      const existingPages = context.pages().filter((candidate) => {
+        if (!candidate || candidate.isClosed()) return false;
+        const url = String(candidate.url?.() || candidate.url || "").toLowerCase();
+        return url && url !== "about:blank";
+      });
+      let page = existingPages.find((candidate) =>
+        String(candidate.url?.() || candidate.url || "").toLowerCase().includes("instagram.com"),
+      );
+      if (!page) {
+        page = existingPages[0] || (await context.newPage());
+      }
       await page.bringToFront().catch(() => {});
       const tracePath = await startTracing(context, "instagram", options);
 
@@ -1477,12 +1487,14 @@ async function createInstagramBrowser(options = {}) {
           "BROWSER",
           "Navigating to Instagram home to check session...",
         );
-        await page
-          .goto("https://www.instagram.com/", {
-            waitUntil: "domcontentloaded",
-          })
-          .catch(() => {});
-        await humanDelay(2000, 4000);
+        if (!String(page.url()).includes("instagram.com")) {
+          await page
+            .goto("https://www.instagram.com/", {
+              waitUntil: "domcontentloaded",
+            })
+            .catch(() => {});
+          await humanDelay(2000, 4000);
+        }
 
         const sessionState = await checkInstagramSessionState(page);
         logger.info(

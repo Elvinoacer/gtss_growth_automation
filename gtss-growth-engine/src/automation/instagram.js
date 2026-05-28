@@ -1332,6 +1332,7 @@ async function postImage(
       timeout: 30000,
     });
     await humanDelay(2000, 4000);
+    await page.bringToFront().catch(() => {});
 
     // Dismiss any blocking overlays (cookie consent, login prompts, upgrade prompts)
     const overlayDismiss = [
@@ -1374,15 +1375,27 @@ async function postImage(
     if (!createBtn) {
       throw new Error("Could not find Instagram Create button after retry.");
     }
+    const popupPromise = page
+      .waitForEvent("popup", { timeout: 3000 })
+      .catch(() => null);
     await createBtn.click();
     await humanDelay(1000, 2000);
 
+    let activePage = page;
+    const popupPage = await popupPromise;
+    if (popupPage) {
+      activePage = popupPage;
+      await activePage.bringToFront().catch(() => {});
+      await activePage.waitForLoadState("domcontentloaded").catch(() => {});
+      await humanDelay(1000, 1500);
+    }
+
     // 5. Wait for upload modal
-    const fileInputLocator = page.locator('input[type="file"]');
+    const fileInputLocator = activePage.locator('input[type="file"]');
     await fileInputLocator.waitFor({ state: "attached", timeout: 30000 });
 
     // 6. Make file input visible if hidden
-    await page.evaluate(() => {
+    await activePage.evaluate(() => {
       const i = document.querySelector('input[type="file"]');
       if (i) {
         i.style.cssText =
@@ -1396,7 +1409,7 @@ async function postImage(
     await humanDelay(2000, 4000);
 
     // 8. Wait for image preview (Next button visible)
-    const cropNextBtn = page.locator('button:has-text("Next")');
+    const cropNextBtn = activePage.locator('button:has-text("Next")');
     await cropNextBtn.waitFor({ state: "visible", timeout: 30000 });
     await humanDelay(1000, 2000);
 
@@ -1405,38 +1418,41 @@ async function postImage(
     await humanDelay(2000, 3000);
 
     // 10. Click "Next" again (filter step)
-    const filterNextBtn = page.locator('button:has-text("Next")');
+    const filterNextBtn = activePage.locator('button:has-text("Next")');
     await filterNextBtn.waitFor({ state: "visible", timeout: 10000 });
     await filterNextBtn.click();
     await humanDelay(2000, 3000);
 
     // 11. Focus captionBox and type caption naturally
-    const captionInput = await firstVisible(page, IG_SELECTORS.captionBox);
+    const captionInput = await firstVisible(
+      activePage,
+      IG_SELECTORS.captionBox,
+    );
     if (!captionInput) {
       throw new Error("Could not locate caption text area.");
     }
     await captionInput.click();
     await humanDelay(500, 1000);
-    await humanTypeText(page, captionInput, caption);
+    await humanTypeText(activePage, captionInput, caption);
     await humanDelay(1000, 2000);
 
     // 12. Handle location Tag
     if (locationTag) {
       safeEmit(emitter, "info", `Adding location tag: ${locationTag}`);
-      const addLocationBtn = page.locator(
+      const addLocationBtn = activePage.locator(
         'span:has-text("Add location"), input[placeholder*="Add location"]',
       );
       if ((await addLocationBtn.count()) > 0) {
         await addLocationBtn.first().click();
         await humanDelay(1000, 1500);
 
-        const locationInput = page.locator(
+        const locationInput = activePage.locator(
           'input[placeholder*="Add location"], input[name="query"]',
         );
-        await humanTypeText(page, locationInput, locationTag);
+        await humanTypeText(activePage, locationInput, locationTag);
         await humanDelay(2000, 3000);
 
-        const firstResult = page
+        const firstResult = activePage
           .locator(
             'div[role="button"]:has-text("' +
               locationTag.substring(0, 3) +
@@ -1453,7 +1469,7 @@ async function postImage(
     await humanDelay(1000, 2000);
 
     // 13. Click shareButton
-    const shareBtn = await firstVisible(page, IG_SELECTORS.shareButton);
+    const shareBtn = await firstVisible(activePage, IG_SELECTORS.shareButton);
     if (!shareBtn) {
       throw new Error("Could not find Instagram Share button.");
     }
