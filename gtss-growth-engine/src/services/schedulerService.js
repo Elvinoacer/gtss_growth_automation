@@ -4,6 +4,8 @@ const { getDb } = require("../db/database");
 const {
   createBrowser,
   closeBrowser,
+  closeBrowserContext,
+  createInstagramBrowser,
   humanDelay,
   humanTypeText,
   checkSessionExpired,
@@ -1134,12 +1136,20 @@ async function publishPost(postId, emit, browserOptions = {}) {
       continue;
     }
 
+    let browserState;
     let browser, context;
     try {
-      const result = await createBrowser(platform, launchOptions);
-      browser = result.browser;
-      context = result.context;
-      const page = result.page;
+      if (platform === "instagram") {
+        // Instagram needs the specialized launcher so it can attach to the
+        // running Chrome session or restore cookies before posting.
+        browserState = await createInstagramBrowser();
+      } else {
+        browserState = await createBrowser(platform, launchOptions);
+      }
+
+      browser = browserState.browser;
+      context = browserState.context;
+      const page = browserState.page;
 
       let success = false;
       switch (platform) {
@@ -1229,7 +1239,11 @@ async function publishPost(postId, emit, browserOptions = {}) {
       });
       failed.push(platform);
     } finally {
-      if (browser) await closeBrowser(browser, platform, context);
+      if (browserState) {
+        await closeBrowserContext(platform, browserState);
+      } else if (browser) {
+        await closeBrowser(browser, platform, context);
+      }
     }
   }
 

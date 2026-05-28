@@ -30,6 +30,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const generateCaptionBtn = $("generate-caption-btn");
   const aiTopic = $("ai-topic");
   const mediaFileInput = $("media-file-input");
+  const mediaDropzone = $("media-dropzone");
   const mediaPlaceholder = $("media-placeholder");
   const mediaPreview = $("media-preview");
   const mediaThumb = $("media-thumb");
@@ -648,9 +649,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }),
     );
 
-    // Media upload
-    mediaFileInput.addEventListener("change", async (e) => {
-      const file = e.target.files[0];
+    async function uploadMediaFile(file) {
       if (!file) return;
 
       const formData = new FormData();
@@ -667,8 +666,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         const result = await res.json();
 
-        if (!result.filePath)
+        if (!result.filePath) {
           throw new Error("Server did not return a file path");
+        }
 
         uploadedMediaFilePath = result.filePath; // absolute FS path — used when posting
         uploadedMediaPath = result.path; // web URL — used for preview thumbnail only
@@ -683,7 +683,36 @@ document.addEventListener("DOMContentLoaded", () => {
         showToast(`Upload failed: ${err.message}`, "error");
         mediaFileInput.value = "";
       }
+    }
+
+    // Media upload
+    mediaFileInput.addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      await uploadMediaFile(file);
     });
+
+    if (mediaDropzone) {
+      mediaDropzone.addEventListener("click", () => mediaFileInput.click());
+      mediaDropzone.addEventListener("dragenter", (e) => {
+        e.preventDefault();
+        mediaDropzone.classList.add("border-primary");
+      });
+      mediaDropzone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        mediaDropzone.classList.add("border-primary");
+      });
+      mediaDropzone.addEventListener("dragleave", () => {
+        mediaDropzone.classList.remove("border-primary");
+      });
+      mediaDropzone.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        mediaDropzone.classList.remove("border-primary");
+        const file = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (!file) return;
+        await uploadMediaFile(file);
+      });
+    }
 
     mediaRemoveBtn.addEventListener("click", (e) => {
       e.stopPropagation();

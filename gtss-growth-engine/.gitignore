@@ -31,6 +31,7 @@ sessions/
 profiles/
 artifacts/
 media/
+public/uploads/
 .qodo/
 
 # SQLite databases (in case they end up outside data/)
