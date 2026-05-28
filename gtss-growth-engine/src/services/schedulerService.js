@@ -903,6 +903,24 @@ async function postToFacebook(page, body, mediaPath, emit) {
       }
     }
 
+    const nextBtnSelectors = [
+      'button:has-text("Next")',
+      'div[role="button"]:has-text("Next")',
+      'button[aria-label*="Next"]',
+    ];
+
+    const nextBtn = await firstVisibleLocator(page, nextBtnSelectors, 5000);
+    if (nextBtn) {
+      emit({
+        type: "info",
+        platform: "facebook",
+        message: "Advancing Facebook composer to the next step...",
+      });
+      await nextBtn.locator.scrollIntoViewIfNeeded().catch(() => {});
+      await nextBtn.locator.click();
+      await humanDelay(2000, 3000);
+    }
+
     // ── Step 5: Click the Post button ─────────────────────────────────────
     emit({ type: "info", platform: "facebook", message: "Submitting post..." });
 
@@ -910,6 +928,8 @@ async function postToFacebook(page, body, mediaPath, emit) {
       '[data-pagelet="FeedComposer"] div[aria-label="Post"]',
       'div[aria-label="Post"][role="button"]',
       'div[role="dialog"] div[aria-label="Post"]',
+      'button:has-text("Share")',
+      'div[role="button"]:has-text("Share")',
     ];
 
     const postBtn = await firstVisibleLocator(page, postBtnSelectors, 8000);
