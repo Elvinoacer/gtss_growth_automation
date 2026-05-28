@@ -155,7 +155,9 @@ document.addEventListener("DOMContentLoaded", () => {
       igPostOptions.classList.remove("hidden");
       igCaptionHelper.classList.remove("hidden");
       updateInstagramCaptionHelper();
-      const val = document.querySelector('input[name="ig-post-type"]:checked')?.value || "feed";
+      const val =
+        document.querySelector('input[name="ig-post-type"]:checked')?.value ||
+        "feed";
       if (val === "story") {
         igStoryWarning.classList.remove("hidden");
         igCarouselPanel.classList.add("hidden");
@@ -200,12 +202,12 @@ document.addEventListener("DOMContentLoaded", () => {
       igStoryWarning.classList.add("hidden");
       return;
     }
-    
+
     const img = new Image();
-    img.onload = function() {
+    img.onload = function () {
       const ratio = img.naturalWidth / img.naturalHeight;
-      const is916 = Math.abs(ratio - (9 / 16)) < 0.02;
-      
+      const is916 = Math.abs(ratio - 9 / 16) < 0.02;
+
       if (is916) {
         igStoryWarning.innerHTML = `<span class="bg-green-100 text-green-800 text-xs font-semibold px-2.5 py-1 rounded flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">check_circle</span> Story Aspect Ratio: Perfect 9:16 (${img.naturalWidth}x${img.naturalHeight}) detected!</span>`;
       } else {
@@ -219,41 +221,41 @@ document.addEventListener("DOMContentLoaded", () => {
   let dragSrcEl = null;
 
   function handleDragStart(e) {
-    this.style.opacity = '0.4';
+    this.style.opacity = "0.4";
     dragSrcEl = this;
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('card-id', this.dataset.id);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("card-id", this.dataset.id);
   }
 
   function handleDragOver(e) {
     if (e.preventDefault) {
       e.preventDefault();
     }
-    e.dataTransfer.dropEffect = 'move';
+    e.dataTransfer.dropEffect = "move";
     return false;
   }
 
   function handleDragLeave(e) {
-    this.classList.remove('border-primary');
+    this.classList.remove("border-primary");
   }
 
   function handleDragEnter(e) {
-    this.classList.add('border-primary');
+    this.classList.add("border-primary");
   }
 
   function handleDrop(e) {
     if (e.stopPropagation) {
       e.stopPropagation();
     }
-    this.classList.remove('border-primary');
-    
+    this.classList.remove("border-primary");
+
     if (dragSrcEl !== this) {
-      const srcId = e.dataTransfer.getData('card-id');
+      const srcId = e.dataTransfer.getData("card-id");
       const targetId = this.dataset.id;
-      
-      const srcIdx = carouselFiles.findIndex(item => item.id == srcId);
-      const targetIdx = carouselFiles.findIndex(item => item.id == targetId);
-      
+
+      const srcIdx = carouselFiles.findIndex((item) => item.id == srcId);
+      const targetIdx = carouselFiles.findIndex((item) => item.id == targetId);
+
       if (srcIdx !== -1 && targetIdx !== -1) {
         const temp = carouselFiles[srcIdx];
         carouselFiles.splice(srcIdx, 1);
@@ -265,41 +267,44 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function handleDragEnd(e) {
-    this.style.opacity = '1';
-    document.querySelectorAll('.carousel-card').forEach(item => {
-      item.classList.remove('border-primary');
+    this.style.opacity = "1";
+    document.querySelectorAll(".carousel-card").forEach((item) => {
+      item.classList.remove("border-primary");
     });
   }
 
   function renderCarouselThumbnails() {
     carouselThumbnails.innerHTML = "";
-    
+
     carouselFiles.forEach((item, index) => {
       const div = document.createElement("div");
-      div.className = "carousel-card border border-outline-variant bg-surface-container-low rounded p-2 flex flex-col items-center relative cursor-move";
+      div.className =
+        "carousel-card border border-outline-variant bg-surface-container-low rounded p-2 flex flex-col items-center relative cursor-move";
       div.setAttribute("draggable", "true");
       div.dataset.id = item.id;
       div.dataset.index = index;
-      
+
       div.innerHTML = `
         <img src="${item.path}" class="w-full h-12 object-cover rounded mb-1 pointer-events-none" />
         <span class="text-[10px] font-semibold text-on-surface-variant pointer-events-none">#${index + 1}</span>
         <button type="button" class="carousel-remove-btn absolute top-1 right-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center hover:bg-red-600 transition-colors" data-id="${item.id}" style="font-size: 8px; font-weight: bold;">✕</button>
       `;
-      
-      div.addEventListener('dragstart', handleDragStart, false);
-      div.addEventListener('dragenter', handleDragEnter, false);
-      div.addEventListener('dragover', handleDragOver, false);
-      div.addEventListener('dragleave', handleDragLeave, false);
-      div.addEventListener('drop', handleDrop, false);
-      div.addEventListener('dragend', handleDragEnd, false);
-      
-      div.querySelector(".carousel-remove-btn").addEventListener("click", (e) => {
-        e.stopPropagation();
-        carouselFiles = carouselFiles.filter(f => f.id !== item.id);
-        renderCarouselThumbnails();
-      });
-      
+
+      div.addEventListener("dragstart", handleDragStart, false);
+      div.addEventListener("dragenter", handleDragEnter, false);
+      div.addEventListener("dragover", handleDragOver, false);
+      div.addEventListener("dragleave", handleDragLeave, false);
+      div.addEventListener("drop", handleDrop, false);
+      div.addEventListener("dragend", handleDragEnd, false);
+
+      div
+        .querySelector(".carousel-remove-btn")
+        .addEventListener("click", (e) => {
+          e.stopPropagation();
+          carouselFiles = carouselFiles.filter((f) => f.id !== item.id);
+          renderCarouselThumbnails();
+        });
+
       carouselThumbnails.appendChild(div);
     });
   }
@@ -588,7 +593,10 @@ document.addEventListener("DOMContentLoaded", () => {
     liveLogBody.innerHTML = "";
 
     // Legacy SSE to trigger backend stream
-    const legacySSE = window.gtss.initSSE(`/api/scheduler/stream/${jobId}`, () => {});
+    const legacySSE = window.gtss.initSSE(
+      `/api/scheduler/stream/${jobId}`,
+      () => {},
+    );
 
     const socket = getSocket();
     if (!socket) return;
@@ -618,11 +626,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function cleanup() {
-      socket.off('scheduler:event', onSchedulerEvent);
+      socket.off("scheduler:event", onSchedulerEvent);
       if (legacySSE) legacySSE.close();
     }
 
-    socket.on('scheduler:event', onSchedulerEvent);
+    socket.on("scheduler:event", onSchedulerEvent);
   }
 
   // ── Event Binding ──
@@ -633,12 +641,12 @@ document.addEventListener("DOMContentLoaded", () => {
       updateCharCounters();
       updateInstagramCaptionHelper();
     });
-    document
-      .querySelectorAll(".platform-checkbox")
-      .forEach((cb) => cb.addEventListener("change", () => {
+    document.querySelectorAll(".platform-checkbox").forEach((cb) =>
+      cb.addEventListener("change", () => {
         updateCharCounters();
         toggleInstagramOptions();
-      }));
+      }),
+    );
 
     // Media upload
     mediaFileInput.addEventListener("change", async (e) => {
@@ -713,7 +721,7 @@ document.addEventListener("DOMContentLoaded", () => {
         showToast("Carousel posts support a maximum of 10 images.", "error");
         return;
       }
-      
+
       for (const file of files) {
         const formData = new FormData();
         formData.append("media", file);
@@ -731,7 +739,7 @@ document.addEventListener("DOMContentLoaded", () => {
             id: Date.now() + Math.random().toString(36).substr(2, 9),
             file,
             path: result.path,
-            filePath: result.filePath
+            filePath: result.filePath,
           });
         } catch (err) {
           showToast(`Failed uploading carousel image: ${err.message}`, "error");
@@ -787,27 +795,36 @@ document.addEventListener("DOMContentLoaded", () => {
         return showToast("Write something first", "error");
 
       const hasInstagram = platforms.includes("instagram");
-      const igPostType = hasInstagram ? (document.querySelector('input[name="ig-post-type"]:checked')?.value || "feed") : "feed";
+      const igPostType = hasInstagram
+        ? document.querySelector('input[name="ig-post-type"]:checked')?.value ||
+          "feed"
+        : "feed";
 
       if (hasInstagram && postBody.value.length > 2200) {
-        return showToast("Instagram posts have a maximum limit of 2200 characters.", "error");
+        return showToast(
+          "Instagram posts have a maximum limit of 2200 characters.",
+          "error",
+        );
       }
 
       let mediaPath = uploadedMediaFilePath || null;
       if (hasInstagram && igPostType === "carousel") {
         if (carouselFiles.length === 0) {
-          return showToast("Carousel posts require at least one media file.", "error");
+          return showToast(
+            "Carousel posts require at least one media file.",
+            "error",
+          );
         }
-        mediaPath = JSON.stringify(carouselFiles.map(f => f.filePath));
+        mediaPath = JSON.stringify(carouselFiles.map((f) => f.filePath));
       }
 
       const hasMedia = mediaPath && String(mediaPath).trim() !== "";
 
-      if (hasMedia && !hasInstagram) {
-        return showToast("Media attachments are only allowed when Instagram is selected as a target platform.", "error");
-      }
       if (hasInstagram && !hasMedia) {
-        return showToast("Instagram posts require a media attachment (image or video).", "error");
+        return showToast(
+          "Instagram posts require a media attachment (image or video).",
+          "error",
+        );
       }
 
       try {
@@ -846,27 +863,36 @@ document.addEventListener("DOMContentLoaded", () => {
         return showToast("Pick a date and time", "error");
 
       const hasInstagram = platforms.includes("instagram");
-      const igPostType = hasInstagram ? (document.querySelector('input[name="ig-post-type"]:checked')?.value || "feed") : "feed";
+      const igPostType = hasInstagram
+        ? document.querySelector('input[name="ig-post-type"]:checked')?.value ||
+          "feed"
+        : "feed";
 
       if (hasInstagram && postBody.value.length > 2200) {
-        return showToast("Instagram posts have a maximum limit of 2200 characters.", "error");
+        return showToast(
+          "Instagram posts have a maximum limit of 2200 characters.",
+          "error",
+        );
       }
 
       let mediaPath = uploadedMediaFilePath || null;
       if (hasInstagram && igPostType === "carousel") {
         if (carouselFiles.length === 0) {
-          return showToast("Carousel posts require at least one media file.", "error");
+          return showToast(
+            "Carousel posts require at least one media file.",
+            "error",
+          );
         }
-        mediaPath = JSON.stringify(carouselFiles.map(f => f.filePath));
+        mediaPath = JSON.stringify(carouselFiles.map((f) => f.filePath));
       }
 
       const hasMedia = mediaPath && String(mediaPath).trim() !== "";
 
-      if (hasMedia && !hasInstagram) {
-        return showToast("Media attachments are only allowed when Instagram is selected as a target platform.", "error");
-      }
       if (hasInstagram && !hasMedia) {
-        return showToast("Instagram posts require a media attachment (image or video).", "error");
+        return showToast(
+          "Instagram posts require a media attachment (image or video).",
+          "error",
+        );
       }
 
       const scheduledAt = new Date(
@@ -981,13 +1007,20 @@ document.addEventListener("DOMContentLoaded", () => {
       ).toISOString();
 
       const hasInstagram = platforms.includes("instagram");
-      const hasMedia = editingPostMedia && String(editingPostMedia).trim() !== "";
+      const hasMedia =
+        editingPostMedia && String(editingPostMedia).trim() !== "";
 
       if (hasMedia && !hasInstagram) {
-        return showToast("Media attachments are only allowed when Instagram is selected as a target platform.", "error");
+        return showToast(
+          "Media attachments are only allowed when Instagram is selected as a target platform.",
+          "error",
+        );
       }
       if (hasInstagram && !hasMedia) {
-        return showToast("Instagram posts require a media attachment (image or video).", "error");
+        return showToast(
+          "Instagram posts require a media attachment (image or video).",
+          "error",
+        );
       }
 
       try {
@@ -1026,13 +1059,20 @@ document.addEventListener("DOMContentLoaded", () => {
         ...document.querySelectorAll(".edit-platform-cb:checked"),
       ].map((cb) => cb.value);
       const hasInstagram = platforms.includes("instagram");
-      const hasMedia = editingPostMedia && String(editingPostMedia).trim() !== "";
+      const hasMedia =
+        editingPostMedia && String(editingPostMedia).trim() !== "";
 
       if (hasMedia && !hasInstagram) {
-        return showToast("Media attachments are only allowed when Instagram is selected as a target platform.", "error");
+        return showToast(
+          "Media attachments are only allowed when Instagram is selected as a target platform.",
+          "error",
+        );
       }
       if (hasInstagram && !hasMedia) {
-        return showToast("Instagram posts require a media attachment (image or video).", "error");
+        return showToast(
+          "Instagram posts require a media attachment (image or video).",
+          "error",
+        );
       }
 
       try {

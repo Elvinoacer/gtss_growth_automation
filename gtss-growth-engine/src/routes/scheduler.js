@@ -250,12 +250,6 @@ router.post("/api/scheduler/posts", async (req, res) => {
   const mediaInput = mediaPaths !== undefined ? mediaPaths : mediaPath;
   const hasMedia = mediaInput && String(mediaInput).trim() !== "";
 
-  if (hasMedia && !hasInstagram) {
-    return res.status(400).json({
-      error:
-        "Media attachments are only allowed when Instagram is selected as a target platform.",
-    });
-  }
   if (hasInstagram && !hasMedia) {
     return res.status(400).json({
       error: "Instagram posts require a media attachment (image or video).",
@@ -478,12 +472,6 @@ router.patch("/api/scheduler/posts/:id", (req, res) => {
     const hasInstagram = parsedPlatforms.includes("instagram");
     const hasMedia = finalMedia && String(finalMedia).trim() !== "";
 
-    if (hasMedia && !hasInstagram) {
-      return res.status(400).json({
-        error:
-          "Media attachments are only allowed when Instagram is selected as a target platform.",
-      });
-    }
     if (hasInstagram && !hasMedia) {
       return res.status(400).json({
         error: "Instagram posts require a media attachment (image or video).",

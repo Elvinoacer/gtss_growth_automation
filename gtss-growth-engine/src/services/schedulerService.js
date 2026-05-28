@@ -5,6 +5,7 @@ const {
   createBrowser,
   closeBrowser,
   humanDelay,
+  humanTypeText,
   checkSessionExpired,
 } = require("../automation/browserBase");
 const { isSessionValid } = require("../automation/sessionManager");
@@ -243,6 +244,11 @@ async function dismissBlockingOverlays(page) {
     'button[aria-label="Cancel"]',
     '.artdeco-modal button[aria-label="Dismiss"]',
     '.artdeco-modal button[aria-label="Close"]',
+    'button:has-text("Skip")',
+    'button:has-text("Maybe later")',
+    'button:has-text("Not now")',
+    'div[data-test-id="premium-upsell-modal"] button',
+    '[aria-label="Dismiss upgrade prompt"]',
   ];
 
   for (const selector of dismissSelectors) {
@@ -431,7 +437,7 @@ async function postToLinkedIn(page, body, mediaPath, emit) {
     await humanDelay(1500, 3000);
 
     try {
-      dialogScope = await waitForShareDialog(page, 8000);
+      dialogScope = await waitForShareDialog(page, 12000);
       break;
     } catch (error) {
       emit({
@@ -584,165 +590,361 @@ async function postToLinkedIn(page, body, mediaPath, emit) {
 }
 
 async function postToX(page, body, mediaPath, emit) {
-  await page.goto("https://x.com/compose/tweet", {
-    waitUntil: "domcontentloaded",
-    timeout: 30000,
-  });
-  await humanDelay(2000, 4000);
+  try {
+    // Navigate to X home — the compose modal must be triggered from here
+    await page.goto("https://x.com/home", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    await humanDelay(2000, 4000);
 
-  if (await checkSessionExpired(page, "x", emit)) {
-    throw new Error(
-      "Session expired or CAPTCHA detected. Please re-authenticate.",
-    );
-  }
+    if (await checkSessionExpired(page, "x", emit)) {
+      throw new Error(
+        "Session expired or CAPTCHA detected. Please re-authenticate.",
+      );
+    }
 
-  const editor = page.locator(
-    'div[role="textbox"][data-testid="tweetTextarea_0"]',
-  );
-  await editor.first().click();
-  await humanDelay(500, 1000);
+    emit({
+      type: "info",
+      platform: "x",
+      message: "Opening X compose dialog...",
+    });
 
-  for (const char of body) {
-    await editor.first().type(char, { delay: Math.random() * 50 + 15 });
-  }
-  await humanDelay(1000, 2000);
-
-  if (mediaPath) {
-    const FILE_INPUT_SELECTORS = [
-      'input[type="file"][data-testid="fileInput"]',
-      'input[type="file"][accept*="image"]',
-      'input[type="file"][accept*="video"]',
-      'input[type="file"]',
+    let editorFound = false;
+    const editorSelectors = [
+      'div[role="textbox"][data-testid="tweetTextarea_0"]',
+      'div[role="textbox"][aria-label*="Post text"]',
+      'div[role="textbox"][aria-label*="Tweet"]',
+      'div[role="textbox"]',
     ];
 
-    let attached = false;
-    for (const sel of FILE_INPUT_SELECTORS) {
-      const inp = page.locator(sel);
-      if ((await inp.count()) > 0) {
-        try {
-          await inp.first().setInputFiles(mediaPath);
-          attached = true;
-          break;
-        } catch (_) {
-          /* try next */
+    // Attempt 1: Try navigating to compose URL (SPA popstate)
+    await page
+      .goto("https://x.com/compose/tweet", {
+        waitUntil: "domcontentloaded",
+        timeout: 15000,
+      })
+      .catch(() => {});
+    await humanDelay(1500, 2500);
+
+    let editor = await firstVisibleLocator(page, editorSelectors, 4000);
+
+    // Attempt 2: Go back to home, then click the compose button
+    if (!editor) {
+      await page.goto("https://x.com/home", {
+        waitUntil: "domcontentloaded",
+        timeout: 20000,
+      });
+      await humanDelay(2000, 3000);
+
+      const composeBtnSelectors = [
+        'a[data-testid="SideNav_NewTweet_Button"]',
+        'a[aria-label="Post"]',
+        'a[href="/compose/tweet"]',
+        'div[data-testid="tweetTextInput"]',
+      ];
+
+      const composeBtn = await firstVisibleLocator(
+        page,
+        composeBtnSelectors,
+        8000,
+      );
+      if (composeBtn) {
+        await composeBtn.locator.click();
+        await humanDelay(1500, 2500);
+      }
+
+      editor = await firstVisibleLocator(page, editorSelectors, 8000);
+    }
+
+    if (!editor) {
+      throw new Error(
+        "Could not open X compose dialog or locate tweet text editor.",
+      );
+    }
+
+    editorFound = true;
+    emit({
+      type: "info",
+      platform: "x",
+      message: "X compose editor ready. Typing content...",
+    });
+
+    await editor.locator.click();
+    await humanDelay(500, 1000);
+    await humanTypeText(page, editor.locator, body);
+    await humanDelay(1000, 2000);
+
+    // ── Media attachment ───────────────────────────────────────────────────
+    if (mediaPath) {
+      const FILE_INPUT_SELECTORS = [
+        'input[type="file"][data-testid="fileInput"]',
+        'input[type="file"][accept*="image"]',
+        'input[type="file"][accept*="video"]',
+        'input[type="file"]',
+      ];
+
+      let attached = false;
+      for (const sel of FILE_INPUT_SELECTORS) {
+        const inp = page.locator(sel);
+        if ((await inp.count()) > 0) {
+          try {
+            await inp.first().setInputFiles(mediaPath);
+            attached = true;
+            break;
+          } catch (_) {
+            /* try next */
+          }
         }
       }
-    }
 
-    if (!attached) {
-      emit({
-        type: "warning",
-        platform: "x",
-        message: "Could not attach media on X — file input not found.",
-      });
-    } else {
-      await page
-        .locator('[data-testid="attachments"] img, [data-testid="card-image"]')
-        .first()
-        .waitFor({ state: "visible", timeout: 30000 })
-        .catch(() =>
-          emit({
-            type: "warning",
-            platform: "x",
-            message: "X media preview not detected; posting anyway.",
-          }),
-        );
-    }
-  }
-
-  const postBtn = page.locator(
-    'button[data-testid="tweetButton"], button[data-testid="tweetButtonInline"]',
-  );
-  await postBtn.first().click();
-  await humanDelay(3000, 5000);
-
-  return true;
-}
-
-async function postToFacebook(page, body, mediaPath, emit) {
-  await page.goto("https://www.facebook.com/", {
-    waitUntil: "domcontentloaded",
-    timeout: 30000,
-  });
-  await humanDelay(2000, 4000);
-
-  if (await checkSessionExpired(page, "facebook", emit)) {
-    throw new Error(
-      "Session expired or CAPTCHA detected. Please re-authenticate.",
-    );
-  }
-
-  // Click "What's on your mind?" compose area
-  const composeBtn = page.locator(
-    '[aria-label="Create a post"], span:has-text("What\'s on your mind")',
-  );
-  await composeBtn.first().click();
-  await humanDelay(2000, 3000);
-
-  const editor = page.locator('div[role="textbox"][contenteditable="true"]');
-  await editor.first().click();
-  await humanDelay(500, 1000);
-
-  for (const char of body) {
-    await editor.first().type(char, { delay: Math.random() * 50 + 15 });
-  }
-  await humanDelay(1000, 2000);
-
-  if (mediaPath) {
-    const photoVideoBtn = await firstVisibleLocator(
-      page,
-      [
-        '[aria-label="Photo/Video"]',
-        'div[role="button"]:has-text("Photo")',
-        'span:has-text("Photo/video")',
-      ],
-      5000,
-    );
-
-    if (photoVideoBtn) {
-      await photoVideoBtn.locator.click();
-      await humanDelay(1500, 2500);
-    }
-
-    const fileInput = page.locator('input[type="file"]');
-    if ((await fileInput.count()) > 0) {
-      try {
-        await fileInput.first().setInputFiles(mediaPath);
-        await humanDelay(1000, 2000);
+      if (!attached) {
+        emit({
+          type: "warning",
+          platform: "x",
+          message: "Could not attach media on X — file input not found.",
+        });
+      } else {
         await page
           .locator(
-            '[data-pagelet="FeedComposer"] img[src*="blob:"], img[src*="fbcdn"]',
+            '[data-testid="attachments"] img, [data-testid="card-image"]',
           )
           .first()
           .waitFor({ state: "visible", timeout: 30000 })
           .catch(() =>
             emit({
               type: "warning",
-              platform: "facebook",
-              message: "Facebook media preview not detected; posting anyway.",
+              platform: "x",
+              message: "X media preview not detected; posting anyway.",
             }),
           );
-      } catch (e) {
+      }
+    }
+
+    // ── Submit ─────────────────────────────────────────────────────────────
+    const postBtn = await firstVisibleLocator(
+      page,
+      [
+        'button[data-testid="tweetButton"]',
+        'button[data-testid="tweetButtonInline"]',
+      ],
+      8000,
+    );
+
+    if (!postBtn) {
+      throw new Error("X Post/Tweet button not found.");
+    }
+
+    await postBtn.locator.click();
+    await humanDelay(3000, 5000);
+
+    emit({
+      type: "info",
+      platform: "x",
+      message: "Tweet posted successfully.",
+    });
+    return true;
+  } catch (err) {
+    logger.error("X posting failed", { error: err.message });
+    emit({
+      type: "error",
+      platform: "x",
+      message: `X post failed: ${err.message}`,
+    });
+    return false;
+  }
+}
+
+async function postToFacebook(page, body, mediaPath, emit) {
+  try {
+    await page.goto("https://www.facebook.com/", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    await humanDelay(2000, 4000);
+
+    if (await checkSessionExpired(page, "facebook", emit)) {
+      throw new Error(
+        "Session expired or CAPTCHA detected. Please re-authenticate.",
+      );
+    }
+
+    // ── Step 1: Open the composer ─────────────────────────────────────────
+    emit({
+      type: "info",
+      platform: "facebook",
+      message: "Looking for Facebook compose trigger...",
+    });
+
+    const composeTriggerSelectors = [
+      '[aria-label="Create a post"]',
+      '[aria-label="Create a Post"]',
+      'div[role="button"]:has-text("What\'s on your mind")',
+      'span:has-text("What\'s on your mind")',
+    ];
+
+    const composeTrigger = await firstVisibleLocator(
+      page,
+      composeTriggerSelectors,
+      10000,
+    );
+    if (!composeTrigger) {
+      throw new Error(
+        "Facebook compose trigger (What's on your mind?) not found.",
+      );
+    }
+
+    await composeTrigger.locator.scrollIntoViewIfNeeded().catch(() => {});
+    await composeTrigger.locator.click();
+    await humanDelay(2000, 3500);
+
+    // ── Step 2: Wait for the post dialog to open ──────────────────────────
+    emit({
+      type: "info",
+      platform: "facebook",
+      message: "Waiting for Facebook post dialog...",
+    });
+
+    const dialogSelectors = [
+      '[aria-label="Create a post"]',
+      '[aria-label="Create post"]',
+      'div[role="dialog"]',
+      '[data-pagelet="FeedComposer"]',
+    ];
+
+    const dialogScope = await firstVisibleLocator(page, dialogSelectors, 12000);
+    if (!dialogScope) {
+      throw new Error(
+        "Facebook post dialog did not open after clicking compose trigger.",
+      );
+    }
+
+    // ── Step 3: Find editor inside the dialog ─────────────────────────────
+    const editorSelectors = [
+      'div[role="textbox"][aria-label="What\'s on your mind?"]',
+      'div[role="textbox"][aria-label*="mind"]',
+      '[data-pagelet="FeedComposer"] div[role="textbox"]',
+      'div[role="textbox"][contenteditable="true"]',
+    ];
+
+    const editor = await firstVisibleLocator(page, editorSelectors, 8000);
+    if (!editor) {
+      throw new Error("Facebook post editor not found inside dialog.");
+    }
+
+    emit({
+      type: "info",
+      platform: "facebook",
+      message: "Typing post content...",
+    });
+    await editor.locator.click();
+    await humanDelay(500, 1000);
+
+    await humanTypeText(page, editor.locator, body);
+    await humanDelay(1000, 2000);
+
+    // ── Step 4: Attach media if provided ──────────────────────────────────
+    if (mediaPath) {
+      emit({
+        type: "info",
+        platform: "facebook",
+        message: "Attaching media...",
+      });
+
+      const photoVideoSelectors = [
+        'div[role="button"][aria-label*="Photo"]',
+        'div[role="button"][aria-label*="photo"]',
+        '[aria-label="Photo/Video"]',
+        'span:has-text("Photo/video")',
+        'div[aria-label*="Video"]',
+      ];
+
+      const photoBtn = await firstVisibleLocator(
+        page,
+        photoVideoSelectors,
+        5000,
+      );
+      if (photoBtn) {
+        await photoBtn.locator.click();
+        await humanDelay(1500, 2500);
+      }
+
+      const fileInput = page.locator('input[type="file"]');
+      if ((await fileInput.count()) > 0) {
+        try {
+          await fileInput.first().setInputFiles(mediaPath);
+          await humanDelay(1000, 2000);
+          await page
+            .locator(
+              '[data-pagelet="FeedComposer"] img[src*="blob:"], img[src*="fbcdn"]',
+            )
+            .first()
+            .waitFor({ state: "visible", timeout: 30000 })
+            .catch(() =>
+              emit({
+                type: "warning",
+                platform: "facebook",
+                message: "Media preview not detected; posting anyway.",
+              }),
+            );
+        } catch (e) {
+          emit({
+            type: "warning",
+            platform: "facebook",
+            message: `Media attach failed: ${e.message}`,
+          });
+        }
+      } else {
         emit({
           type: "warning",
           platform: "facebook",
-          message: `Media attach failed: ${e.message}`,
+          message: "File input not found on Facebook. Posting text only.",
         });
       }
-    } else {
-      emit({
-        type: "warning",
-        platform: "facebook",
-        message: "File input not found on Facebook. Posting text only.",
-      });
     }
+
+    // ── Step 5: Click the Post button ─────────────────────────────────────
+    emit({ type: "info", platform: "facebook", message: "Submitting post..." });
+
+    const postBtnSelectors = [
+      '[data-pagelet="FeedComposer"] div[aria-label="Post"]',
+      'div[aria-label="Post"][role="button"]',
+      'div[role="dialog"] div[aria-label="Post"]',
+    ];
+
+    const postBtn = await firstVisibleLocator(page, postBtnSelectors, 8000);
+    if (!postBtn) {
+      throw new Error("Facebook Post button not found — cannot submit post.");
+    }
+
+    const isDisabled = await postBtn.locator
+      .getAttribute("aria-disabled")
+      .catch(() => null);
+    if (isDisabled === "true") {
+      throw new Error(
+        "Facebook Post button is disabled — post body may be empty or media still uploading.",
+      );
+    }
+
+    await postBtn.locator.scrollIntoViewIfNeeded().catch(() => {});
+    await postBtn.locator.click();
+    await humanDelay(3000, 5000);
+
+    emit({
+      type: "info",
+      platform: "facebook",
+      message: "Post submitted to Facebook.",
+    });
+    return true;
+  } catch (err) {
+    logger.error("Facebook posting failed", { error: err.message });
+    emit({
+      type: "error",
+      platform: "facebook",
+      message: `Facebook post failed: ${err.message}`,
+    });
+    return false;
   }
-
-  const postBtn = page.locator('div[aria-label="Post"], span:has-text("Post")');
-  await postBtn.first().click();
-  await humanDelay(3000, 5000);
-
-  return true;
 }
 
 async function postToInstagram(page, body, mediaPath, emit) {

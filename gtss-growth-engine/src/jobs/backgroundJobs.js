@@ -1,7 +1,6 @@
 require("dotenv").config();
 
 const { initReplyChecker } = require("./replyChecker");
-const { initScheduledPoster } = require("./scheduledPoster");
 const { initInstagramWarmupJobs } = require("./instagramWarmupJob");
 const { getDb } = require("../db/database");
 const { stopAllJobs } = require("../automation/executor");
@@ -16,6 +15,10 @@ const platformAdapter = require("../campaign/platformAdapter");
 // Concurrency mutex and locking flags
 let campaignQueueInProgress = false;
 let currentPlatform = null;
+
+function isCampaignQueueRunning() {
+  return campaignQueueInProgress;
+}
 
 // Wrap platformAdapter connection/DM actions dynamically to track active platform
 const originalRunConnectionAction = platformAdapter.runConnectionAction;
@@ -42,7 +45,10 @@ async function launchRequiredBrowsers(platforms) {
   for (const platform of platforms) {
     const normPlatform = platform.toLowerCase().trim();
     try {
-      logger.info("SERVER", `[CAMPAIGN-QUEUES] Pre-launching browser context for platform: ${normPlatform}`);
+      logger.info(
+        "SERVER",
+        `[CAMPAIGN-QUEUES] Pre-launching browser context for platform: ${normPlatform}`,
+      );
       let state;
       if (normPlatform === "instagram") {
         state = await browserBase.createInstagramBrowser();
@@ -53,7 +59,11 @@ async function launchRequiredBrowsers(platforms) {
       }
       activePages[normPlatform] = state;
     } catch (err) {
-      logger.error("SERVER", `[CAMPAIGN-QUEUES] Failed to launch browser for platform: ${normPlatform}`, err);
+      logger.error(
+        "SERVER",
+        `[CAMPAIGN-QUEUES] Failed to launch browser for platform: ${normPlatform}`,
+        err,
+      );
       // Rollback clean up already launched contexts
       for (const [p, state] of Object.entries(activePages)) {
         try {
@@ -81,7 +91,10 @@ async function launchRequiredBrowsers(platforms) {
 async function closeAllActivePages(activePages) {
   for (const [platform, state] of Object.entries(activePages)) {
     try {
-      logger.info("SERVER", `[CAMPAIGN-QUEUES] Closing background browser context for platform: ${platform}`);
+      logger.info(
+        "SERVER",
+        `[CAMPAIGN-QUEUES] Closing background browser context for platform: ${platform}`,
+      );
       await browserBase.closeBrowser(state.browser, platform, state.context, {
         mode: state.mode,
         tracePath: state.tracePath,
@@ -89,7 +102,11 @@ async function closeAllActivePages(activePages) {
         lock: state.lock,
       });
     } catch (err) {
-      logger.error("SERVER", `[CAMPAIGN-QUEUES] Error during browser closure for ${platform}`, err);
+      logger.error(
+        "SERVER",
+        `[CAMPAIGN-QUEUES] Error during browser closure for ${platform}`,
+        err,
+      );
     }
   }
 }
@@ -134,7 +151,10 @@ function createProxyPage(activePages) {
  */
 async function runConnectionQueueJob(options = {}) {
   if (campaignQueueInProgress) {
-    logger.info("SERVER", "[CONNECTION-QUEUE] Skipping execution: another campaign outreach queue run is in progress.");
+    logger.info(
+      "SERVER",
+      "[CONNECTION-QUEUE] Skipping execution: another campaign outreach queue run is in progress.",
+    );
     return;
   }
 
@@ -143,7 +163,9 @@ async function runConnectionQueueJob(options = {}) {
   // Acquire cluster-safe database lock atomic transition
   try {
     const lockRes = db
-      .prepare("UPDATE settings SET value = 'true' WHERE key = 'campaign_queue_lock' AND value = 'false'")
+      .prepare(
+        "UPDATE settings SET value = 'true' WHERE key = 'campaign_queue_lock' AND value = 'false'",
+      )
       .run();
     if (lockRes.changes === 0) {
       logger.info(
@@ -153,7 +175,11 @@ async function runConnectionQueueJob(options = {}) {
       return;
     }
   } catch (err) {
-    logger.error("SERVER", "[CONNECTION-QUEUE] Failed to acquire persistent queue lock: ", err.message);
+    logger.error(
+      "SERVER",
+      "[CONNECTION-QUEUE] Failed to acquire persistent queue lock: ",
+      err.message,
+    );
     return;
   }
 
@@ -161,7 +187,10 @@ async function runConnectionQueueJob(options = {}) {
   let activePages = {};
 
   try {
-    logger.info("SERVER", "[CONNECTION-QUEUE] Starting campaign connection invite queue run...");
+    logger.info(
+      "SERVER",
+      "[CONNECTION-QUEUE] Starting campaign connection invite queue run...",
+    );
 
     const maxRetries = 5;
     const rows = db
@@ -184,12 +213,16 @@ async function runConnectionQueueJob(options = {}) {
       );
       campaignQueueInProgress = false;
       try {
-        db.prepare("UPDATE settings SET value = 'false' WHERE key = 'campaign_queue_lock'").run();
+        db.prepare(
+          "UPDATE settings SET value = 'false' WHERE key = 'campaign_queue_lock'",
+        ).run();
       } catch (_) {}
       return;
     }
 
-    const requiredPlatforms = rows.map((r) => String(r.platform).toLowerCase().trim());
+    const requiredPlatforms = rows.map((r) =>
+      String(r.platform).toLowerCase().trim(),
+    );
     logger.info(
       "SERVER",
       `[CONNECTION-QUEUE] Pre-flight inspection: Launching contexts for platforms: ${requiredPlatforms.join(", ")}`,
@@ -199,17 +232,30 @@ async function runConnectionQueueJob(options = {}) {
     const proxyPage = createProxyPage(activePages);
 
     const report = await processConnectionQueue(proxyPage, options);
-    logger.info("SERVER", `[CONNECTION-QUEUE] Connection queue batch processing complete: ${JSON.stringify(report)}`);
+    logger.info(
+      "SERVER",
+      `[CONNECTION-QUEUE] Connection queue batch processing complete: ${JSON.stringify(report)}`,
+    );
   } catch (err) {
-    logger.error("SERVER", "[CONNECTION-QUEUE] Connection queue cron runner encountered a critical error", err);
+    logger.error(
+      "SERVER",
+      "[CONNECTION-QUEUE] Connection queue cron runner encountered a critical error",
+      err,
+    );
   } finally {
     await closeAllActivePages(activePages);
     currentPlatform = null;
     campaignQueueInProgress = false;
     try {
-      db.prepare("UPDATE settings SET value = 'false' WHERE key = 'campaign_queue_lock'").run();
+      db.prepare(
+        "UPDATE settings SET value = 'false' WHERE key = 'campaign_queue_lock'",
+      ).run();
     } catch (err) {
-      logger.error("SERVER", "[CONNECTION-QUEUE] Failed to release persistent queue lock: ", err.message);
+      logger.error(
+        "SERVER",
+        "[CONNECTION-QUEUE] Failed to release persistent queue lock: ",
+        err.message,
+      );
     }
   }
 }
@@ -219,7 +265,10 @@ async function runConnectionQueueJob(options = {}) {
  */
 async function runDmQueueJob(options = {}) {
   if (campaignQueueInProgress) {
-    logger.info("SERVER", "[DM-QUEUE] Skipping execution: another campaign outreach queue run is in progress.");
+    logger.info(
+      "SERVER",
+      "[DM-QUEUE] Skipping execution: another campaign outreach queue run is in progress.",
+    );
     return;
   }
 
@@ -228,7 +277,9 @@ async function runDmQueueJob(options = {}) {
   // Acquire cluster-safe database lock atomic transition
   try {
     const lockRes = db
-      .prepare("UPDATE settings SET value = 'true' WHERE key = 'campaign_queue_lock' AND value = 'false'")
+      .prepare(
+        "UPDATE settings SET value = 'true' WHERE key = 'campaign_queue_lock' AND value = 'false'",
+      )
       .run();
     if (lockRes.changes === 0) {
       logger.info(
@@ -238,7 +289,11 @@ async function runDmQueueJob(options = {}) {
       return;
     }
   } catch (err) {
-    logger.error("SERVER", "[DM-QUEUE] Failed to acquire persistent queue lock: ", err.message);
+    logger.error(
+      "SERVER",
+      "[DM-QUEUE] Failed to acquire persistent queue lock: ",
+      err.message,
+    );
     return;
   }
 
@@ -246,7 +301,10 @@ async function runDmQueueJob(options = {}) {
   let activePages = {};
 
   try {
-    logger.info("SERVER", "[DM-QUEUE] Starting campaign DM messaging queue run...");
+    logger.info(
+      "SERVER",
+      "[DM-QUEUE] Starting campaign DM messaging queue run...",
+    );
 
     const maxRetries = 5;
     const rows = db
@@ -269,12 +327,16 @@ async function runDmQueueJob(options = {}) {
       );
       campaignQueueInProgress = false;
       try {
-        db.prepare("UPDATE settings SET value = 'false' WHERE key = 'campaign_queue_lock'").run();
+        db.prepare(
+          "UPDATE settings SET value = 'false' WHERE key = 'campaign_queue_lock'",
+        ).run();
       } catch (_) {}
       return;
     }
 
-    const requiredPlatforms = rows.map((r) => String(r.platform).toLowerCase().trim());
+    const requiredPlatforms = rows.map((r) =>
+      String(r.platform).toLowerCase().trim(),
+    );
     logger.info(
       "SERVER",
       `[DM-QUEUE] Pre-flight inspection: Launching contexts for platforms: ${requiredPlatforms.join(", ")}`,
@@ -284,17 +346,30 @@ async function runDmQueueJob(options = {}) {
     const proxyPage = createProxyPage(activePages);
 
     const report = await processDmQueue(proxyPage, options);
-    logger.info("SERVER", `[DM-QUEUE] DM queue batch processing complete: ${JSON.stringify(report)}`);
+    logger.info(
+      "SERVER",
+      `[DM-QUEUE] DM queue batch processing complete: ${JSON.stringify(report)}`,
+    );
   } catch (err) {
-    logger.error("SERVER", "[DM-QUEUE] DM queue cron runner encountered a critical error", err);
+    logger.error(
+      "SERVER",
+      "[DM-QUEUE] DM queue cron runner encountered a critical error",
+      err,
+    );
   } finally {
     await closeAllActivePages(activePages);
     currentPlatform = null;
     campaignQueueInProgress = false;
     try {
-      db.prepare("UPDATE settings SET value = 'false' WHERE key = 'campaign_queue_lock'").run();
+      db.prepare(
+        "UPDATE settings SET value = 'false' WHERE key = 'campaign_queue_lock'",
+      ).run();
     } catch (err) {
-      logger.error("SERVER", "[DM-QUEUE] Failed to release persistent queue lock: ", err.message);
+      logger.error(
+        "SERVER",
+        "[DM-QUEUE] Failed to release persistent queue lock: ",
+        err.message,
+      );
     }
   }
 }
@@ -304,7 +379,10 @@ let shuttingDown = false;
 async function gracefulShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  logger.warn("SERVER", `Background automation worker received ${signal}. Shutting down.`);
+  logger.warn(
+    "SERVER",
+    `Background automation worker received ${signal}. Shutting down.`,
+  );
 
   try {
     stopAllJobs();
@@ -312,7 +390,11 @@ async function gracefulShutdown(signal) {
     logger.info("SERVER", "Background automation worker shutdown complete.");
     process.exit(0);
   } catch (error) {
-    logger.error("SERVER", "Background automation worker shutdown failed", error);
+    logger.error(
+      "SERVER",
+      "Background automation worker shutdown failed",
+      error,
+    );
     process.exit(1);
   }
 }
@@ -361,12 +443,20 @@ function startBackgroundJobs() {
       ON CONFLICT(key) DO UPDATE SET value = 'false'
     `,
     ).run();
-    logger.info("SERVER", "[STARTUP-SWEEP] Initialized/Reset persistent campaign queue lock to 'false'.");
+    logger.info(
+      "SERVER",
+      "[STARTUP-SWEEP] Initialized/Reset persistent campaign queue lock to 'false'.",
+    );
   } catch (err) {
-    logger.error("SERVER", "[STARTUP-SWEEP] Failed to execute startup sweeper & lock reset: ", err);
+    logger.error(
+      "SERVER",
+      "[STARTUP-SWEEP] Failed to execute startup sweeper & lock reset: ",
+      err,
+    );
   }
 
   initReplyChecker();
+  const { initScheduledPoster } = require("./scheduledPoster");
   initScheduledPoster();
   initInstagramWarmupJobs();
 
@@ -400,7 +490,10 @@ function startBackgroundJobs() {
           fs.unlinkSync(fp);
           logger.info("SERVER", `Cleaned up orphan upload: ${f}`);
         } else if (pendingRow) {
-          logger.debug("SERVER", `Keeping upload referenced by pending post: ${f}`);
+          logger.debug(
+            "SERVER",
+            `Keeping upload referenced by pending post: ${f}`,
+          );
         }
       } catch (e) {
         /* ignore */
@@ -415,7 +508,10 @@ function startBackgroundJobs() {
 
   if (cronExpression && cron.validate(cronExpression)) {
     cron.schedule(cronExpression, async () => {
-      logger.info("PIPELINE", `Scheduled pipeline run triggered (cron: ${cronExpression})`);
+      logger.info(
+        "PIPELINE",
+        `Scheduled pipeline run triggered (cron: ${cronExpression})`,
+      );
       try {
         const runId = await runFullPipeline("cron");
         logger.info("PIPELINE", `Scheduled pipeline run completed: #${runId}`);
@@ -427,25 +523,40 @@ function startBackgroundJobs() {
     });
     logger.info("SERVER", `Pipeline cron registered: ${cronExpression}`);
   } else if (cronExpression) {
-    logger.warn("SERVER", `Invalid PIPELINE_CRON expression: "${cronExpression}" — pipeline cron NOT registered`);
+    logger.warn(
+      "SERVER",
+      `Invalid PIPELINE_CRON expression: "${cronExpression}" — pipeline cron NOT registered`,
+    );
   }
 
   // Instagram Inbox Reply Checker cron (runs every 30 minutes)
-  const { checkInbox, checkFollowBacks } = require("../services/instagramReplyChecker");
+  const {
+    checkInbox,
+    checkFollowBacks,
+  } = require("../services/instagramReplyChecker");
   cron.schedule("*/30 * * * *", async () => {
     logger.info("SERVER", "Running scheduled Instagram checkInbox job...");
     try {
       await checkInbox();
-      logger.info("SERVER", "Scheduled Instagram checkInbox job completed successfully.");
+      logger.info(
+        "SERVER",
+        "Scheduled Instagram checkInbox job completed successfully.",
+      );
     } catch (err) {
       logger.error("SERVER", "Scheduled Instagram checkInbox job failed", err);
     }
   });
-  logger.info("SERVER", "Instagram inbox checker cron registered: every 30 minutes");
+  logger.info(
+    "SERVER",
+    "Instagram inbox checker cron registered: every 30 minutes",
+  );
 
   // Instagram Follow-Backs cron (runs at 4 AM daily)
   cron.schedule("0 4 * * *", async () => {
-    logger.info("SERVER", "Running scheduled Instagram checkFollowBacks job...");
+    logger.info(
+      "SERVER",
+      "Running scheduled Instagram checkFollowBacks job...",
+    );
     try {
       const result = await checkFollowBacks();
       logger.info(
@@ -453,29 +564,52 @@ function startBackgroundJobs() {
         `Scheduled Instagram checkFollowBacks job completed. Found ${result.newFollowBacksCount || 0} new follow-backs.`,
       );
     } catch (err) {
-      logger.error("SERVER", "Scheduled Instagram checkFollowBacks job failed", err);
+      logger.error(
+        "SERVER",
+        "Scheduled Instagram checkFollowBacks job failed",
+        err,
+      );
     }
   });
-  logger.info("SERVER", "Instagram follow-backs cron registered: daily at 4:00 AM");
+  logger.info(
+    "SERVER",
+    "Instagram follow-backs cron registered: daily at 4:00 AM",
+  );
 
   // Campaign Connection Queue cron (runs every 20 minutes)
   cron.schedule("*/20 * * * *", async () => {
-    logger.info("SERVER", "Running scheduled campaign Connection Queue cron job...");
+    logger.info(
+      "SERVER",
+      "Running scheduled campaign Connection Queue cron job...",
+    );
     try {
       await runConnectionQueueJob();
-      logger.info("SERVER", "Scheduled campaign Connection Queue job completed successfully.");
+      logger.info(
+        "SERVER",
+        "Scheduled campaign Connection Queue job completed successfully.",
+      );
     } catch (err) {
-      logger.error("SERVER", "Scheduled campaign Connection Queue job failed", err);
+      logger.error(
+        "SERVER",
+        "Scheduled campaign Connection Queue job failed",
+        err,
+      );
     }
   });
-  logger.info("SERVER", "Campaign Connection Queue cron registered: every 20 minutes");
+  logger.info(
+    "SERVER",
+    "Campaign Connection Queue cron registered: every 20 minutes",
+  );
 
   // Campaign DM Queue cron (runs every 2 minutes)
   cron.schedule("*/2 * * * *", async () => {
     logger.info("SERVER", "Running scheduled campaign DM Queue cron job...");
     try {
       await runDmQueueJob();
-      logger.info("SERVER", "Scheduled campaign DM Queue job completed successfully.");
+      logger.info(
+        "SERVER",
+        "Scheduled campaign DM Queue job completed successfully.",
+      );
     } catch (err) {
       logger.error("SERVER", "Scheduled campaign DM Queue job failed", err);
     }
@@ -499,7 +633,8 @@ process.on("SIGTERM", () => {
 
 module.exports = {
   startBackgroundJobs,
-  isCampaignQueueInProgress: () => campaignQueueInProgress,
+  isCampaignQueueRunning,
+  isCampaignQueueInProgress: isCampaignQueueRunning,
   __private: {
     runConnectionQueueJob,
     runDmQueueJob,

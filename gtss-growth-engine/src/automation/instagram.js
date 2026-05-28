@@ -60,6 +60,9 @@ const IG_SELECTORS = {
     'svg[aria-label="New post"]',
     'svg[aria-label="Create"]',
     'span:has-text("Create")',
+    'a[href*="/create"] svg',
+    'a[href="/create/"] span',
+    'div[role="button"] svg[aria-label="New post"]',
   ],
   fileInput: ['input[type="file"]'],
   captionBox: [
@@ -1330,21 +1333,53 @@ async function postImage(
     });
     await humanDelay(2000, 4000);
 
+    // Dismiss any blocking overlays (cookie consent, login prompts, upgrade prompts)
+    const overlayDismiss = [
+      'button:has-text("Allow all cookies")',
+      'button:has-text("Accept All")',
+      'button:has-text("Not Now")',
+      'button:has-text("Close")',
+      'button[aria-label="Close"]',
+      'div[role="dialog"] button:has-text("Cancel")',
+    ];
+    for (const sel of overlayDismiss) {
+      const btn = page.locator(sel);
+      if (
+        await btn
+          .first()
+          .isVisible({ timeout: 800 })
+          .catch(() => false)
+      ) {
+        await btn
+          .first()
+          .click()
+          .catch(() => {});
+        await humanDelay(500, 1000);
+        break;
+      }
+    }
+
     // 3. dailySessionWarmup check
     await dailySessionWarmup(page);
     await humanDelay(1000, 2000);
 
     // 4. Click Create ("+") button
-    const createBtn = await firstVisible(page, IG_SELECTORS.postCreate);
+    let createBtn = await firstVisible(page, IG_SELECTORS.postCreate, 8000);
     if (!createBtn) {
-      throw new Error("Could not find Instagram Create button.");
+      // Retry: scroll to sidebar to ensure nav items are visible
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await humanDelay(1000, 1500);
+      createBtn = await firstVisible(page, IG_SELECTORS.postCreate, 6000);
+    }
+    if (!createBtn) {
+      throw new Error("Could not find Instagram Create button after retry.");
     }
     await createBtn.click();
     await humanDelay(1000, 2000);
 
     // 5. Wait for upload modal
     const fileInputLocator = page.locator('input[type="file"]');
-    await fileInputLocator.waitFor({ state: "attached", timeout: 15000 });
+    await fileInputLocator.waitFor({ state: "attached", timeout: 30000 });
 
     // 6. Make file input visible if hidden
     await page.evaluate(() => {

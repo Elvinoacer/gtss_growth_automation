@@ -7,6 +7,7 @@ const {
   getPrimaryPostMediaPath,
   getPostLocationTag,
 } = require("../services/schedulerService");
+const { isCampaignQueueRunning } = require("./backgroundJobs");
 const logger = require("../utils/logger");
 
 const MAX_RETRIES = 5;
@@ -51,6 +52,14 @@ function initScheduledPoster() {
         logger.debug("Scheduled poster already running, skipping tick.");
         return;
       }
+
+      if (isCampaignQueueRunning()) {
+        logger.debug(
+          "Scheduled poster deferred: campaign queue is currently running.",
+        );
+        return;
+      }
+
       isPublishing = true;
 
       try {
@@ -164,6 +173,13 @@ function initScheduledPoster() {
               `Cron: Post ${post.id} failed (attempt ${newRetryCount}/${MAX_RETRIES}). Retrying at ${nextRetryAt}`,
             );
           } catch (err) {
+            if (err.message && err.message.includes("already in use")) {
+              logger.warn(
+                `Cron: Post ${post.id} deferred — browser profile locked by another process. Will retry next tick.`,
+              );
+              continue;
+            }
+
             logger.error(`Cron: Unhandled error publishing post ${post.id}`, {
               error: err.message,
             });
