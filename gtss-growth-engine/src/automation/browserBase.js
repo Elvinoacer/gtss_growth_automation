@@ -1525,7 +1525,7 @@ async function createInstagramBrowser(options = {}) {
           `Instagram session state detected: ${sessionState}`,
         );
 
-        if (sessionState === "authenticated") {
+        if (sessionState === "authenticated" && !options.skipDailyWarmup) {
           const db = getDb();
           const settingRow = db
             .prepare(
@@ -1535,6 +1535,11 @@ async function createInstagramBrowser(options = {}) {
           const fastTrack = settingRow && String(settingRow.value) === "1";
 
           await dailySessionWarmup(page, fastTrack);
+        } else if (sessionState === "authenticated") {
+          logger.info(
+            "BROWSER",
+            "Instagram daily warmup skipped for this browser session",
+          );
         }
       } catch (err) {
         logger.error(
@@ -1608,7 +1613,7 @@ async function createInstagramBrowser(options = {}) {
     const sessionState = await checkInstagramSessionState(page);
     logger.info("BROWSER", `Instagram session state detected: ${sessionState}`);
 
-    if (sessionState === "authenticated") {
+    if (sessionState === "authenticated" && !options.skipDailyWarmup) {
       const db = getDb();
       const settingRow = db
         .prepare(
@@ -1618,6 +1623,11 @@ async function createInstagramBrowser(options = {}) {
       const fastTrack = settingRow && String(settingRow.value) === "1";
 
       await dailySessionWarmup(page, fastTrack);
+    } else if (sessionState === "authenticated") {
+      logger.info(
+        "BROWSER",
+        "Instagram daily warmup skipped for this browser session",
+      );
     }
   } catch (err) {
     logger.error(

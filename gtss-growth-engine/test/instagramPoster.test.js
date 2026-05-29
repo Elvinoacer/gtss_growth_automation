@@ -191,6 +191,19 @@ test("validateForStory correctly qualifies 9:16 and rejects 1:1", async () => {
   assert.match(resSquare.errors[0], /aspect ratio/i);
 });
 
+test("prepareForFeed converts 9:16 story media into a valid feed image", async () => {
+  const sourcePath = path.join(TEST_DIR, "story.jpg");
+  const prepared = await imageValidator.prepareForFeed(sourcePath);
+
+  assert.equal(prepared.valid, true);
+  assert.equal(prepared.changed, true);
+  assert.match(prepared.filePath, /ig-feed-portrait\.jpg$/);
+
+  const finalValidation = await imageValidator.validateForFeed(prepared.filePath);
+  assert.equal(finalValidation.valid, true);
+  assert.equal(finalValidation.aspectRatio, "portrait");
+});
+
 test("postImage successfully executes entire crop -> filter -> caption -> share sequence", async () => {
   cleanDb();
   const db = getDb();
@@ -199,6 +212,9 @@ test("postImage successfully executes entire crop -> filter -> caption -> share 
   db.prepare(
     "INSERT INTO posts (platforms, body, media_path, status) VALUES (?, ?, ?, ?)"
   ).run(JSON.stringify(["instagram"]), "Check this out #growth", path.join(TEST_DIR, "square.jpg"), "scheduled");
+  db.prepare(
+    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)"
+  ).run("ig_blocked_until", new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString());
 
   const page = createMockPage({
     url: "https://www.instagram.com/",
@@ -241,6 +257,36 @@ test("postImage successfully executes entire crop -> filter -> caption -> share 
   const doneEvent = emitter.events.find(e => e.type === "done");
   assert.ok(doneEvent);
   assert.match(doneEvent.message, /published/);
+});
+
+test("postImage prepares story-ratio media instead of failing feed validation", async () => {
+  cleanDb();
+  const db = getDb();
+
+  db.prepare(
+    "INSERT INTO posts (platforms, body, media_path, status, ig_post_type) VALUES (?, ?, ?, ?, ?)"
+  ).run(JSON.stringify(["instagram"]), "Story-shaped feed", path.join(TEST_DIR, "story.jpg"), "scheduled", "feed");
+
+  const page = createMockPage({
+    url: "https://www.instagram.com/",
+    visibleSelectors: [
+      'svg[aria-label="New post"]',
+      'div[role="textbox"][contenteditable="true"]',
+      'button:has-text("Share")'
+    ]
+  });
+
+  const result = await instagram.postImage(
+    page,
+    {
+      imagePath: path.join(TEST_DIR, "story.jpg"),
+      caption: "Story-shaped feed"
+    },
+    { emit: () => {} }
+  );
+
+  assert.equal(result.success, true);
+  assert.match(page.getSetFiles(), /ig-feed-portrait\.jpg$/);
 });
 
 test("postStory successfully performs avatar click or direct navigation, upload, and story share", async () => {

@@ -1,5 +1,44 @@
 const sharp = require("sharp");
 const fs = require("fs");
+const path = require("path");
+
+const FEED_RATIOS = [
+  { type: "portrait", ratio: 4 / 5, width: 1080, height: 1350 },
+  { type: "square", ratio: 1, width: 1080, height: 1080 },
+  { type: "landscape", ratio: 1.91, width: 1080, height: 565 },
+];
+
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
+const VIDEO_EXTENSIONS = new Set([
+  ".mp4",
+  ".mov",
+  ".avi",
+  ".mkv",
+  ".m4v",
+]);
+
+function getMediaKind(filePath) {
+  const ext = path.extname(String(filePath || "")).toLowerCase();
+  if (IMAGE_EXTENSIONS.has(ext)) return "image";
+  if (VIDEO_EXTENSIONS.has(ext)) return "video";
+  return "unknown";
+}
+
+function closestFeedRatio(ratio) {
+  return FEED_RATIOS.slice().sort(
+    (a, b) =>
+      Math.abs(Math.log(ratio / a.ratio)) -
+      Math.abs(Math.log(ratio / b.ratio)),
+  )[0];
+}
+
+function normalizedFeedImagePath(filePath, targetType) {
+  const parsed = path.parse(filePath);
+  return path.join(
+    parsed.dir,
+    `${parsed.name}-ig-feed-${targetType || "normalized"}.jpg`,
+  );
+}
 
 /**
  * Validates an image file for Instagram Feed publishing.
@@ -73,6 +112,65 @@ async function validateForFeed(filePath) {
   }
 }
 
+async function prepareForFeed(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return {
+      filePath,
+      changed: false,
+      valid: false,
+      errors: ["File does not exist on disk."],
+      warnings: [],
+      aspectRatio: null,
+    };
+  }
+
+  if (getMediaKind(filePath) === "video") {
+    return {
+      filePath,
+      changed: false,
+      valid: true,
+      errors: [],
+      warnings: ["Video feed media bypassed image aspect validation."],
+      aspectRatio: "video",
+    };
+  }
+
+  const initial = await validateForFeed(filePath);
+  if (initial.valid) {
+    return { filePath, changed: false, ...initial };
+  }
+
+  const metadata = await sharp(filePath).metadata();
+  const ratio = metadata.width / metadata.height;
+  const target = closestFeedRatio(ratio);
+  const outputPath = normalizedFeedImagePath(filePath, target.type);
+
+  await sharp(filePath)
+    .rotate()
+    .flatten({ background: "#ffffff" })
+    .resize(target.width, target.height, {
+      fit: "contain",
+      background: "#ffffff",
+      withoutEnlargement: false,
+    })
+    .jpeg({ quality: 88, mozjpeg: true })
+    .toFile(outputPath);
+
+  const finalValidation = await validateForFeed(outputPath);
+  return {
+    filePath: outputPath,
+    changed: true,
+    valid: finalValidation.valid,
+    errors: finalValidation.errors,
+    warnings: [
+      `Prepared feed media from ${metadata.width}x${metadata.height} (${ratio.toFixed(4)}) to ${target.width}x${target.height} (${target.type}).`,
+      ...finalValidation.warnings,
+    ],
+    aspectRatio: finalValidation.aspectRatio,
+    originalPath: filePath,
+  };
+}
+
 /**
  * Validates an image file for Instagram Story publishing.
  * @param {string} filePath - Absolute path to the image file
@@ -127,5 +225,7 @@ async function validateForStory(filePath) {
 
 module.exports = {
   validateForFeed,
-  validateForStory
+  validateForStory,
+  prepareForFeed,
+  getMediaKind,
 };

@@ -86,10 +86,21 @@ const IG_SELECTORS = {
   ],
   fileInput: ['input[type="file"]'],
   captionBox: [
+    'div[role="dialog"] textarea[aria-label*="caption" i]',
+    'div[role="dialog"] textarea[placeholder*="caption" i]',
+    'div[role="dialog"] div[role="textbox"][contenteditable="true"][aria-label*="caption" i]',
+    'div[role="dialog"] div[aria-label*="Write a caption" i][contenteditable="true"]',
+    'div[role="dialog"] div[role="textbox"][contenteditable="true"]',
     'div[role="textbox"][contenteditable="true"]',
-    'div[aria-label*="Write a caption"]',
+    'div[aria-label*="Write a caption" i]',
+    'textarea[aria-label*="caption" i]',
+    'textarea[placeholder*="caption" i]',
   ],
   shareButton: [
+    'div[role="dialog"] button[aria-label="Share"]',
+    'div[role="dialog"] div[role="button"][aria-label="Share"]',
+    'div[role="dialog"] button:has-text("Share")',
+    'div[role="dialog"] div[role="button"]:has-text("Share")',
     'button:has-text("Share")',
     'div[role="button"]:has-text("Share")',
   ],
@@ -120,6 +131,261 @@ async function waitForPostFileInput(page, timeout = 15000) {
   return fileInputLocator;
 }
 
+async function getAttachedPostFileInput(page, timeout = 1200) {
+  const fileInputLocator = page.locator('input[type="file"]');
+  const count = await fileInputLocator.count().catch(() => 0);
+  if (count === 0) return null;
+
+  await fileInputLocator
+    .first()
+    .waitFor({ state: "attached", timeout })
+    .catch(() => null);
+
+  return fileInputLocator;
+}
+
+async function clickInstagramPostMenuOption(page) {
+  const clickedViaDom = await page
+    .evaluate(() => {
+      const isVisible = (el) => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return (
+          style.visibility !== "hidden" &&
+          style.display !== "none" &&
+          rect.width > 0 &&
+          rect.height > 0
+        );
+      };
+
+      const clickableAncestor = (el) => {
+        let node = el;
+        while (node && node !== document.body) {
+          if (
+            node.matches?.(
+              'a, button, [role="button"], [role="menuitem"], [tabindex="0"]',
+            )
+          ) {
+            return node;
+          }
+          node = node.parentElement;
+        }
+        return el;
+      };
+
+      const candidates = [...document.querySelectorAll("span, div, a, button")]
+        .filter((el) => (el.textContent || "").trim() === "Post")
+        .map((el) => {
+          const target = clickableAncestor(el);
+          const rect = target.getBoundingClientRect();
+          return { el, target, rect };
+        })
+        .filter(({ target, rect }) => {
+          if (!isVisible(target)) return false;
+          const nearSidebarMenu = rect.left < 420 && rect.top > 40;
+          const reasonableMenuRow = rect.width <= 360 && rect.height <= 90;
+          return nearSidebarMenu && reasonableMenuRow;
+        })
+        .sort((a, b) => a.rect.left - b.rect.left || a.rect.top - b.rect.top);
+
+      const match = candidates[0];
+      if (!match) return false;
+      match.target.click();
+      return true;
+    })
+    .catch(() => false);
+
+  if (clickedViaDom) return true;
+
+  const postOption = page
+    .getByRole("link", { name: "Post", exact: true })
+    .or(page.getByRole("button", { name: "Post", exact: true }))
+    .or(page.getByText("Post", { exact: true }))
+    .first();
+
+  await postOption.waitFor({ state: "visible", timeout: 6000 });
+  await postOption.click().catch(async () => {
+    await postOption.click({ force: true });
+  });
+  return true;
+}
+
+function cssString(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function instagramComposerActionSelectors(label) {
+  const safeLabel = cssString(label);
+  return [
+    `div[role="dialog"] button[aria-label="${safeLabel}"]`,
+    `div[role="dialog"] div[role="button"][aria-label="${safeLabel}"]`,
+    `div[role="dialog"] [tabindex][aria-label="${safeLabel}"]`,
+    `div[role="dialog"] button:has-text("${safeLabel}")`,
+    `div[role="dialog"] div[role="button"]:has-text("${safeLabel}")`,
+    `div[role="dialog"] span:text-is("${safeLabel}")`,
+    `button[aria-label="${safeLabel}"]`,
+    `div[role="button"][aria-label="${safeLabel}"]`,
+    `button:has-text("${safeLabel}")`,
+    `div[role="button"]:has-text("${safeLabel}")`,
+  ];
+}
+
+async function findVisibleLocator(page, selectors, timeout = 800) {
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    const visible = await locator.isVisible({ timeout }).catch(() => false);
+    if (visible) return locator;
+  }
+  return null;
+}
+
+async function findInstagramComposerActionViaDom(page, label, click = false) {
+  if (!page || typeof page.evaluate !== "function") return false;
+
+  return page
+    .evaluate(
+      ({ actionLabel, shouldClick }) => {
+        const normalize = (value) =>
+          String(value || "")
+            .replace(/\s+/g, " ")
+            .trim();
+
+        const isVisible = (el) => {
+          if (!el) return false;
+          const style = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            Number(style.opacity || "1") !== 0 &&
+            rect.width > 0 &&
+            rect.height > 0
+          );
+        };
+
+        const clickableAncestor = (el) => {
+          let node = el;
+          while (node && node !== document.body) {
+            if (
+              node.matches?.(
+                'button, a, [role="button"], [role="link"], [tabindex]',
+              )
+            ) {
+              return node;
+            }
+            node = node.parentElement;
+          }
+          return null;
+        };
+
+        const visibleDialogs = [...document.querySelectorAll('[role="dialog"]')]
+          .filter(isVisible)
+          .sort((a, b) => {
+            const aRect = a.getBoundingClientRect();
+            const bRect = b.getBoundingClientRect();
+            return bRect.width * bRect.height - aRect.width * aRect.height;
+          });
+        const root = visibleDialogs[0] || document.body;
+        const rootRect = root.getBoundingClientRect();
+        const topBarLimit = rootRect.top + Math.min(100, rootRect.height);
+
+        const candidates = [
+          ...root.querySelectorAll(
+            'button, a, [role="button"], [role="link"], [tabindex], span, div',
+          ),
+        ]
+          .filter(isVisible)
+          .map((el) => {
+            const target = clickableAncestor(el) || el;
+            const rect = target.getBoundingClientRect();
+            const text = normalize(el.innerText || el.textContent);
+            const aria = normalize(el.getAttribute("aria-label"));
+            return { el, target, rect, text, aria };
+          })
+          .filter(({ target, text, aria, rect }) => {
+            if (!isVisible(target)) return false;
+            if (target.getAttribute("aria-disabled") === "true") return false;
+            if (target.disabled) return false;
+            if (text !== actionLabel && aria !== actionLabel) return false;
+            if (actionLabel === "Next" || actionLabel === "Share") {
+              return rect.top <= topBarLimit;
+            }
+            return true;
+          })
+          .sort((a, b) => b.rect.left - a.rect.left || a.rect.top - b.rect.top);
+
+        const match = candidates[0];
+        if (!match) return false;
+        if (shouldClick) {
+          match.target.click();
+        }
+        return true;
+      },
+      { actionLabel: label, shouldClick: click },
+    )
+    .catch(() => false);
+}
+
+async function waitForInstagramComposerAction(page, label, timeout = 30000) {
+  const selectors = instagramComposerActionSelectors(label);
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const locator = await findVisibleLocator(page, selectors, 500);
+    if (locator) return locator;
+
+    const foundViaDom = await findInstagramComposerActionViaDom(
+      page,
+      label,
+      false,
+    );
+    if (foundViaDom) return null;
+
+    await humanDelay(250, 500);
+  }
+
+  throw new Error(`Could not find Instagram composer "${label}" control.`);
+}
+
+async function clickInstagramComposerAction(page, label, timeout = 30000) {
+  const selectors = instagramComposerActionSelectors(label);
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const locator = await findVisibleLocator(page, selectors, 500);
+    if (locator) {
+      await locator.click().catch(async () => {
+        await locator.click({ force: true });
+      });
+      return true;
+    }
+
+    const clickedViaDom = await findInstagramComposerActionViaDom(
+      page,
+      label,
+      true,
+    );
+    if (clickedViaDom) return true;
+
+    await humanDelay(250, 500);
+  }
+
+  throw new Error(`Could not click Instagram composer "${label}" control.`);
+}
+
+async function findInstagramCaptionInput(page, timeout = 20000) {
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const locator = await findVisibleLocator(page, IG_SELECTORS.captionBox, 500);
+    if (locator) return locator;
+    await humanDelay(250, 500);
+  }
+
+  return null;
+}
+
 function getInstagramDebugDir() {
   const dir = path.resolve(
     process.env.AUTOMATION_ARTIFACTS_DIR || "./artifacts/automation",
@@ -142,7 +408,13 @@ function getInstagramDebugPath(label, extension) {
 }
 
 async function captureInstagramDomSnapshot(page, label) {
-  if (!page || page.isClosed()) return null;
+  if (
+    !page ||
+    (typeof page.isClosed === "function" && page.isClosed())
+  ) {
+    return null;
+  }
+  if (typeof page.content !== "function") return null;
 
   const htmlPath = getInstagramDebugPath(label, "html");
   const metaPath = getInstagramDebugPath(label, "json");
@@ -302,6 +574,15 @@ async function findFreshVisiblePostTooltip(
 
 async function openInstagramCreatePostModal(page, emitter, emitFn) {
   await bringPageToFront(page);
+
+  const existingFileInput = await getAttachedPostFileInput(page).catch(
+    () => null,
+  );
+  if (existingFileInput) {
+    emitFn(emitter, "info", "Instagram create post modal already open.");
+    return { activePage: page, fileInputLocator: existingFileInput };
+  }
+
   await traceInstagramAction(
     page,
     "scroll-to-top-before-create",
@@ -384,6 +665,18 @@ async function openInstagramCreatePostModal(page, emitter, emitFn) {
 
   await captureInstagramDomSnapshot(page, "after-create-click");
 
+  const directFileInput = await getAttachedPostFileInput(page, 1500).catch(
+    () => null,
+  );
+  if (directFileInput) {
+    emitFn(
+      emitter,
+      "info",
+      "Create post modal opened directly after clicking Create.",
+    );
+    return { activePage: page, fileInputLocator: directFileInput };
+  }
+
   // DEBUG: Dump sidebar nav items to see what Instagram rendered after clicking Create
   const sidebarState = await page
     .evaluate(() => {
@@ -420,33 +713,11 @@ async function openInstagramCreatePostModal(page, emitter, emitFn) {
     JSON.stringify(sidebarState, null, 2),
   );
 
-  const postOptionSelectors = [
-    'a:has(span:text-is("Post"))',
-    'div[role="button"]:has(span:text-is("Post"))',
-    'div:has(span:text-is("Post"))',
-    'span:text-is("Post")',
-    'a:text-is("Post")',
-    ':text-is("Post")',
-  ];
-
-  let postBtn = null;
   try {
-    postBtn = page
-      .getByRole("link", { name: "Post", exact: true })
-      .or(page.getByRole("button", { name: "Post", exact: true }))
-      .first();
-    await postBtn.waitFor({ state: "visible", timeout: 6000 });
-  } catch {
-    postBtn = await firstVisible(page, postOptionSelectors, 6000);
-  }
-
-  if (postBtn) {
     emitFn(emitter, "info", "Found Post option in sidebar, clicking...");
-    await postBtn.click().catch(async () => {
-      await postBtn.click({ force: true }).catch(() => {});
-    });
+    await clickInstagramPostMenuOption(page);
     await humanDelay(1500, 2500);
-  } else {
+  } catch (_) {
     emitFn(
       emitter,
       "info",
@@ -1687,27 +1958,22 @@ async function postImage(
   };
 
   try {
-    const blockState = isInstagramBlocked();
-    if (blockState.blocked) {
-      safeEmit(
-        emitter,
-        "error",
-        `Instagram action aborted: account is blocked until ${blockState.resumesAt}`,
-      );
-      return {
-        success: false,
-        error: "account_blocked",
-        resumesAt: blockState.resumesAt,
-      };
-    }
-
-    // 1. validateForFeed(imagePath)
-    const { validateForFeed } = require("../utils/imageValidator");
-    const validation = await validateForFeed(imagePath);
+    // 1. Prepare and validate feed media. Tall/wide images are fitted onto a
+    // valid Instagram feed canvas instead of failing the whole scheduler run.
+    const { prepareForFeed } = require("../utils/imageValidator");
+    const validation = await prepareForFeed(imagePath);
     if (!validation.valid) {
       const errStr = validation.errors.join(", ");
       safeEmit(emitter, "error", `Validation failed: ${errStr}`);
       return { success: false, error: `Validation failed: ${errStr}` };
+    }
+    const uploadPath = validation.filePath || imagePath;
+    if (validation.changed) {
+      safeEmit(
+        emitter,
+        "info",
+        `Prepared Instagram feed media: ${path.basename(uploadPath)}`,
+      );
     }
 
     safeEmit(emitter, "info", "Starting Instagram image post");
@@ -1725,7 +1991,7 @@ async function postImage(
         await bringPageToFront(page);
       },
       emitter,
-      { imagePath },
+      { imagePath: uploadPath, originalImagePath: imagePath },
     );
 
     // Dismiss any blocking overlays (cookie consent, login prompts, upgrade prompts)
@@ -1774,7 +2040,7 @@ async function postImage(
         await humanDelay(400, 800);
       },
       emitter,
-      { imagePath },
+      { imagePath: uploadPath, originalImagePath: imagePath },
     );
 
     // Set files — this is the most reliable method for Instagram
@@ -1782,20 +2048,20 @@ async function postImage(
       activePage,
       "set-upload-files",
       async () => {
-        await fileInputLocator.setInputFiles(imagePath);
+        await fileInputLocator.setInputFiles(uploadPath);
         await humanDelay(2000, 4000);
       },
       emitter,
-      { imagePath },
+      { imagePath: uploadPath, originalImagePath: imagePath },
     );
 
-    // 8. Wait for image preview (Next button visible)
-    const cropNextBtn = activePage.locator('button:has-text("Next")');
+    // 8. Wait for image preview (Next control visible). Instagram sometimes
+    // renders this as an icon button with aria-label only.
     await traceInstagramAction(
       activePage,
       "wait-for-crop-next",
       async () => {
-        await cropNextBtn.waitFor({ state: "visible", timeout: 30000 });
+        await waitForInstagramComposerAction(activePage, "Next", 30000);
         await humanDelay(1000, 2000);
       },
       emitter,
@@ -1806,30 +2072,25 @@ async function postImage(
       activePage,
       "click-crop-next",
       async () => {
-        await cropNextBtn.click();
+        await clickInstagramComposerAction(activePage, "Next", 30000);
         await humanDelay(2000, 3000);
       },
       emitter,
     );
 
     // 10. Click "Next" again (filter step)
-    const filterNextBtn = activePage.locator('button:has-text("Next")');
     await traceInstagramAction(
       activePage,
       "click-filter-next",
       async () => {
-        await filterNextBtn.waitFor({ state: "visible", timeout: 10000 });
-        await filterNextBtn.click();
+        await clickInstagramComposerAction(activePage, "Next", 15000);
         await humanDelay(2000, 3000);
       },
       emitter,
     );
 
     // 11. Focus captionBox and type caption naturally
-    const captionInput = await firstVisible(
-      activePage,
-      IG_SELECTORS.captionBox,
-    );
+    const captionInput = await findInstagramCaptionInput(activePage, 20000);
     if (!captionInput) {
       throw new Error("Could not locate caption text area.");
     }
@@ -1879,15 +2140,11 @@ async function postImage(
     await humanDelay(1000, 2000);
 
     // 13. Click shareButton
-    const shareBtn = await firstVisible(activePage, IG_SELECTORS.shareButton);
-    if (!shareBtn) {
-      throw new Error("Could not find Instagram Share button.");
-    }
     await traceInstagramAction(
       activePage,
       "click-share-button",
       async () => {
-        await shareBtn.click();
+        await clickInstagramComposerAction(activePage, "Share", 20000);
         await humanDelay(3000, 5000);
       },
       emitter,
@@ -1958,20 +2215,6 @@ async function postStory(page, { imagePath } = {}, emitter) {
   };
 
   try {
-    const blockState = isInstagramBlocked();
-    if (blockState.blocked) {
-      safeEmit(
-        emitter,
-        "error",
-        `Instagram action aborted: account is blocked until ${blockState.resumesAt}`,
-      );
-      return {
-        success: false,
-        error: "account_blocked",
-        resumesAt: blockState.resumesAt,
-      };
-    }
-
     // 1. validateForStory(imagePath)
     const { validateForStory } = require("../utils/imageValidator");
     const validation = await validateForStory(imagePath);
@@ -2097,20 +2340,6 @@ async function postCarousel(
   };
 
   try {
-    const blockState = isInstagramBlocked();
-    if (blockState.blocked) {
-      safeEmit(
-        emitter,
-        "error",
-        `Instagram action aborted: account is blocked until ${blockState.resumesAt}`,
-      );
-      return {
-        success: false,
-        error: "account_blocked",
-        resumesAt: blockState.resumesAt,
-      };
-    }
-
     // Parse image paths
     let paths = [];
     if (Array.isArray(imagePaths)) {
@@ -2135,7 +2364,7 @@ async function postCarousel(
     // Resolve absolute paths & validate
     const fs = require("fs");
     const path = require("path");
-    const { validateForFeed } = require("../utils/imageValidator");
+    const { prepareForFeed } = require("../utils/imageValidator");
 
     // We can resolve relative paths if they were not resolved by pre-flight
     const UPLOADS_DIR = path.resolve(
@@ -2159,7 +2388,7 @@ async function postCarousel(
     const resolvedPaths = paths.map(resolvePath);
     const validPaths = [];
     for (const imgPath of resolvedPaths) {
-      const validation = await validateForFeed(imgPath);
+      const validation = await prepareForFeed(imgPath);
       if (!validation.valid) {
         const errStr = validation.errors.join(", ");
         safeEmit(
@@ -2172,7 +2401,14 @@ async function postCarousel(
           error: `Validation failed for ${path.basename(imgPath)}: ${errStr}`,
         };
       }
-      validPaths.push(imgPath);
+      if (validation.changed) {
+        safeEmit(
+          emitter,
+          "info",
+          `Prepared carousel media: ${path.basename(validation.filePath)}`,
+        );
+      }
+      validPaths.push(validation.filePath || imgPath);
     }
 
     safeEmit(
@@ -2207,26 +2443,21 @@ async function postCarousel(
     await fileInputLocator.setInputFiles(validPaths);
     await humanDelay(2000, 4000);
 
-    // 8. Wait for image preview (Next button visible)
-    const cropNextBtn = activePage.locator('button:has-text("Next")');
-    await cropNextBtn.waitFor({ state: "visible", timeout: 30000 });
+    // 8. Wait for image preview (Next control visible). Instagram sometimes
+    // renders this as an icon button with aria-label only.
+    await waitForInstagramComposerAction(activePage, "Next", 30000);
     await humanDelay(1000, 2000);
 
     // 9. Click "Next" (crop step)
-    await cropNextBtn.click();
+    await clickInstagramComposerAction(activePage, "Next", 30000);
     await humanDelay(2000, 3000);
 
     // 10. Click "Next" again (filter step)
-    const filterNextBtn = activePage.locator('button:has-text("Next")');
-    await filterNextBtn.waitFor({ state: "visible", timeout: 10000 });
-    await filterNextBtn.click();
+    await clickInstagramComposerAction(activePage, "Next", 15000);
     await humanDelay(2000, 3000);
 
     // 11. Focus captionBox and type caption naturally
-    const captionInput = await firstVisible(
-      activePage,
-      IG_SELECTORS.captionBox,
-    );
+    const captionInput = await findInstagramCaptionInput(activePage, 20000);
     if (!captionInput) {
       throw new Error("Could not locate caption text area.");
     }
@@ -2268,11 +2499,7 @@ async function postCarousel(
     await humanDelay(1000, 2000);
 
     // 13. Click shareButton
-    const shareBtn = await firstVisible(activePage, IG_SELECTORS.shareButton);
-    if (!shareBtn) {
-      throw new Error("Could not find Instagram Share button.");
-    }
-    await shareBtn.click();
+    await clickInstagramComposerAction(activePage, "Share", 20000);
     await humanDelay(3000, 5000);
 
     // 14. Wait for success

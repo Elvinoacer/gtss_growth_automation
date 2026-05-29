@@ -1122,6 +1122,7 @@ async function publishPost(postId, emit, browserOptions = {}) {
   const platforms = JSON.parse(post.platforms);
   const succeeded = [];
   const failed = [];
+  const failureMessages = [];
 
   for (const platform of platforms) {
     emit({ type: "info", platform, message: `Publishing to ${platform}...` });
@@ -1141,8 +1142,10 @@ async function publishPost(postId, emit, browserOptions = {}) {
     try {
       if (platform === "instagram") {
         // Instagram needs the specialized launcher so it can attach to the
-        // running Chrome session or restore cookies before posting.
-        browserState = await createInstagramBrowser();
+        // running Chrome session or restore cookies before posting. Posting
+        // must go straight to the compose flow; organic warmup belongs to the
+        // dedicated warmup job and can otherwise trap scheduled posts scrolling.
+        browserState = await createInstagramBrowser({ skipDailyWarmup: true });
       } else {
         browserState = await createBrowser(platform, launchOptions);
       }
@@ -1183,6 +1186,14 @@ async function publishPost(postId, emit, browserOptions = {}) {
                 emit,
               );
               success = res.success;
+              if (!success && res && res.error) {
+                failureMessages.push(`instagram: ${res.error}`);
+                emit({
+                  type: "error",
+                  platform,
+                  message: `Instagram story failed: ${res.error}`,
+                });
+              }
             } else if (post.ig_post_type === "carousel") {
               const res = await instagram.postCarousel(
                 page,
@@ -1194,6 +1205,14 @@ async function publishPost(postId, emit, browserOptions = {}) {
                 emit,
               );
               success = res.success;
+              if (!success && res && res.error) {
+                failureMessages.push(`instagram: ${res.error}`);
+                emit({
+                  type: "error",
+                  platform,
+                  message: `Instagram carousel failed: ${res.error}`,
+                });
+              }
             } else {
               const res = await instagram.postImage(
                 page,
@@ -1202,6 +1221,7 @@ async function publishPost(postId, emit, browserOptions = {}) {
               );
               success = res.success;
               if (!success && res && res.error) {
+                failureMessages.push(`instagram: ${res.error}`);
                 emit({
                   type: "error",
                   platform,
@@ -1239,6 +1259,7 @@ async function publishPost(postId, emit, browserOptions = {}) {
       }
     } catch (err) {
       logger.error(`Error publishing to ${platform}`, { error: err.message });
+      failureMessages.push(`${platform}: ${err.message}`);
       emit({
         type: "error",
         platform,
@@ -1258,10 +1279,22 @@ async function publishPost(postId, emit, browserOptions = {}) {
   if (!skipPostStatusUpdate) {
     if (succeeded.length > 0) {
       db.prepare(
-        `UPDATE posts SET status = 'published', published_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        `UPDATE posts
+         SET status = 'published',
+             published_at = CURRENT_TIMESTAMP,
+             last_error = NULL
+         WHERE id = ?`,
       ).run(postId);
     } else {
-      db.prepare(`UPDATE posts SET status = 'failed' WHERE id = ?`).run(postId);
+      const lastError =
+        failureMessages.length > 0
+          ? failureMessages.join("; ")
+          : failed.length > 0
+            ? `Failed platforms: ${failed.join(", ")}`
+            : "Publish failed";
+      db.prepare(
+        `UPDATE posts SET status = 'failed', last_error = ? WHERE id = ?`,
+      ).run(lastError, postId);
     }
   }
 

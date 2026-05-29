@@ -86,7 +86,7 @@ async function run(emitter) {
 
   try {
     // 3. Launch headed browser
-    browserState = await createInstagramBrowser();
+    browserState = await createInstagramBrowser({ skipDailyWarmup: true });
     const page = browserState.page;
 
     // 4. Run organic session warmup ONCE per session
