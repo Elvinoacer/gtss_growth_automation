@@ -60,9 +60,20 @@ const IG_SELECTORS = {
     'svg[aria-label="New post"]',
     'svg[aria-label="Create"]',
     'span:has-text("Create")',
-    'a[href*="/create"] svg',
+    'a[href*="/create"] span',
     'a[href="/create/"] span',
     'div[role="button"] svg[aria-label="New post"]',
+    'a[role="link"]:has(svg[aria-label="Create"])',
+    'div[role="button"]:has(svg[aria-label="Create"])',
+  ],
+  postCreateTooltipPost: [
+    '[role="menu"] [role="menuitem"]:has-text("Post")',
+    '[role="menu"] div[role="button"]:has-text("Post")',
+    'div[role="button"]:has(span:text-is("Post"))',
+    'a[role="link"]:has(span:text-is("Post"))',
+    '[role="menuitem"]:has-text("Post")',
+    'div[tabindex="0"]:has(span:text-is("Post"))',
+    'span:text-is("Post")',
   ],
   fileInput: ['input[type="file"]'],
   captionBox: [
@@ -87,6 +98,94 @@ const IG_SELECTORS = {
     'button:has(svg[aria-label="Unlike"])',
   ],
 };
+
+async function bringPageToFront(page) {
+  if (page && typeof page.bringToFront === "function") {
+    await page.bringToFront().catch(() => {});
+  }
+}
+
+function waitForPopup(page, timeout = 3000) {
+  if (!page || typeof page.waitForEvent !== "function") {
+    return Promise.resolve(null);
+  }
+  return page.waitForEvent("popup", { timeout }).catch(() => null);
+}
+
+async function waitForPostFileInput(page, timeout = 15000) {
+  const fileInputLocator = page.locator('input[type="file"]');
+  await fileInputLocator.waitFor({ state: "attached", timeout });
+  return fileInputLocator;
+}
+
+async function openInstagramCreatePostModal(page, emitter, emitFn) {
+  await bringPageToFront(page);
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  await humanDelay(500, 1000);
+
+  let createBtn = await firstVisible(page, IG_SELECTORS.postCreate, 8000);
+  if (!createBtn) {
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await humanDelay(1000, 1500);
+    createBtn = await firstVisible(page, IG_SELECTORS.postCreate, 6000);
+  }
+  if (!createBtn) {
+    throw new Error("Could not find Instagram Create button after retry.");
+  }
+
+  const popupPromise = waitForPopup(page);
+
+  await humanMouseMove(page, createBtn).catch(() => {});
+  await createBtn.click();
+  await humanDelay(800, 1500);
+
+  let activePage = page;
+  let fileInputLocator = await waitForPostFileInput(activePage, 2500).catch(
+    () => null,
+  );
+
+  if (!fileInputLocator) {
+    const tooltipPostBtn = await firstVisible(
+      page,
+      IG_SELECTORS.postCreateTooltipPost,
+      6000,
+    );
+    if (tooltipPostBtn) {
+      emitFn(emitter, "info", "Create menu detected; selecting Post");
+      await humanMouseMove(page, tooltipPostBtn).catch(() => {});
+      await tooltipPostBtn.click();
+      await humanDelay(800, 1500);
+    } else {
+      emitFn(
+        emitter,
+        "info",
+        "Create menu not detected; waiting for upload modal directly",
+      );
+    }
+  }
+
+  const popupPage = await popupPromise;
+  if (popupPage) {
+    activePage = popupPage;
+    await bringPageToFront(activePage);
+    await activePage.waitForLoadState("domcontentloaded").catch(() => {});
+    await humanDelay(1000, 1500);
+  }
+
+  fileInputLocator = await waitForPostFileInput(activePage, 30000).catch(
+    async () => {
+      if (activePage !== page) throw new Error("Upload file input not found.");
+      const latePopup = await waitForPopup(page, 1500);
+      if (!latePopup) throw new Error("Upload file input not found.");
+      activePage = latePopup;
+      await bringPageToFront(activePage);
+      await activePage.waitForLoadState("domcontentloaded").catch(() => {});
+      return waitForPostFileInput(activePage, 20000);
+    },
+  );
+
+  return { activePage, fileInputLocator };
+}
 
 const IG_DELAYS = {
   betweenProfileVisits: { min: 12000, max: 25000 },
@@ -1332,7 +1431,7 @@ async function postImage(
       timeout: 30000,
     });
     await humanDelay(2000, 4000);
-    await page.bringToFront().catch(() => {});
+    await bringPageToFront(page);
 
     // Dismiss any blocking overlays (cookie consent, login prompts, upgrade prompts)
     const overlayDismiss = [
@@ -1360,39 +1459,9 @@ async function postImage(
       }
     }
 
-    // Scroll to top to ensure the full left navigation sidebar is visible
-    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
-    await humanDelay(500, 1000);
-
-    // 4. Click Create ("+") button
-    let createBtn = await firstVisible(page, IG_SELECTORS.postCreate, 8000);
-    if (!createBtn) {
-      // Retry: scroll to sidebar to ensure nav items are visible
-      await page.evaluate(() => window.scrollTo(0, 0));
-      await humanDelay(1000, 1500);
-      createBtn = await firstVisible(page, IG_SELECTORS.postCreate, 6000);
-    }
-    if (!createBtn) {
-      throw new Error("Could not find Instagram Create button after retry.");
-    }
-    const popupPromise = page
-      .waitForEvent("popup", { timeout: 3000 })
-      .catch(() => null);
-    await createBtn.click();
-    await humanDelay(1000, 2000);
-
-    let activePage = page;
-    const popupPage = await popupPromise;
-    if (popupPage) {
-      activePage = popupPage;
-      await activePage.bringToFront().catch(() => {});
-      await activePage.waitForLoadState("domcontentloaded").catch(() => {});
-      await humanDelay(1000, 1500);
-    }
-
-    // 5. Wait for upload modal
-    const fileInputLocator = activePage.locator('input[type="file"]');
-    await fileInputLocator.waitFor({ state: "attached", timeout: 30000 });
+    // 4-5. Click Create -> Post and wait until the upload input exists.
+    const { activePage, fileInputLocator } =
+      await openInstagramCreatePostModal(page, emitter, safeEmit);
 
     // 6. Make file input visible if hidden
     await activePage.evaluate(() => {
@@ -1479,7 +1548,7 @@ async function postImage(
     // 14. Wait for success
     let postUrl = null;
     try {
-      await page.waitForSelector(
+      await activePage.waitForSelector(
         '[aria-label*="Post shared"], :has-text("Post shared"), :has-text("Your post has been shared")',
         { timeout: 30000 },
       );
@@ -1492,7 +1561,7 @@ async function postImage(
       );
     }
 
-    const currentUrl = page.url();
+    const currentUrl = activePage.url();
     if (currentUrl.includes("/p/")) {
       postUrl = currentUrl;
     } else {
@@ -1771,24 +1840,12 @@ async function postCarousel(
     });
     await humanDelay(2000, 4000);
 
-    // Scroll to top to ensure the full left navigation sidebar is visible
-    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
-    await humanDelay(500, 1000);
-
-    // 4. Click Create ("+") button
-    const createBtn = await firstVisible(page, IG_SELECTORS.postCreate);
-    if (!createBtn) {
-      throw new Error("Could not find Instagram Create button.");
-    }
-    await createBtn.click();
-    await humanDelay(1000, 2000);
-
-    // 5. Wait for upload modal
-    const fileInputLocator = page.locator('input[type="file"]');
-    await fileInputLocator.waitFor({ state: "attached", timeout: 15000 });
+    // 4-5. Click Create -> Post and wait until the upload input exists.
+    const { activePage, fileInputLocator } =
+      await openInstagramCreatePostModal(page, emitter, safeEmit);
 
     // 6. Make file input visible if hidden and force multiple attribute
-    await page.evaluate(() => {
+    await activePage.evaluate(() => {
       const i = document.querySelector('input[type="file"]');
       if (i) {
         i.style.cssText =
@@ -1803,7 +1860,7 @@ async function postCarousel(
     await humanDelay(2000, 4000);
 
     // 8. Wait for image preview (Next button visible)
-    const cropNextBtn = page.locator('button:has-text("Next")');
+    const cropNextBtn = activePage.locator('button:has-text("Next")');
     await cropNextBtn.waitFor({ state: "visible", timeout: 30000 });
     await humanDelay(1000, 2000);
 
@@ -1812,38 +1869,38 @@ async function postCarousel(
     await humanDelay(2000, 3000);
 
     // 10. Click "Next" again (filter step)
-    const filterNextBtn = page.locator('button:has-text("Next")');
+    const filterNextBtn = activePage.locator('button:has-text("Next")');
     await filterNextBtn.waitFor({ state: "visible", timeout: 10000 });
     await filterNextBtn.click();
     await humanDelay(2000, 3000);
 
     // 11. Focus captionBox and type caption naturally
-    const captionInput = await firstVisible(page, IG_SELECTORS.captionBox);
+    const captionInput = await firstVisible(activePage, IG_SELECTORS.captionBox);
     if (!captionInput) {
       throw new Error("Could not locate caption text area.");
     }
     await captionInput.click();
     await humanDelay(500, 1000);
-    await humanTypeText(page, captionInput, caption);
+    await humanTypeText(activePage, captionInput, caption);
     await humanDelay(1000, 2000);
 
     // 12. Handle location Tag
     if (locationTag) {
       safeEmit(emitter, "info", `Adding location tag: ${locationTag}`);
-      const addLocationBtn = page.locator(
+      const addLocationBtn = activePage.locator(
         'span:has-text("Add location"), input[placeholder*="Add location"]',
       );
       if ((await addLocationBtn.count()) > 0) {
         await addLocationBtn.first().click();
         await humanDelay(1000, 1500);
 
-        const locationInput = page.locator(
+        const locationInput = activePage.locator(
           'input[placeholder*="Add location"], input[name="query"]',
         );
-        await humanTypeText(page, locationInput, locationTag);
+        await humanTypeText(activePage, locationInput, locationTag);
         await humanDelay(2000, 3000);
 
-        const firstResult = page
+        const firstResult = activePage
           .locator(
             'div[role="button"]:has-text("' +
               locationTag.substring(0, 3) +
@@ -1860,7 +1917,7 @@ async function postCarousel(
     await humanDelay(1000, 2000);
 
     // 13. Click shareButton
-    const shareBtn = await firstVisible(page, IG_SELECTORS.shareButton);
+    const shareBtn = await firstVisible(activePage, IG_SELECTORS.shareButton);
     if (!shareBtn) {
       throw new Error("Could not find Instagram Share button.");
     }
@@ -1870,7 +1927,7 @@ async function postCarousel(
     // 14. Wait for success
     let postUrl = null;
     try {
-      await page.waitForSelector(
+      await activePage.waitForSelector(
         '[aria-label*="Post shared"], :has-text("Post shared"), :has-text("Your post has been shared")',
         { timeout: 30000 },
       );
@@ -1883,14 +1940,14 @@ async function postCarousel(
       );
     }
 
-    const currentUrl = page.url();
+    const currentUrl = activePage.url();
     if (currentUrl.includes("/p/")) {
       postUrl = currentUrl;
     } else {
       // Dynamic profile page lookup to get actual postUrl
       try {
         const profileLink = await firstVisible(
-          page,
+          activePage,
           [
             'a:has(svg[aria-label="Profile"])',
             'a:has-text("Profile")',
@@ -1908,14 +1965,16 @@ async function postCarousel(
                 "info",
                 `Navigating to profile to verify: ${username}`,
               );
-              await page.goto(`https://www.instagram.com/${username}/`, {
+              await activePage.goto(`https://www.instagram.com/${username}/`, {
                 waitUntil: "domcontentloaded",
                 timeout: 15000,
               });
-              await page.waitForSelector('article a[href*="/p/"]', {
+              await activePage.waitForSelector('article a[href*="/p/"]', {
                 timeout: 10000,
               });
-              const firstPost = page.locator('article a[href*="/p/"]').first();
+              const firstPost = activePage
+                .locator('article a[href*="/p/"]')
+                .first();
               const firstPostHref = await firstPost.getAttribute("href");
               if (firstPostHref) {
                 postUrl = firstPostHref.startsWith("http")

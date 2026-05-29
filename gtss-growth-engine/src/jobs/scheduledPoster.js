@@ -247,7 +247,11 @@ async function postToInstagram(post, browser, emitter) {
       case "carousel":
         result = await instagram.postCarousel(
           page,
-          { imagePaths: mediaPaths },
+          {
+            imagePaths: mediaPaths,
+            caption: loadedPost.body,
+            locationTag,
+          },
           emitter,
         );
         break;
