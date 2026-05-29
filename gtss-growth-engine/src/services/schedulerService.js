@@ -1201,6 +1201,13 @@ async function publishPost(postId, emit, browserOptions = {}) {
                 emit,
               );
               success = res.success;
+              if (!success && res && res.error) {
+                emit({
+                  type: "error",
+                  platform,
+                  message: `Instagram post failed: ${res.error}`,
+                });
+              }
             }
           }
           break;

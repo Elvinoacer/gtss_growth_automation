@@ -119,25 +119,49 @@ async function waitForPostFileInput(page, timeout = 15000) {
 }
 
 async function openInstagramCreatePostModal(page, emitter, emitFn) {
+  const directCreateUrl = "https://www.instagram.com/create/";
   await bringPageToFront(page);
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
-  await humanDelay(500, 1000);
+  await humanDelay(800, 1500);
 
-  let createBtn = await firstVisible(page, IG_SELECTORS.postCreate, 8000);
+  const createSelectors = [
+    ...IG_SELECTORS.postCreate,
+    'svg[aria-label="Create"]',
+    '[aria-label="Create"]',
+    'button[aria-label*="Create"]',
+    'div[role="button"]:has(svg[aria-label*="Create"])',
+    'a[href="/create/"]',
+    'a[href*="/create"]',
+    'span:has-text("Create")',
+  ];
+
+  let createBtn = await firstVisible(page, createSelectors, 10000);
+  let usedDirectNavigation = false;
   if (!createBtn) {
-    await page.evaluate(() => window.scrollTo(0, 0));
-    await humanDelay(1000, 1500);
-    createBtn = await firstVisible(page, IG_SELECTORS.postCreate, 6000);
-  }
-  if (!createBtn) {
-    throw new Error("Could not find Instagram Create button after retry.");
+    usedDirectNavigation = true;
+    emitFn(
+      emitter,
+      "warn",
+      "Create button not visible; trying direct create page",
+    );
+    await page
+      .goto(directCreateUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 15000,
+      })
+      .catch(() => {});
+    await humanDelay(2000, 3500);
   }
 
   const popupPromise = waitForPopup(page);
 
-  await humanMouseMove(page, createBtn).catch(() => {});
-  await createBtn.click();
-  await humanDelay(800, 1500);
+  if (createBtn) {
+    await humanMouseMove(page, createBtn).catch(() => {});
+    await createBtn.click().catch(async () => {
+      await createBtn.click({ force: true }).catch(() => {});
+    });
+    await humanDelay(1000, 1800);
+  }
 
   let activePage = page;
   let fileInputLocator = await waitForPostFileInput(activePage, 2500).catch(
@@ -154,7 +178,7 @@ async function openInstagramCreatePostModal(page, emitter, emitFn) {
       emitFn(emitter, "info", "Create menu detected; selecting Post");
       await humanMouseMove(page, tooltipPostBtn).catch(() => {});
       await tooltipPostBtn.click();
-      await humanDelay(800, 1500);
+      await humanDelay(1000, 1800);
     } else {
       emitFn(
         emitter,
@@ -184,7 +208,69 @@ async function openInstagramCreatePostModal(page, emitter, emitFn) {
     },
   );
 
+  if (!fileInputLocator && !usedDirectNavigation) {
+    emitFn(
+      emitter,
+      "warn",
+      "Create flow did not open cleanly; retrying via direct create page",
+    );
+    await page
+      .goto(directCreateUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 15000,
+      })
+      .catch(() => {});
+    await bringPageToFront(page);
+    await humanDelay(2000, 3500);
+
+    activePage = page;
+    fileInputLocator = await waitForPostFileInput(activePage, 20000).catch(
+      () => null,
+    );
+  }
+
+  if (!fileInputLocator) {
+    throw new Error("Could not open Instagram create post modal.");
+  }
+
   return { activePage, fileInputLocator };
+}
+
+async function openInstagramCreatePostModalWithRetry(
+  page,
+  emitter,
+  emitFn,
+  attempts = 2,
+) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      if (attempt > 1) {
+        emitFn(
+          emitter,
+          "warn",
+          `Retrying Instagram create flow (${attempt}/${attempts})`,
+        );
+        await page
+          .goto("https://www.instagram.com/", {
+            waitUntil: "domcontentloaded",
+            timeout: 30000,
+          })
+          .catch(() => {});
+        await humanDelay(2000, 4000);
+      }
+
+      return await openInstagramCreatePostModal(page, emitter, emitFn);
+    } catch (err) {
+      lastError = err;
+      if (attempt >= attempts) {
+        break;
+      }
+    }
+  }
+
+  throw lastError || new Error("Could not open Instagram create post modal.");
 }
 
 const IG_DELAYS = {
@@ -1461,7 +1547,7 @@ async function postImage(
 
     // 4-5. Click Create -> Post and wait until the upload input exists.
     const { activePage, fileInputLocator } =
-      await openInstagramCreatePostModal(page, emitter, safeEmit);
+      await openInstagramCreatePostModalWithRetry(page, emitter, safeEmit, 2);
 
     // 6. Make file input visible if hidden
     await activePage.evaluate(() => {
@@ -1842,7 +1928,7 @@ async function postCarousel(
 
     // 4-5. Click Create -> Post and wait until the upload input exists.
     const { activePage, fileInputLocator } =
-      await openInstagramCreatePostModal(page, emitter, safeEmit);
+      await openInstagramCreatePostModalWithRetry(page, emitter, safeEmit, 2);
 
     // 6. Make file input visible if hidden and force multiple attribute
     await activePage.evaluate(() => {
@@ -1875,7 +1961,10 @@ async function postCarousel(
     await humanDelay(2000, 3000);
 
     // 11. Focus captionBox and type caption naturally
-    const captionInput = await firstVisible(activePage, IG_SELECTORS.captionBox);
+    const captionInput = await firstVisible(
+      activePage,
+      IG_SELECTORS.captionBox,
+    );
     if (!captionInput) {
       throw new Error("Could not locate caption text area.");
     }
