@@ -1,3 +1,6 @@
+const fs = require("fs");
+const path = require("path");
+
 const {
   humanDelay,
   firstVisible,
@@ -11,6 +14,8 @@ const {
 const { getDb } = require("../db/database");
 const logger = require("../utils/logger");
 const { normalizeInstagramUsername } = require("../utils/instagramUsername");
+
+const INSTAGRAM_DEBUG_RUN_ID = new Date().toISOString().replace(/[:.]/g, "-");
 
 // ── CONSTANTS ───────────────────────────────────────────────────────────────
 
@@ -72,11 +77,12 @@ const IG_SELECTORS = {
     'div[role="button"]:has(svg[aria-label="Create"])',
   ],
   postCreateTooltipPost: [
-    'div[style*="position"]:has(span:text-is("Post"))',
-    'div:not([role]):has(span:text-is("Post"))',
-    'div[tabindex="0"]:has(span:text-is("Post"))',
+    'a:has(span:text-is("Post"))',
     'div[role="button"]:has(span:text-is("Post"))',
     'span:text-is("Post")',
+    'div:has(span:text-is("Post"))',
+    '[role="menuitem"]:has-text("Post")',
+    'div[tabindex="0"]:has(span:text-is("Post"))',
   ],
   fileInput: ['input[type="file"]'],
   captionBox: [
@@ -112,6 +118,128 @@ async function waitForPostFileInput(page, timeout = 15000) {
   const fileInputLocator = page.locator('input[type="file"]');
   await fileInputLocator.waitFor({ state: "attached", timeout });
   return fileInputLocator;
+}
+
+function getInstagramDebugDir() {
+  const dir = path.resolve(
+    process.env.AUTOMATION_ARTIFACTS_DIR || "./artifacts/automation",
+    "instagram-debug",
+  );
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function getInstagramDebugPath(label, extension) {
+  const safeLabel = String(label || "step")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+  return path.join(
+    getInstagramDebugDir(),
+    `${INSTAGRAM_DEBUG_RUN_ID}-${safeLabel}.${extension}`,
+  );
+}
+
+async function captureInstagramDomSnapshot(page, label) {
+  if (!page || page.isClosed()) return null;
+
+  const htmlPath = getInstagramDebugPath(label, "html");
+  const metaPath = getInstagramDebugPath(label, "json");
+  const payload = {
+    label,
+    capturedAt: new Date().toISOString(),
+    url: page.url(),
+    htmlPath,
+  };
+
+  try {
+    fs.writeFileSync(htmlPath, await page.content(), "utf8");
+    fs.writeFileSync(metaPath, JSON.stringify(payload, null, 2) + "\n", "utf8");
+    logger.info("INSTAGRAM_TRACE", "Captured DOM snapshot", payload);
+    return payload;
+  } catch (error) {
+    logger.warn("INSTAGRAM_TRACE", "Failed to capture DOM snapshot", {
+      label,
+      error: error.message,
+    });
+    return null;
+  }
+}
+
+function appendInstagramActionLog(entry) {
+  const logPath = getInstagramDebugPath("actions", "jsonl");
+  fs.appendFileSync(
+    logPath,
+    `${JSON.stringify({
+      runId: INSTAGRAM_DEBUG_RUN_ID,
+      timestamp: new Date().toISOString(),
+      ...entry,
+    })}\n`,
+    "utf8",
+  );
+  return logPath;
+}
+
+async function traceInstagramAction(page, action, fn, emitter, details = {}) {
+  const beforeSnapshot = await captureInstagramDomSnapshot(
+    page,
+    `${action}-before`,
+  );
+  appendInstagramActionLog({
+    action,
+    status: "start",
+    url: page && typeof page.url === "function" ? page.url() : null,
+    details,
+    beforeSnapshot,
+  });
+
+  try {
+    const result = await fn();
+    appendInstagramActionLog({
+      action,
+      status: "success",
+      url: page && typeof page.url === "function" ? page.url() : null,
+      details,
+    });
+    return result;
+  } catch (error) {
+    const errorSnapshot = await captureInstagramDomSnapshot(
+      page,
+      `${action}-error`,
+    );
+    appendInstagramActionLog({
+      action,
+      status: "error",
+      url: page && typeof page.url === "function" ? page.url() : null,
+      details,
+      error: {
+        message: error.message,
+        stack: error.stack,
+      },
+      errorSnapshot,
+    });
+    logger.error("INSTAGRAM_TRACE", `Action failed: ${action}`, {
+      error: error.message,
+      url: page && typeof page.url === "function" ? page.url() : null,
+    });
+    if (typeof emitter === "function") {
+      try {
+        emitter(
+          "error",
+          `Instagram action failed: ${action} - ${error.message}`,
+        );
+      } catch (_) {}
+    } else if (emitter && typeof emitter.emit === "function") {
+      try {
+        emitter.emit(
+          "error",
+          `Instagram action failed: ${action} - ${error.message}`,
+        );
+      } catch (_) {}
+    }
+    throw error;
+  }
 }
 
 async function collectVisiblePostFingerprints(page) {
@@ -173,86 +301,170 @@ async function findFreshVisiblePostTooltip(
 }
 
 async function openInstagramCreatePostModal(page, emitter, emitFn) {
-  const directCreateUrl = "https://www.instagram.com/create/";
   await bringPageToFront(page);
-  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
-  await humanDelay(800, 1500);
+  await traceInstagramAction(
+    page,
+    "scroll-to-top-before-create",
+    async () => {
+      await page.evaluate(() =>
+        window.scrollTo({ top: 0, behavior: "instant" }),
+      );
+      await humanDelay(1000, 1800);
+    },
+    emitter,
+  );
 
   const createSelectors = [
-    ...IG_SELECTORS.postCreate,
-    'div[aria-selected="false"]:has(svg[aria-label="New post"])',
-    'div:has(svg[aria-label="New post"])',
-    'svg[aria-label="Create"]',
-    '[aria-label="Create"]',
-    'button[aria-label*="Create"]',
-    'div[role="button"]:has(svg[aria-label*="Create"])',
     'a[href="/create/"]',
     'a[href*="/create"]',
+    '[aria-label="New post"]',
+    'svg[aria-label="New post"]',
+    'svg[aria-label="Create"]',
+    '[aria-label="Create"]',
+    'div[role="button"]:has(svg[aria-label="New post"])',
+    'div[role="button"]:has(svg[aria-label="Create"])',
+    'div:has(svg[aria-label="New post"])',
     'span:has-text("Create")',
   ];
 
-  let createBtn = await firstVisible(page, createSelectors, 10000);
-  let createClickAt = 0;
-  let blockedTooltipFingerprints = new Set();
+  const createBtn = await firstVisible(page, createSelectors, 10000);
   if (!createBtn) {
     emitFn(
       emitter,
       "warn",
-      "Create button not visible; trying direct create page",
+      "Create button not found, navigating to /create/ directly",
     );
-    await page
-      .goto(directCreateUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 15000,
-      })
-      .catch(() => {});
-    await humanDelay(2000, 3500);
+    await traceInstagramAction(
+      page,
+      "goto-direct-create",
+      async () => {
+        await page.goto("https://www.instagram.com/create/", {
+          waitUntil: "domcontentloaded",
+          timeout: 15000,
+        });
+        await humanDelay(2000, 3000);
+      },
+      emitter,
+    ).catch(() => {});
+
+    const fileInput = await traceInstagramAction(
+      page,
+      "wait-for-file-input-after-direct-create",
+      async () => waitForPostFileInput(page, 25000),
+      emitter,
+    ).catch(() => null);
+    if (!fileInput) {
+      throw new Error(
+        "Could not open Instagram create post modal via direct nav.",
+      );
+    }
+
+    return { activePage: page, fileInputLocator: fileInput };
   }
 
-  if (createBtn) {
-    emitFn(emitter, "info", "Clicking Create button...");
-    createClickAt = Date.now();
-    blockedTooltipFingerprints = await collectVisiblePostFingerprints(page);
-    await humanMouseMove(page, createBtn).catch(() => {});
-    await createBtn.click().catch(async () => {
-      await createBtn.click({ force: true }).catch(() => {});
+  emitFn(emitter, "info", "Found Create button, clicking...");
+  await traceInstagramAction(
+    page,
+    "click-create-button",
+    async () => {
+      await createBtn.click().catch(async () => {
+        await createBtn.click({ force: true }).catch(() => {});
+      });
+    },
+    emitter,
+    { selectors: createSelectors },
+  );
+
+  await traceInstagramAction(
+    page,
+    "wait-after-create-click",
+    async () => humanDelay(800, 1500),
+    emitter,
+  );
+
+  await captureInstagramDomSnapshot(page, "after-create-click");
+
+  // DEBUG: Dump sidebar nav items to see what Instagram rendered after clicking Create
+  const sidebarState = await page
+    .evaluate(() => {
+      // Get all nav links and role=button elements in the left sidebar area
+      const sidebar =
+        document.querySelector("nav") ||
+        document.querySelector('[role="navigation"]');
+      const allClickable = sidebar
+        ? [
+            ...sidebar.querySelectorAll(
+              'a, div[role="button"], div[tabindex="0"]',
+            ),
+          ]
+        : [...document.querySelectorAll('a[href], div[role="button"]')].slice(
+            0,
+            30,
+          );
+
+      return allClickable.map((el) => ({
+        tag: el.tagName,
+        role: el.getAttribute("role"),
+        href: el.getAttribute("href"),
+        ariaLabel: el.getAttribute("aria-label"),
+        text: el.innerText?.trim().substring(0, 50),
+        tabindex: el.getAttribute("tabindex"),
+        visible: el.offsetParent !== null,
+      }));
+    })
+    .catch(() => []);
+
+  emitFn(emitter, "debug", "Sidebar state after Create click:", sidebarState);
+  console.log(
+    "SIDEBAR STATE AFTER CREATE CLICK:",
+    JSON.stringify(sidebarState, null, 2),
+  );
+
+  const postOptionSelectors = [
+    'a:has(span:text-is("Post"))',
+    'div[role="button"]:has(span:text-is("Post"))',
+    'div:has(span:text-is("Post"))',
+    'span:text-is("Post")',
+    'a:text-is("Post")',
+    ':text-is("Post")',
+  ];
+
+  let postBtn = null;
+  try {
+    postBtn = page
+      .getByRole("link", { name: "Post", exact: true })
+      .or(page.getByRole("button", { name: "Post", exact: true }))
+      .first();
+    await postBtn.waitFor({ state: "visible", timeout: 6000 });
+  } catch {
+    postBtn = await firstVisible(page, postOptionSelectors, 6000);
+  }
+
+  if (postBtn) {
+    emitFn(emitter, "info", "Found Post option in sidebar, clicking...");
+    await postBtn.click().catch(async () => {
+      await postBtn.click({ force: true }).catch(() => {});
     });
     await humanDelay(1500, 2500);
-  }
-
-  let activePage = page;
-  emitFn(emitter, "info", "Waiting for Post/AI tooltip...");
-  await humanDelay(1500, 2500);
-
-  const tooltipPostBtn = await findFreshVisiblePostTooltip(
-    page,
-    blockedTooltipFingerprints,
-    createClickAt,
-  );
-  if (tooltipPostBtn) {
-    emitFn(emitter, "info", "Tooltip found, clicking Post...");
-    await tooltipPostBtn.click().catch(async () => {
-      await tooltipPostBtn.click({ force: true }).catch(() => {});
-    });
-    await humanDelay(2000, 3500);
   } else {
     emitFn(
       emitter,
       "info",
-      "Tooltip not detected; waiting for upload modal directly",
+      "Post option not found in sidebar — checking if modal opened directly",
     );
   }
 
-  emitFn(emitter, "info", "Waiting for upload modal file input...");
-  let fileInputLocator;
-  try {
-    fileInputLocator = await waitForPostFileInput(activePage, 30000);
-  } catch (err) {
-    emitFn(emitter, "error", "Upload modal file input not found after 30s");
-    throw err;
+  const fileInputLocator = await waitForPostFileInput(page, 30000).catch(
+    () => null,
+  );
+  if (!fileInputLocator) {
+    throw new Error(
+      "Could not open Instagram create post modal — file input never appeared.",
+    );
   }
 
-  return { activePage, fileInputLocator };
+  emitFn(emitter, "info", "Create post modal is open — file input found.");
+  return { activePage: page, fileInputLocator };
 }
 
 async function openInstagramCreatePostModalWithRetry(
@@ -369,26 +581,24 @@ async function followAccount(page, { username, leadId }, emitter) {
     const followBtn = await firstVisible(page, IG_SELECTORS.followButton, 4000);
     if (!followBtn) {
       safeEmit(emitter, "info", `Already following @${username}`);
-      return { success: true, alreadyFollowing: true };
-    }
+      const unfollowBtn = await firstVisible(
+        page,
+        IG_SELECTORS.unfollowButton,
+        4000,
+      ).catch(() => null);
 
-    const unfollowBtn = await firstVisible(
-      page,
-      IG_SELECTORS.unfollowButton,
-      4000,
-    ).catch(() => null);
-
-    if (unfollowBtn) {
-      const btnText = await unfollowBtn.innerText().catch(() => "");
-      if (btnText.toLowerCase().includes("requested")) {
-        safeEmit(
-          emitter,
-          "info",
-          `Follow request is already pending/requested for @${username}`,
-        );
-        return { success: true, requestPending: true };
+      if (unfollowBtn) {
+        const btnText = await unfollowBtn.innerText().catch(() => "");
+        if (btnText.toLowerCase().includes("requested")) {
+          safeEmit(
+            emitter,
+            "info",
+            `Follow request is already pending/requested for @${username}`,
+          );
+          return { success: true, requestPending: true };
+        }
       }
-      safeEmit(emitter, "info", `Already following @${username}`);
+
       return { success: true, alreadyFollowing: true };
     }
 
@@ -1503,12 +1713,20 @@ async function postImage(
     safeEmit(emitter, "info", "Starting Instagram image post");
 
     // 2. Navigate to instagram.com/
-    await page.goto("https://www.instagram.com/", {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
-    await humanDelay(2000, 4000);
-    await bringPageToFront(page);
+    await traceInstagramAction(
+      page,
+      "navigate-home",
+      async () => {
+        await page.goto("https://www.instagram.com/", {
+          waitUntil: "domcontentloaded",
+          timeout: 30000,
+        });
+        await humanDelay(2000, 4000);
+        await bringPageToFront(page);
+      },
+      emitter,
+      { imagePath },
+    );
 
     // Dismiss any blocking overlays (cookie consent, login prompts, upgrade prompts)
     const overlayDismiss = [
@@ -1535,39 +1753,77 @@ async function postImage(
         break;
       }
     }
+    await captureInstagramDomSnapshot(page, "after-overlay-dismissal");
 
     // 4-5. Click Create -> Post and wait until the upload input exists.
     const { activePage, fileInputLocator } =
       await openInstagramCreatePostModalWithRetry(page, emitter, safeEmit, 2);
 
-    // 6. Make file input visible if hidden
-    await activePage.evaluate(() => {
-      const i = document.querySelector('input[type="file"]');
-      if (i) {
-        i.style.cssText =
-          "display:block!important;opacity:1;position:fixed;top:0;left:0";
-      }
-    });
-    await humanDelay(500, 1000);
+    // Make the file input accessible (Instagram hides it)
+    await traceInstagramAction(
+      activePage,
+      "reveal-file-input",
+      async () => {
+        await activePage.evaluate(() => {
+          const inputs = document.querySelectorAll('input[type="file"]');
+          inputs.forEach((input) => {
+            input.style.cssText =
+              "display:block!important;opacity:1!important;position:fixed!important;top:0!important;left:0!important;z-index:9999!important;";
+          });
+        });
+        await humanDelay(400, 800);
+      },
+      emitter,
+      { imagePath },
+    );
 
-    // 7. setInputFiles(imagePath)
-    await fileInputLocator.setInputFiles(imagePath);
-    await humanDelay(2000, 4000);
+    // Set files — this is the most reliable method for Instagram
+    await traceInstagramAction(
+      activePage,
+      "set-upload-files",
+      async () => {
+        await fileInputLocator.setInputFiles(imagePath);
+        await humanDelay(2000, 4000);
+      },
+      emitter,
+      { imagePath },
+    );
 
     // 8. Wait for image preview (Next button visible)
     const cropNextBtn = activePage.locator('button:has-text("Next")');
-    await cropNextBtn.waitFor({ state: "visible", timeout: 30000 });
-    await humanDelay(1000, 2000);
+    await traceInstagramAction(
+      activePage,
+      "wait-for-crop-next",
+      async () => {
+        await cropNextBtn.waitFor({ state: "visible", timeout: 30000 });
+        await humanDelay(1000, 2000);
+      },
+      emitter,
+    );
 
     // 9. Click "Next" (crop step)
-    await cropNextBtn.click();
-    await humanDelay(2000, 3000);
+    await traceInstagramAction(
+      activePage,
+      "click-crop-next",
+      async () => {
+        await cropNextBtn.click();
+        await humanDelay(2000, 3000);
+      },
+      emitter,
+    );
 
     // 10. Click "Next" again (filter step)
     const filterNextBtn = activePage.locator('button:has-text("Next")');
-    await filterNextBtn.waitFor({ state: "visible", timeout: 10000 });
-    await filterNextBtn.click();
-    await humanDelay(2000, 3000);
+    await traceInstagramAction(
+      activePage,
+      "click-filter-next",
+      async () => {
+        await filterNextBtn.waitFor({ state: "visible", timeout: 10000 });
+        await filterNextBtn.click();
+        await humanDelay(2000, 3000);
+      },
+      emitter,
+    );
 
     // 11. Focus captionBox and type caption naturally
     const captionInput = await firstVisible(
@@ -1577,10 +1833,18 @@ async function postImage(
     if (!captionInput) {
       throw new Error("Could not locate caption text area.");
     }
-    await captionInput.click();
-    await humanDelay(500, 1000);
-    await humanTypeText(activePage, captionInput, caption);
-    await humanDelay(1000, 2000);
+    await traceInstagramAction(
+      activePage,
+      "type-caption",
+      async () => {
+        await captionInput.click();
+        await humanDelay(500, 1000);
+        await humanTypeText(activePage, captionInput, caption);
+        await humanDelay(1000, 2000);
+      },
+      emitter,
+      { captionLength: caption ? caption.length : 0 },
+    );
 
     // 12. Handle location Tag
     if (locationTag) {
@@ -1619,8 +1883,15 @@ async function postImage(
     if (!shareBtn) {
       throw new Error("Could not find Instagram Share button.");
     }
-    await shareBtn.click();
-    await humanDelay(3000, 5000);
+    await traceInstagramAction(
+      activePage,
+      "click-share-button",
+      async () => {
+        await shareBtn.click();
+        await humanDelay(3000, 5000);
+      },
+      emitter,
+    );
 
     // 14. Wait for success
     let postUrl = null;
@@ -2117,6 +2388,319 @@ async function scrapeProfile() {
   return { success: false, error: "unsupported_operation" };
 }
 
+async function diagnoseCreatePostFlow(page) {
+  console.log(
+    "\n\n========== INSTAGRAM CREATE POST DIAGNOSIS ==========" + "\n",
+  );
+
+  await page.goto("https://www.instagram.com/", {
+    waitUntil: "domcontentloaded",
+    timeout: 30000,
+  });
+  await page.waitForTimeout(3000);
+
+  // ── STEP 1: Dump all nav/sidebar elements BEFORE clicking Create ──
+  console.log("\n--- SIDEBAR ELEMENTS BEFORE CREATE CLICK ---");
+  const beforeElements = await page.evaluate(() => {
+    // Grab everything in the left sidebar — Instagram uses a <nav> or <div role="navigation">
+    // or a fixed-left-side container
+    const sidebarCandidates = [
+      document.querySelector("nav"),
+      document.querySelector('[role="navigation"]'),
+      document.querySelector('div[class*="sidebar"]'),
+      document.querySelector('div[class*="nav"]'),
+      // Instagram's left nav is often a direct child of main content wrapper
+      document.querySelector("header"),
+    ].filter(Boolean);
+
+    const sidebar = sidebarCandidates[0] || document.body;
+
+    // Get all potentially clickable elements
+    const els = [
+      ...sidebar.querySelectorAll(
+        'a, button, div[role="button"], [tabindex="0"]',
+      ),
+    ];
+
+    return els
+      .map((el, i) => {
+        const svgLabel =
+          el.querySelector("svg")?.getAttribute("aria-label") ||
+          el.querySelector("svg use")?.getAttribute("xlink:href") ||
+          null;
+        return {
+          index: i,
+          tag: el.tagName,
+          role: el.getAttribute("role"),
+          href: el.getAttribute("href"),
+          ariaLabel:
+            el.getAttribute("aria-label") || el.getAttribute("aria-labelledby"),
+          tabindex: el.getAttribute("tabindex"),
+          text: el.innerText?.replace(/\s+/g, " ").trim().substring(0, 80),
+          svgAriaLabel: svgLabel,
+          classes: el.className?.substring(0, 100),
+          visible:
+            el.offsetParent !== null && el.getBoundingClientRect().width > 0,
+          rect: JSON.stringify(el.getBoundingClientRect().toJSON()).substring(
+            0,
+            80,
+          ),
+        };
+      })
+      .filter((el) => el.visible); // only visible ones
+  });
+
+  console.log("VISIBLE SIDEBAR ELEMENTS:");
+  console.table(beforeElements);
+  console.log("\nRAW JSON:\n", JSON.stringify(beforeElements, null, 2));
+
+  // ── STEP 2: Try to find and click the Create button ──
+  console.log("\n--- ATTEMPTING TO CLICK CREATE BUTTON ---");
+
+  // Try every possible selector and log which one hits
+  const candidateSelectors = [
+    'svg[aria-label="New post"]',
+    'svg[aria-label="Create"]',
+    '[aria-label="New post"]',
+    '[aria-label="Create"]',
+    'div[role="button"]:has(svg[aria-label="New post"])',
+    'div[role="button"]:has(svg[aria-label="Create"])',
+    'a:has(svg[aria-label="New post"])',
+    'a:has(svg[aria-label="Create"])',
+    'span:text-is("Create")',
+    'div:has(span:text-is("Create"))',
+    'a[href*="create"]',
+  ];
+
+  let clickedSelector = null;
+  for (const sel of candidateSelectors) {
+    try {
+      const el = page.locator(sel).first();
+      const visible = await el.isVisible({ timeout: 1000 }).catch(() => false);
+      console.log(`Selector "${sel}" → visible: ${visible}`);
+      if (visible && !clickedSelector) {
+        await el.click().catch(() => {});
+        clickedSelector = sel;
+        console.log(`  ✅ CLICKED: "${sel}"`);
+      }
+    } catch (e) {
+      console.log(`Selector "${sel}" → ERROR: ${e.message}`);
+    }
+  }
+
+  if (!clickedSelector) {
+    console.log(
+      "❌ NO CREATE BUTTON FOUND. Check the before-elements table above.",
+    );
+    return;
+  }
+
+  // ── STEP 3: Wait and dump what appeared AFTER clicking Create ──
+  await page.waitForTimeout(2000);
+  console.log("\n--- ELEMENTS AFTER CREATE CLICK (new/changed elements) ---");
+
+  const afterElements = await page.evaluate(() => {
+    // Get ALL visible clickable elements on the page after the click
+    const els = [
+      ...document.querySelectorAll(
+        'a, button, div[role="button"], [tabindex="0"], [role="menuitem"], [role="menu"] *, li',
+      ),
+    ];
+    return (
+      els
+        .filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && el.offsetParent !== null;
+        })
+        .map((el, i) => ({
+          index: i,
+          tag: el.tagName,
+          role: el.getAttribute("role"),
+          href: el.getAttribute("href"),
+          ariaLabel: el.getAttribute("aria-label"),
+          text: el.innerText?.replace(/\s+/g, " ").trim().substring(0, 80),
+          svgAriaLabel: el.querySelector("svg")?.getAttribute("aria-label"),
+          classes: el.className?.substring(0, 80),
+          rect: (() => {
+            const r = el.getBoundingClientRect();
+            return `x:${Math.round(r.x)} y:${Math.round(r.y)} w:${Math.round(r.width)} h:${Math.round(r.height)}`;
+          })(),
+        }))
+        // Focus on elements whose text contains "Post" or "AI" or that appeared near where we clicked
+        .filter(
+          (el) =>
+            el.text?.match(/^Post$|^AI$|^Reel$|^Story$/) ||
+            el.svgAriaLabel?.match(/post|create|new/i) ||
+            el.ariaLabel?.match(/post|create|new/i),
+        )
+    );
+  });
+
+  console.log(
+    'ELEMENTS CONTAINING "Post", "AI", "Reel", "Story" after Create click:',
+  );
+  console.table(afterElements);
+  console.log("\nRAW JSON:\n", JSON.stringify(afterElements, null, 2));
+
+  // ── STEP 4: Check if file input appeared (modal opened) ──
+  const fileInputExists = await page.locator('input[type="file"]').count();
+  console.log(
+    `\nFile input (input[type="file"]) count after Create click: ${fileInputExists}`,
+  );
+
+  // ── STEP 5: Try clicking whatever has text "Post" ──
+  console.log('\n--- TRYING TO CLICK "Post" OPTION ---');
+  const postCandidates = [
+    'a:has-text("Post")',
+    'div[role="button"]:has-text("Post")',
+    'span:text-is("Post")',
+    'div:has(span:text-is("Post"))',
+    ':text-is("Post")',
+    '[aria-label*="Post" i]',
+  ];
+
+  for (const sel of postCandidates) {
+    try {
+      const el = page.locator(sel).first();
+      const vis = await el.isVisible({ timeout: 800 }).catch(() => false);
+      console.log(`Post selector "${sel}" → visible: ${vis}`);
+      if (vis) {
+        // Log its full HTML so we know exactly what element it is
+        const html = await el
+          .evaluate((e) => e.outerHTML.substring(0, 300))
+          .catch(() => "");
+        console.log(`  HTML: ${html}`);
+      }
+    } catch (e) {
+      console.log(`Post selector "${sel}" → ERROR: ${e.message}`);
+    }
+  }
+
+  console.log("\n========== END DIAGNOSIS ==========" + "\n");
+}
+
+/**
+ * Attempt to click the Create (New post) and then the Post sidebar item.
+ * Captures DOM snapshots and returns a small result object.
+ */
+async function attemptCreatePostClicks(page, emitter) {
+  const safeEmitLocal = (em, type, msg, data) => {
+    if (em) {
+      if (typeof em.emit === "function")
+        em.emit("event", { type, platform: "instagram", message: msg, data });
+      else em({ type, platform: "instagram", message: msg, data });
+    }
+    const level =
+      type === "error" ? "error" : type === "warn" ? "warn" : "info";
+    logger[level]("INSTAGRAM", msg, data || {});
+  };
+
+  try {
+    await page.goto("https://www.instagram.com/", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    await humanDelay(1000, 1500);
+
+    // Click the Create (New post) SVG or its wrapper
+    const createClicked = await traceInstagramAction(
+      page,
+      "manual-click-create",
+      async () => {
+        // Prefer clicking the svg itself, fallback to parent wrapper
+        const svg = page.locator('svg[aria-label="New post"]').first();
+        if ((await svg.count()) > 0) {
+          try {
+            await svg.click({ timeout: 2000 });
+            return true;
+          } catch (_) {
+            // click parent
+            await page.evaluate(() => {
+              const s = document.querySelector('svg[aria-label="New post"]');
+              if (s && s.parentElement) s.parentElement.click();
+            });
+            return true;
+          }
+        }
+
+        const wrapper = page
+          .locator('div[role="button"]:has(svg[aria-label="New post"])')
+          .first();
+        if ((await wrapper.count()) > 0) {
+          await wrapper.click().catch(() => {});
+          return true;
+        }
+
+        return false;
+      },
+      emitter,
+    ).catch(() => false);
+
+    safeEmitLocal(emitter, "info", `createClicked=${createClicked}`);
+    await humanDelay(1200, 2000);
+    await captureInstagramDomSnapshot(page, "after-manual-create");
+
+    // Now try to click the 'Post' sidebar item
+    const postClicked = await traceInstagramAction(
+      page,
+      "manual-click-post",
+      async () => {
+        // Try multiple fallbacks for the Post element
+        const span = page.locator('span:text-is("Post")').first();
+        if ((await span.count()) > 0 && (await span.isVisible())) {
+          await span.click().catch(async () => {
+            await span.evaluate((e) => e.click());
+          });
+          return true;
+        }
+
+        const link = page.locator('a:has(span:text-is("Post"))').first();
+        if ((await link.count()) > 0 && (await link.isVisible())) {
+          await link.click().catch(() => {});
+          return true;
+        }
+
+        const btn = page
+          .locator('div[role="button"]:has(span:text-is("Post"))')
+          .first();
+        if ((await btn.count()) > 0 && (await btn.isVisible())) {
+          await btn.click().catch(() => {});
+          return true;
+        }
+
+        // Very broad fallback: any visible element with exact innerText 'Post'
+        const candidates = page
+          .locator("div, a, span")
+          .filter({ hasText: /^Post$/ })
+          .first();
+        if ((await candidates.count()) > 0 && (await candidates.isVisible())) {
+          await candidates.click().catch(() => {});
+          return true;
+        }
+
+        return false;
+      },
+      emitter,
+    ).catch(() => false);
+
+    safeEmitLocal(emitter, "info", `postClicked=${postClicked}`);
+    await humanDelay(1500, 2500);
+    await captureInstagramDomSnapshot(page, "after-manual-post");
+
+    const fileCount = await page.locator('input[type="file"]').count();
+    safeEmitLocal(emitter, "info", `fileInputCount=${fileCount}`);
+
+    return { createClicked, postClicked, fileInputCount: fileCount };
+  } catch (err) {
+    safeEmitLocal(
+      emitter,
+      "error",
+      `attemptCreatePostClicks failed: ${err.message}`,
+    );
+    throw err;
+  }
+}
+
 module.exports = {
   followAccount,
   unfollowAccount,
@@ -2128,5 +2712,7 @@ module.exports = {
   postCarousel,
   checkInbox,
   scrapeProfile,
+  diagnoseCreatePostFlow,
+  attemptCreatePostClicks,
   getSelectorHealthReport,
 };

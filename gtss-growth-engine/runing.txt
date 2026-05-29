@@ -8,3 +8,6 @@ rm -rf node_modules package-lock.json
 npm install
 npx playwright install chromium
 npm start
+
+
+Banner not shown: beforeinstallpromptevent.preventDefault() called. The page must call beforeinstallpromptevent.prompt() to show the banner.
