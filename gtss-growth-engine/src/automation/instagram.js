@@ -72,13 +72,10 @@ const IG_SELECTORS = {
     'div[role="button"]:has(svg[aria-label="Create"])',
   ],
   postCreateTooltipPost: [
-    '[role="menu"] [role="menuitem"]:has-text("Post")',
-    '[role="menu"] div[role="button"]:has-text("Post")',
-    '[role="menu"] div:has(span:text-is("Post"))',
-    'div[role="button"]:has(span:text-is("Post"))',
-    'a[role="link"]:has(span:text-is("Post"))',
-    '[role="menuitem"]:has-text("Post")',
+    'div[style*="position"]:has(span:text-is("Post"))',
+    'div:not([role]):has(span:text-is("Post"))',
     'div[tabindex="0"]:has(span:text-is("Post"))',
+    'div[role="button"]:has(span:text-is("Post"))',
     'span:text-is("Post")',
   ],
   fileInput: ['input[type="file"]'],
@@ -111,17 +108,68 @@ async function bringPageToFront(page) {
   }
 }
 
-function waitForPopup(page, timeout = 3000) {
-  if (!page || typeof page.waitForEvent !== "function") {
-    return Promise.resolve(null);
-  }
-  return page.waitForEvent("popup", { timeout }).catch(() => null);
-}
-
 async function waitForPostFileInput(page, timeout = 15000) {
   const fileInputLocator = page.locator('input[type="file"]');
   await fileInputLocator.waitFor({ state: "attached", timeout });
   return fileInputLocator;
+}
+
+async function collectVisiblePostFingerprints(page) {
+  const fingerprints = new Set();
+  const candidates = page.locator("div, a, span").filter({ hasText: /^Post$/ });
+  const count = await candidates.count();
+
+  for (let index = 0; index < count; index += 1) {
+    const candidate = candidates.nth(index);
+    const visible = await candidate.isVisible().catch(() => false);
+    if (!visible) continue;
+
+    const box = await candidate.boundingBox().catch(() => null);
+    if (!box) continue;
+
+    fingerprints.add(
+      `${Math.round(box.x)}:${Math.round(box.y)}:${Math.round(box.width)}:${Math.round(box.height)}`,
+    );
+  }
+
+  return fingerprints;
+}
+
+async function findFreshVisiblePostTooltip(
+  page,
+  blockedFingerprints,
+  createdAt,
+) {
+  const deadline = Date.now() + 6000;
+
+  while (Date.now() < deadline) {
+    const candidates = page
+      .locator("div, a, span")
+      .filter({ hasText: /^Post$/ });
+    const count = await candidates.count();
+
+    for (let index = 0; index < count; index += 1) {
+      const candidate = candidates.nth(index);
+      const visible = await candidate.isVisible().catch(() => false);
+      if (!visible) continue;
+
+      const box = await candidate.boundingBox().catch(() => null);
+      if (!box) continue;
+
+      const fingerprint = `${Math.round(box.x)}:${Math.round(box.y)}:${Math.round(box.width)}:${Math.round(box.height)}`;
+      if (blockedFingerprints.has(fingerprint)) continue;
+      if (Date.now() - createdAt > 2000) continue;
+
+      const text = await candidate.innerText().catch(() => "");
+      if (text.trim() !== "Post") continue;
+
+      return candidate;
+    }
+
+    await humanDelay(100, 200);
+  }
+
+  return null;
 }
 
 async function openInstagramCreatePostModal(page, emitter, emitFn) {
@@ -144,9 +192,9 @@ async function openInstagramCreatePostModal(page, emitter, emitFn) {
   ];
 
   let createBtn = await firstVisible(page, createSelectors, 10000);
-  let usedDirectNavigation = false;
+  let createClickAt = 0;
+  let blockedTooltipFingerprints = new Set();
   if (!createBtn) {
-    usedDirectNavigation = true;
     emitFn(
       emitter,
       "warn",
@@ -161,84 +209,47 @@ async function openInstagramCreatePostModal(page, emitter, emitFn) {
     await humanDelay(2000, 3500);
   }
 
-  const popupPromise = waitForPopup(page);
-
   if (createBtn) {
+    emitFn(emitter, "info", "Clicking Create button...");
+    createClickAt = Date.now();
+    blockedTooltipFingerprints = await collectVisiblePostFingerprints(page);
     await humanMouseMove(page, createBtn).catch(() => {});
     await createBtn.click().catch(async () => {
       await createBtn.click({ force: true }).catch(() => {});
     });
-    await humanDelay(1000, 1800);
+    await humanDelay(1500, 2500);
   }
 
   let activePage = page;
-  let fileInputLocator = await waitForPostFileInput(activePage, 2500).catch(
-    () => null,
+  emitFn(emitter, "info", "Waiting for Post/AI tooltip...");
+  await humanDelay(1500, 2500);
+
+  const tooltipPostBtn = await findFreshVisiblePostTooltip(
+    page,
+    blockedTooltipFingerprints,
+    createClickAt,
   );
-
-  if (!fileInputLocator) {
-    const tooltipPostBtn = await firstVisible(
-      page,
-      IG_SELECTORS.postCreateTooltipPost,
-      6000,
-    );
-    if (tooltipPostBtn) {
-      emitFn(emitter, "info", "Create menu detected; selecting Post");
-      await humanMouseMove(page, tooltipPostBtn).catch(() => {});
-      await tooltipPostBtn.click();
-      await humanDelay(1000, 1800);
-    } else {
-      emitFn(
-        emitter,
-        "info",
-        "Create menu not detected; waiting for upload modal directly",
-      );
-    }
-  }
-
-  const popupPage = await popupPromise;
-  if (popupPage) {
-    activePage = popupPage;
-    await bringPageToFront(activePage);
-    await activePage.waitForLoadState("domcontentloaded").catch(() => {});
-    await humanDelay(1000, 1500);
-  }
-
-  fileInputLocator = await waitForPostFileInput(activePage, 30000).catch(
-    async () => {
-      if (activePage !== page) throw new Error("Upload file input not found.");
-      const latePopup = await waitForPopup(page, 1500);
-      if (!latePopup) throw new Error("Upload file input not found.");
-      activePage = latePopup;
-      await bringPageToFront(activePage);
-      await activePage.waitForLoadState("domcontentloaded").catch(() => {});
-      return waitForPostFileInput(activePage, 20000);
-    },
-  );
-
-  if (!fileInputLocator && !usedDirectNavigation) {
+  if (tooltipPostBtn) {
+    emitFn(emitter, "info", "Tooltip found, clicking Post...");
+    await tooltipPostBtn.click().catch(async () => {
+      await tooltipPostBtn.click({ force: true }).catch(() => {});
+    });
+    await humanDelay(2000, 3500);
+  } else {
     emitFn(
       emitter,
-      "warn",
-      "Create flow did not open cleanly; retrying via direct create page",
-    );
-    await page
-      .goto(directCreateUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 15000,
-      })
-      .catch(() => {});
-    await bringPageToFront(page);
-    await humanDelay(2000, 3500);
-
-    activePage = page;
-    fileInputLocator = await waitForPostFileInput(activePage, 20000).catch(
-      () => null,
+      "info",
+      "Tooltip not detected; waiting for upload modal directly",
     );
   }
 
-  if (!fileInputLocator) {
-    throw new Error("Could not open Instagram create post modal.");
+  emitFn(emitter, "info", "Waiting for upload modal file input...");
+  let fileInputLocator;
+  try {
+    fileInputLocator = await waitForPostFileInput(activePage, 30000);
+  } catch (err) {
+    emitFn(emitter, "error", "Upload modal file input not found after 30s");
+    throw err;
   }
 
   return { activePage, fileInputLocator };
@@ -300,7 +311,6 @@ async function igDelay(type) {
   const range = IG_DELAYS[type] || { min: 3000, max: 8000 };
   await humanDelay(range.min, range.max);
 }
-
 /**
  * Emit an orchestration event to the active emitter or fall back to native logger.
  */
@@ -319,7 +329,7 @@ function safeEmit(emitter, type, message, data = {}) {
   logger[logLevel]("INSTAGRAM_OUTREACH", message, data);
 }
 
-// ── EXPORTS ─────────────────────────────────────────────────────────────────
+// ── EXPORTS ────────────────────────────────────────────────────────────────
 
 /**
  * Follow a target account on Instagram.
@@ -350,40 +360,24 @@ async function followAccount(page, { username, leadId }, emitter) {
       return { success: false, error: "username_missing" };
     }
 
-    safeEmit(emitter, "info", `Navigating to @${resolvedUsername}`);
+    safeEmit(emitter, "info", `Navigating to @${resolvedUsername} to follow`);
     const profileUrl = `https://www.instagram.com/${resolvedUsername}/`;
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
     await humanDelay(3000, 5000);
 
-    // 1. Check for Action blocks
-    const blockCheck = await checkForInstagramBlock(page);
-    if (blockCheck.blocked) {
-      safeEmit(
-        emitter,
-        "error",
-        `Instagram block detected: ${blockCheck.reason}`,
-      );
-      return { success: false, error: blockCheck.reason };
+    // 1. Locate current Follow action
+    const followBtn = await firstVisible(page, IG_SELECTORS.followButton, 4000);
+    if (!followBtn) {
+      safeEmit(emitter, "info", `Already following @${username}`);
+      return { success: true, alreadyFollowing: true };
     }
 
-    // 2. Identify current follow state
-    const followBtn = await firstVisible(page, IG_SELECTORS.followButton, 4000);
     const unfollowBtn = await firstVisible(
       page,
       IG_SELECTORS.unfollowButton,
       4000,
-    );
+    ).catch(() => null);
 
-    if (!followBtn && !unfollowBtn) {
-      safeEmit(
-        emitter,
-        "error",
-        "Follow/Unfollow action buttons not found on profile.",
-      );
-      return { success: false, error: "Follow button not found" };
-    }
-
-    // Determine if already connected or requested
     if (unfollowBtn) {
       const btnText = await unfollowBtn.innerText().catch(() => "");
       if (btnText.toLowerCase().includes("requested")) {
@@ -1101,24 +1095,12 @@ async function sendDM(page, { username, message }, emitter) {
             if (delivered) {
               state = "SUCCESS";
             } else {
-              // Try waiting a bit more for rendering lag
-              safeEmit(
-                emitter,
-                "warning",
-                "Delivery not immediately verified. Waiting for UI update...",
+              throw new Error(
+                "Message delivery verification failed (message not found in chat log or compose box not cleared).",
               );
-              await humanDelay(2000, 3000);
-              const retryDelivered = await verifyDelivery(page, message);
-              if (retryDelivered) {
-                state = "SUCCESS";
-              } else {
-                throw new Error(
-                  "Message delivery verification failed (message not found in chat log or compose box not cleared).",
-                );
-              }
             }
+            break;
           }
-          break;
         }
 
         case "CONFIRM_REQUEST": {
@@ -1137,6 +1119,7 @@ async function sendDM(page, { username, message }, emitter) {
           ).catch(() => null);
 
           if (!dialogBtn) {
+            await humanDelay(1500, 2500);
             throw new Error(
               "Confirmation dialog button vanished before clicking",
             );

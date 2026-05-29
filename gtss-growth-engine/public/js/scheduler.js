@@ -686,13 +686,20 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Media upload
+    mediaFileInput.addEventListener("click", (e) => {
+      e.stopPropagation();
+    });
+
     mediaFileInput.addEventListener("change", async (e) => {
       const file = e.target.files[0];
       await uploadMediaFile(file);
     });
 
     if (mediaDropzone) {
-      mediaDropzone.addEventListener("click", () => mediaFileInput.click());
+      mediaDropzone.addEventListener("click", (e) => {
+        if (e.target === mediaFileInput) return;
+        mediaFileInput.click();
+      });
       mediaDropzone.addEventListener("dragenter", (e) => {
         e.preventDefault();
         mediaDropzone.classList.add("border-primary");
