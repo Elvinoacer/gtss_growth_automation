@@ -57,6 +57,11 @@ const IG_SELECTORS = {
   ],
   chatNext: ['button:has-text("Next")', 'div[role="button"]:has-text("Next")'],
   postCreate: [
+    'div[aria-selected="false"]:has(svg[aria-label="New post"])',
+    'div:has(svg[aria-label="New post"])',
+    'div:has(svg[aria-label="Create"])',
+    'div[role="button"]:has(svg[aria-label="New post"])',
+    'div[role="button"]:has(svg[aria-label="Create"])',
     'svg[aria-label="New post"]',
     'svg[aria-label="Create"]',
     'span:has-text("Create")',
@@ -69,6 +74,7 @@ const IG_SELECTORS = {
   postCreateTooltipPost: [
     '[role="menu"] [role="menuitem"]:has-text("Post")',
     '[role="menu"] div[role="button"]:has-text("Post")',
+    '[role="menu"] div:has(span:text-is("Post"))',
     'div[role="button"]:has(span:text-is("Post"))',
     'a[role="link"]:has(span:text-is("Post"))',
     '[role="menuitem"]:has-text("Post")',
@@ -126,6 +132,8 @@ async function openInstagramCreatePostModal(page, emitter, emitFn) {
 
   const createSelectors = [
     ...IG_SELECTORS.postCreate,
+    'div[aria-selected="false"]:has(svg[aria-label="New post"])',
+    'div:has(svg[aria-label="New post"])',
     'svg[aria-label="Create"]',
     '[aria-label="Create"]',
     'button[aria-label*="Create"]',

@@ -1148,6 +1148,10 @@ function setInstagramBlockedUntil(hours = 24) {
   ).run(resumesAt);
   return resumesAt;
 }
+function clearInstagramBlockedUntil() {
+  const db = getDb();
+  db.prepare("DELETE FROM settings WHERE key = 'ig_blocked_until'").run();
+}
 
 function isInstagramBlocked() {
   const db = getDb();
