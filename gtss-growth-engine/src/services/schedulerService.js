@@ -9,6 +9,7 @@ const {
   humanDelay,
   humanTypeText,
   checkSessionExpired,
+  captureFailureArtifact,
 } = require("../automation/browserBase");
 const { isSessionValid } = require("../automation/sessionManager");
 const { callGeminiText } = require("./aiService");
@@ -78,6 +79,13 @@ const POST_CHAR_LIMITS = {
 };
 
 const UPLOADS_DIR = path.resolve(__dirname, "..", "..", "public", "uploads");
+const AUTOMATION_ARTIFACT_DIR = path.resolve(
+  __dirname,
+  "..",
+  "..",
+  "artifacts",
+  "automation",
+);
 
 async function firstVisibleLocator(page, selectors, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
@@ -99,6 +107,301 @@ async function firstVisibleLocator(page, selectors, timeoutMs = 5000) {
   }
 
   return null;
+}
+
+async function isLocatorDisabled(locator) {
+  const ariaDisabled = await locator
+    .getAttribute("aria-disabled")
+    .catch(() => null);
+  if (ariaDisabled === "true") return true;
+
+  const disabled = await locator.getAttribute("disabled").catch(() => null);
+  if (disabled !== null) return true;
+
+  return locator
+    .evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      return (
+        el.matches?.("[disabled], [aria-disabled='true']") ||
+        style.pointerEvents === "none" ||
+        Number.parseFloat(style.opacity || "1") < 0.35
+      );
+    })
+    .catch(() => false);
+}
+
+async function firstEnabledLocator(scope, selectors, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    for (const selector of selectors) {
+      const locator = scope.locator(selector);
+      const count = await locator.count().catch(() => 0);
+
+      for (let index = 0; index < count; index += 1) {
+        const candidate = locator.nth(index);
+        const visible = await candidate.isVisible().catch(() => false);
+        if (!visible) continue;
+        if (await isLocatorDisabled(candidate)) continue;
+        return { locator: candidate, selector };
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  return null;
+}
+
+function safeArtifactLabel(label) {
+  return String(label || "snapshot")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+async function captureFacebookDebugSnapshot(page, label) {
+  if (!page || page.isClosed()) return null;
+
+  const debugDir = path.join(AUTOMATION_ARTIFACT_DIR, "facebook-debug");
+  await fs.promises.mkdir(debugDir, { recursive: true }).catch(() => {});
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const base = `${timestamp}-${safeArtifactLabel(label)}`;
+  const htmlPath = path.join(debugDir, `${base}.html`);
+  const jsonPath = path.join(debugDir, `${base}.json`);
+
+  const html = await page.content().catch(() => "");
+  if (html) {
+    await fs.promises.writeFile(htmlPath, html, "utf8").catch(() => {});
+  }
+
+  const summary = await page
+    .evaluate(() => {
+      const visibleText = (el) => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        if (
+          rect.width <= 0 ||
+          rect.height <= 0 ||
+          style.visibility === "hidden" ||
+          style.display === "none"
+        ) {
+          return null;
+        }
+
+        return {
+          tag: el.tagName.toLowerCase(),
+          role: el.getAttribute("role"),
+          ariaLabel: el.getAttribute("aria-label"),
+          ariaDisabled: el.getAttribute("aria-disabled"),
+          text: String(el.innerText || el.textContent || "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 120),
+        };
+      };
+
+      return {
+        title: document.title,
+        url: location.href,
+        dialogs: Array.from(document.querySelectorAll('[role="dialog"]'))
+          .map(visibleText)
+          .filter(Boolean),
+        buttons: Array.from(
+          document.querySelectorAll('button, [role="button"], [aria-label]'),
+        )
+          .map(visibleText)
+          .filter(Boolean)
+          .slice(0, 80),
+        fileInputs: Array.from(document.querySelectorAll('input[type="file"]'))
+          .map((input) => ({
+            accept: input.getAttribute("accept"),
+            multiple: input.hasAttribute("multiple"),
+            disabled: input.disabled,
+          }))
+          .slice(0, 20),
+      };
+    })
+    .catch((error) => ({ error: error.message, url: page.url() }));
+
+  await fs.promises
+    .writeFile(jsonPath, JSON.stringify(summary, null, 2), "utf8")
+    .catch(() => {});
+
+  const screenshotPath = await captureFailureArtifact(
+    page,
+    "facebook",
+    `composer-${safeArtifactLabel(label)}`,
+  ).catch(() => null);
+
+  return { htmlPath: html ? htmlPath : null, jsonPath, screenshotPath };
+}
+
+async function findFacebookComposerDialog(page, timeoutMs = 12000) {
+  const deadline = Date.now() + timeoutMs;
+  const selectors = [
+    'div[role="dialog"]:has-text("Create post")',
+    'div[role="dialog"][aria-label*="Create"]',
+    'div[role="dialog"]:has(div[role="textbox"])',
+    'div[role="dialog"]',
+  ];
+
+  while (Date.now() < deadline) {
+    const dialog = await firstVisibleLocator(page, selectors, 1000);
+    if (dialog) return dialog;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  return null;
+}
+
+async function findFacebookFileInput(page, timeoutMs = 5000) {
+  const selectors = [
+    'input[type="file"][accept*="image"]',
+    'input[type="file"][accept*="video"]',
+    'input[type="file"]',
+  ];
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const selector of selectors) {
+      const input = page.locator(selector).first();
+      if ((await input.count().catch(() => 0)) > 0) return input;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  return null;
+}
+
+async function waitForFacebookMediaPreview(page, timeoutMs = 30000) {
+  const previewSelectors = [
+    'div[role="dialog"] img[src*="blob:"]',
+    'div[role="dialog"] img[src*="fbcdn"]',
+    'div[role="dialog"] img[src*="scontent"]',
+    'div[role="dialog"] video',
+    'img[src*="blob:"]',
+    'img[src*="fbcdn"]',
+    'img[src*="scontent"]',
+    "video",
+  ];
+
+  return firstVisibleLocator(page, previewSelectors, timeoutMs);
+}
+
+async function attachFacebookMedia(page, dialogScope, mediaPath, emit) {
+  const resolvedMediaPath = resolveMediaFilePath(mediaPath) || mediaPath;
+  if (!resolvedMediaPath || !fs.existsSync(resolvedMediaPath)) {
+    await captureFacebookDebugSnapshot(page, "media-file-missing");
+    throw new Error(
+      `Facebook media file does not exist: ${mediaPath || "(empty)"}`,
+    );
+  }
+
+  const photoVideoSelectors = [
+    '[aria-label="Photo/video"][role="button"]',
+    '[aria-label="Photo/Video"][role="button"]',
+    '[aria-label*="Photo/video"][role="button"]',
+    '[aria-label*="Photo"][role="button"]',
+    '[aria-label*="photo"][role="button"]',
+    'div[role="button"]:has-text("Photo/video")',
+    'span:has-text("Photo/video")',
+  ];
+
+  const photoBtn =
+    (await firstEnabledLocator(dialogScope.locator, photoVideoSelectors, 8000)) ||
+    (await firstEnabledLocator(page, photoVideoSelectors, 3000));
+
+  if (!photoBtn) {
+    await captureFacebookDebugSnapshot(page, "media-button-not-found");
+    throw new Error("Facebook Photo/video upload button not found.");
+  }
+
+  emit({
+    type: "info",
+    platform: "facebook",
+    message: `Opening Facebook media upload via ${photoBtn.selector}...`,
+  });
+
+  const fileChooserPromise = page
+    .waitForEvent("filechooser", { timeout: 5000 })
+    .catch(() => null);
+
+  await photoBtn.locator.scrollIntoViewIfNeeded().catch(() => {});
+  await photoBtn.locator.click({ timeout: 10000 });
+
+  const fileChooser = await fileChooserPromise;
+  if (fileChooser) {
+    await fileChooser.setFiles(resolvedMediaPath);
+  } else {
+    const fileInput = await findFacebookFileInput(page, 8000);
+    if (!fileInput) {
+      await captureFacebookDebugSnapshot(page, "media-file-input-not-found");
+      throw new Error("Facebook file input did not appear after media click.");
+    }
+
+    await fileInput.setInputFiles(resolvedMediaPath);
+  }
+
+  await humanDelay(1000, 2000);
+
+  const preview = await waitForFacebookMediaPreview(page, 30000);
+  if (!preview) {
+    await captureFacebookDebugSnapshot(page, "media-preview-not-found");
+    emit({
+      type: "warning",
+      platform: "facebook",
+      message: "Media preview not detected; continuing after upload attempt.",
+    });
+  } else {
+    emit({
+      type: "info",
+      platform: "facebook",
+      message: "Facebook media preview detected.",
+    });
+  }
+
+  return resolvedMediaPath;
+}
+
+async function waitForFacebookPostCompletion(page, postButtonLocator, emit) {
+  const warningSelectors = [
+    '[role="alert"]',
+    'div:has-text("Something went wrong")',
+    'div:has-text("couldn\'t")',
+    'div:has-text("try again")',
+  ];
+
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    const warning = await firstVisibleLocator(page, warningSelectors, 750);
+    if (warning) {
+      const text = await warning.locator.innerText().catch(() => "");
+      if (text.trim()) {
+        await captureFacebookDebugSnapshot(page, "post-submit-warning");
+        throw new Error(`Facebook showed a posting warning: ${text.trim()}`);
+      }
+    }
+
+    const postStillVisible = await postButtonLocator
+      .isVisible()
+      .catch(() => false);
+    if (!postStillVisible) return true;
+
+    await new Promise((resolve) => setTimeout(resolve, 750));
+  }
+
+  await captureFacebookDebugSnapshot(page, "post-submit-timeout");
+  emit({
+    type: "warning",
+    platform: "facebook",
+    message:
+      "Facebook post button was still visible after submit; post may still be processing.",
+  });
+  return false;
 }
 
 function decodeHtmlEntities(text) {
@@ -779,10 +1082,12 @@ async function postToFacebook(page, body, mediaPath, emit) {
     });
 
     const composeTriggerSelectors = [
+      'div[role="button"]:has-text("What\'s on your mind")',
+      'div[role="main"] span:has-text("What\'s on your mind")',
+      'span:has-text("What\'s on your mind")',
+      '[data-pagelet="FeedComposer"] [role="button"]',
       '[aria-label="Create a post"]',
       '[aria-label="Create a Post"]',
-      'div[role="button"]:has-text("What\'s on your mind")',
-      'span:has-text("What\'s on your mind")',
     ];
 
     const composeTrigger = await firstVisibleLocator(
@@ -796,6 +1101,11 @@ async function postToFacebook(page, body, mediaPath, emit) {
       );
     }
 
+    emit({
+      type: "info",
+      platform: "facebook",
+      message: `Opening Facebook composer via ${composeTrigger.selector}...`,
+    });
     await composeTrigger.locator.scrollIntoViewIfNeeded().catch(() => {});
     await composeTrigger.locator.click();
     await humanDelay(2000, 3500);
@@ -807,15 +1117,9 @@ async function postToFacebook(page, body, mediaPath, emit) {
       message: "Waiting for Facebook post dialog...",
     });
 
-    const dialogSelectors = [
-      '[aria-label="Create a post"]',
-      '[aria-label="Create post"]',
-      'div[role="dialog"]',
-      '[data-pagelet="FeedComposer"]',
-    ];
-
-    const dialogScope = await firstVisibleLocator(page, dialogSelectors, 12000);
+    const dialogScope = await findFacebookComposerDialog(page, 15000);
     if (!dialogScope) {
+      await captureFacebookDebugSnapshot(page, "dialog-not-found");
       throw new Error(
         "Facebook post dialog did not open after clicking compose trigger.",
       );
@@ -829,8 +1133,11 @@ async function postToFacebook(page, body, mediaPath, emit) {
       'div[role="textbox"][contenteditable="true"]',
     ];
 
-    const editor = await firstVisibleLocator(page, editorSelectors, 8000);
+    const editor =
+      (await firstVisibleLocator(dialogScope.locator, editorSelectors, 8000)) ||
+      (await firstVisibleLocator(page, editorSelectors, 3000));
     if (!editor) {
+      await captureFacebookDebugSnapshot(page, "editor-not-found");
       throw new Error("Facebook post editor not found inside dialog.");
     }
 
@@ -850,107 +1157,82 @@ async function postToFacebook(page, body, mediaPath, emit) {
       emit({
         type: "info",
         platform: "facebook",
-        message: "Attaching media...",
+        message: "Attaching scheduler media to Facebook post...",
       });
 
-      const photoVideoSelectors = [
-        'div[role="button"][aria-label*="Photo"]',
-        'div[role="button"][aria-label*="photo"]',
-        '[aria-label="Photo/Video"]',
-        'span:has-text("Photo/video")',
-        'div[aria-label*="Video"]',
-      ];
-
-      const photoBtn = await firstVisibleLocator(
-        page,
-        photoVideoSelectors,
-        5000,
-      );
-      if (photoBtn) {
-        await photoBtn.locator.click();
-        await humanDelay(1500, 2500);
-      }
-
-      const fileInput = page.locator('input[type="file"]');
-      if ((await fileInput.count()) > 0) {
-        try {
-          await fileInput.first().setInputFiles(mediaPath);
-          await humanDelay(1000, 2000);
-          await page
-            .locator(
-              '[data-pagelet="FeedComposer"] img[src*="blob:"], img[src*="fbcdn"]',
-            )
-            .first()
-            .waitFor({ state: "visible", timeout: 30000 })
-            .catch(() =>
-              emit({
-                type: "warning",
-                platform: "facebook",
-                message: "Media preview not detected; posting anyway.",
-              }),
-            );
-        } catch (e) {
-          emit({
-            type: "warning",
-            platform: "facebook",
-            message: `Media attach failed: ${e.message}`,
-          });
-        }
-      } else {
-        emit({
-          type: "warning",
-          platform: "facebook",
-          message: "File input not found on Facebook. Posting text only.",
-        });
-      }
+      await attachFacebookMedia(page, dialogScope, mediaPath, emit);
     }
 
     const nextBtnSelectors = [
-      'button:has-text("Next")',
+      '[aria-label="Next"][role="button"]',
+      '[aria-label*="Next"][role="button"]',
       'div[role="button"]:has-text("Next")',
       'button[aria-label*="Next"]',
+      'button:has-text("Next")',
+      'div[role="dialog"] [aria-label="Next"][role="button"]',
+      'div[role="dialog"] [aria-label*="Next"][role="button"]',
+      'div[role="dialog"] div[role="button"]:has-text("Next")',
+      'div[role="dialog"] button:has-text("Next")',
     ];
 
-    const nextBtn = await firstVisibleLocator(page, nextBtnSelectors, 5000);
+    const nextBtn =
+      (await firstEnabledLocator(dialogScope.locator, nextBtnSelectors, 5000)) ||
+      (await firstEnabledLocator(page, nextBtnSelectors, 2500));
     if (nextBtn) {
       emit({
         type: "info",
         platform: "facebook",
-        message: "Advancing Facebook composer to the next step...",
+        message: `Advancing Facebook composer via ${nextBtn.selector}...`,
       });
       await nextBtn.locator.scrollIntoViewIfNeeded().catch(() => {});
-      await nextBtn.locator.click();
-      await humanDelay(2000, 3000);
+      await nextBtn.locator.click({ timeout: 10000 });
+      await humanDelay(2500, 4000);
+    } else {
+      emit({
+        type: "info",
+        platform: "facebook",
+        message: "No Facebook Next step detected; trying to post directly...",
+      });
     }
 
     // ── Step 5: Click the Post button ─────────────────────────────────────
     emit({ type: "info", platform: "facebook", message: "Submitting post..." });
 
     const postBtnSelectors = [
-      '[data-pagelet="FeedComposer"] div[aria-label="Post"]',
-      'div[aria-label="Post"][role="button"]',
-      'div[role="dialog"] div[aria-label="Post"]',
+      '[aria-label="Post"][role="button"]',
+      'div[role="button"]:has-text("Post")',
+      'button:has-text("Post")',
       'button:has-text("Share")',
       'div[role="button"]:has-text("Share")',
+      'div[role="dialog"] div[aria-label="Post"]',
+      'div[role="dialog"] [aria-label="Post"][role="button"]',
+      'div[role="dialog"] div[role="button"]:has-text("Post")',
+      'div[role="dialog"] button:has-text("Post")',
+      '[data-pagelet="FeedComposer"] div[aria-label="Post"]',
+      'div[aria-label="Post"][role="button"]',
     ];
 
-    const postBtn = await firstVisibleLocator(page, postBtnSelectors, 8000);
+    const activeDialog =
+      (await findFacebookComposerDialog(page, 2500)) || dialogScope;
+    const postBtn =
+      (await firstEnabledLocator(activeDialog.locator, postBtnSelectors, 10000)) ||
+      (await firstEnabledLocator(page, postBtnSelectors, 3000));
     if (!postBtn) {
+      await captureFacebookDebugSnapshot(page, "post-button-not-found");
       throw new Error("Facebook Post button not found — cannot submit post.");
     }
 
-    const isDisabled = await postBtn.locator
-      .getAttribute("aria-disabled")
-      .catch(() => null);
-    if (isDisabled === "true") {
+    if (await isLocatorDisabled(postBtn.locator)) {
+      await captureFacebookDebugSnapshot(page, "post-button-disabled");
       throw new Error(
         "Facebook Post button is disabled — post body may be empty or media still uploading.",
       );
     }
 
     await postBtn.locator.scrollIntoViewIfNeeded().catch(() => {});
-    await postBtn.locator.click();
-    await humanDelay(3000, 5000);
+    await postBtn.locator.click({ timeout: 10000 });
+    await waitForFacebookPostCompletion(page, postBtn.locator, emit);
+    await humanDelay(1000, 2000);
 
     emit({
       type: "info",
@@ -960,6 +1242,7 @@ async function postToFacebook(page, body, mediaPath, emit) {
     return true;
   } catch (err) {
     logger.error("Facebook posting failed", { error: err.message });
+    await captureFacebookDebugSnapshot(page, "posting-failed").catch(() => {});
     emit({
       type: "error",
       platform: "facebook",
