@@ -110,16 +110,28 @@ async function firstVisibleLocator(page, selectors, timeoutMs = 5000) {
   return null;
 }
 
+const X_COMPOSE_EDITOR_SELECTORS = [
+  'div[role="textbox"][data-testid="tweetTextarea_0"]',
+  'div[role="textbox"][aria-label*="Post text"]',
+  'div[role="textbox"][aria-label*="Tweet"]',
+  'div[role="textbox"][contenteditable="true"]',
+];
+
+async function hasVisibleXComposeEditor(page) {
+  return Boolean(
+    await firstVisibleLocator(page, X_COMPOSE_EDITOR_SELECTORS, 500),
+  );
+}
+
 async function waitForXPostCompletion(page, emit, timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs;
+  const startedOnComposeRoute = page.url().includes("/compose/");
 
   const toastSelectors = [
     '[data-testid="toast"]',
     'div:has-text("Your post was sent")',
     'div:has-text("Tweet sent")',
   ];
-
-  const editorSelector = 'div[role="textbox"][data-testid="tweetTextarea_0"]';
 
   while (Date.now() < deadline) {
     const toast = await firstVisibleLocator(page, toastSelectors, 800);
@@ -133,10 +145,7 @@ async function waitForXPostCompletion(page, emit, timeoutMs = 20000) {
       return { verified: true, reason: "Success toast detected" };
     }
 
-    const editorStillOpen = await page
-      .locator(editorSelector)
-      .isVisible()
-      .catch(() => false);
+    const editorStillOpen = await hasVisibleXComposeEditor(page);
     if (!editorStillOpen) {
       return {
         verified: true,
@@ -145,7 +154,7 @@ async function waitForXPostCompletion(page, emit, timeoutMs = 20000) {
     }
 
     const url = page.url();
-    if (!url.includes("/compose/")) {
+    if (startedOnComposeRoute && !url.includes("/compose/")) {
       return { verified: true, reason: "URL left compose route" };
     }
 
@@ -1039,9 +1048,7 @@ async function postToX(page, body, mediaPath, emit) {
 
     let editorFound = false;
     const editorSelectors = [
-      'div[role="textbox"][data-testid="tweetTextarea_0"]',
-      'div[role="textbox"][aria-label*="Post text"]',
-      'div[role="textbox"][aria-label*="Tweet"]',
+      ...X_COMPOSE_EDITOR_SELECTORS,
       'div[role="textbox"]',
     ];
 
@@ -1172,7 +1179,9 @@ async function postToX(page, body, mediaPath, emit) {
     emit({
       type: "info",
       platform: "x",
-      message: "Tweet posted successfully.",
+      message: `Tweet posted successfully (${
+        verification.reason || "confirmation timeout"
+      }).`,
     });
     return true;
   } catch (err) {
