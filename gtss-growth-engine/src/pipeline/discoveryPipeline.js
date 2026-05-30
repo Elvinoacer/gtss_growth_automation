@@ -77,7 +77,7 @@ function loadKeywords() {
  * @param {Function} emit - Event emitter for pipeline SSE stream
  * @returns {Promise<{newLeads: number, keywordsRun: number, skipped: number}>}
  */
-async function runDiscoveryStage(pipelineRunId, emit) {
+async function runDiscoveryStage(pipelineRunId, emit, maxLeadsPerKeywordOverride) {
   const mode = stageMode("discovery");
   const db = getDb();
 
@@ -106,6 +106,10 @@ async function runDiscoveryStage(pipelineRunId, emit) {
   // AI mode — full automated discovery
   const config = loadKeywords();
   let { keywords, platforms, maxLeadsPerKeyword } = config;
+
+  if (typeof maxLeadsPerKeywordOverride === "number") {
+    maxLeadsPerKeyword = maxLeadsPerKeywordOverride;
+  }
 
   // Support DISCOVERY_PLATFORMS environment variable override
   if (process.env.DISCOVERY_PLATFORMS) {

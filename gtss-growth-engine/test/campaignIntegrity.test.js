@@ -76,7 +76,7 @@ async function runCampaignIntegrityTests() {
   `).run();
 
   // Trigger background start / sweep
-  backgroundJobs.startBackgroundJobs();
+  await backgroundJobs.startBackgroundJobs();
 
   // Verify stuck jobs reset to 'pending'
   const connJob1 = db.prepare("SELECT status FROM connection_jobs WHERE campaign_id = 9901").get();

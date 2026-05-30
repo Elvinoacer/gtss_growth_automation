@@ -802,170 +802,196 @@
         <section class="settings-section gtss-card">
           <div class="section-head">
             <h2>API Configuration</h2>
-            <link rel="preconnect" href="https://fonts.googleapis.com" />
-            <link
-              rel="preconnect"
-              href="https://fonts.gstatic.com"
-              crossorigin
-            />
-            <link
-              rel="stylesheet"
-              href="https://fonts.googleapis.com/css2?family=Fraunces:wght@400;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
-            />
             <span id="gemini-result" class="inline-result"></span>
-            :root { --settings-surface: rgba(15, 23, 42, 0.96);
-            --settings-surface-2: rgba(10, 15, 27, 0.96); --settings-border:
-            rgba(148, 163, 184, 0.2); --settings-glow: rgba(56, 189, 248, 0.18);
-            } body { font-family: "Space Grotesk", sans-serif; background:
-            radial-gradient( 1200px 600px at 15% -10%, rgba(59, 130, 246, 0.2),
-            transparent 60% ), radial-gradient( 900px 600px at 90% 0%, rgba(251,
-            191, 36, 0.16), transparent 65% ), linear-gradient(180deg, #0b1120
-            0%, #070b16 100%); color: var(--gtss-text); } .settings-page {
-            position: relative; display: grid; gap: 28px; padding: 32px 28px
-            60px; max-width: 1240px; margin: 0 auto; } .settings-page::before {
-            content: ""; position: absolute; inset: -120px; background:
-            radial-gradient( 600px 220px at 10% 10%, rgba(14, 165, 233, 0.08),
-            transparent 70% ), radial-gradient( 500px 240px at 80% 15%,
-            rgba(236, 72, 153, 0.08), transparent 70% ); opacity: 0.6;
-            pointer-events: none; z-index: 0; } .settings-page > * { position:
-            relative; z-index: 1; } .settings-section { position: relative;
-            padding: 24px; border-radius: calc(var(--gtss-radius) + 6px);
-            border: 1px solid var(--settings-border); background:
-            linear-gradient(160deg, var(--settings-surface),
-            var(--settings-surface-2)); box-shadow: 0 18px 40px rgba(2, 6, 23,
-            0.55); animation: fadeUp 600ms ease both; } .settings-section::after
-            { content: ""; position: absolute; inset: 0; border-radius: inherit;
-            border: 1px solid rgba(255, 255, 255, 0.04); pointer-events: none; }
-            .settings-section:nth-of-type(2) { animation-delay: 80ms; }
-            .settings-section:nth-of-type(3) { animation-delay: 140ms; }
-            .settings-section:nth-of-type(4) { animation-delay: 200ms; }
-            .section-head { display: flex; align-items: center; justify-content:
-            space-between; gap: 12px; margin-bottom: 18px; } .section-head h2 {
-            margin: 0; color: var(--gtss-text); font-family: "Fraunces", serif;
-            font-size: 22px; letter-spacing: 0.02em; } .settings-card h3 {
-            margin: 0; color: var(--gtss-text); font-family: "Fraunces", serif;
-            font-size: 16px; } .muted { color: rgba(148, 163, 184, 0.9); }
-            .settings-grid { display: grid; grid-template-columns: repeat(4,
-            minmax(180px, 1fr)); gap: 14px; } .settings-card { padding: 16px;
-            border: 1px solid var(--settings-border); border-radius:
-            var(--gtss-radius); background: rgba(7, 12, 22, 0.85); box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.03); } .session-card { display:
-            grid; gap: 12px; } .status-badge { width: max-content;
-            border-radius: 999px; padding: 4px 10px; font-size: 11px;
-            font-weight: 800; background: rgba(148, 163, 184, 0.18); color:
-            var(--gtss-muted); text-transform: uppercase; letter-spacing:
-            0.08em; } .status-active { background: rgba(34, 197, 94, 0.16);
-            color: var(--gtss-success); } .status-expired { background:
-            rgba(239, 68, 68, 0.16); color: var(--gtss-danger); } .form-grid {
-            display: grid; gap: 14px; } .form-row { display: flex; flex-wrap:
-            wrap; gap: 12px; align-items: end; } .field { display: grid; gap:
-            8px; color: var(--gtss-muted); font-size: 12px; font-weight: 700;
-            flex: 1; min-width: 220px; letter-spacing: 0.02em; } .field input,
-            .field textarea, .field select, .limits-table input { min-height:
-            42px; border: 1px solid var(--settings-border); border-radius:
-            var(--gtss-radius); padding: 10px 12px; background: rgba(8, 15, 26,
-            0.9); color: var(--gtss-text); font: inherit; box-shadow: inset 0
-            1px 0 rgba(255, 255, 255, 0.03); transition: border 200ms ease,
-            box-shadow 200ms ease, transform 200ms ease; } .field input:focus,
-            .field textarea:focus, .field select:focus, .limits-table
-            input:focus { outline: none; border-color: rgba(56, 189, 248, 0.65);
-            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.18); } .field textarea {
-            min-height: 200px; resize: vertical; } .primary-button,
-            .secondary-button, .danger-button { min-height: 40px; border: 0;
-            border-radius: var(--gtss-radius); padding: 0 14px; color: #fff;
-            font: inherit; font-weight: 800; cursor: pointer; transition:
-            transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease; }
-            .primary-button { background: linear-gradient(135deg, #2563eb,
-            #0ea5e9); box-shadow: 0 10px 20px rgba(37, 99, 235, 0.25); }
-            .secondary-button { background: linear-gradient(150deg, #1f2937,
-            #0f172a); border: 1px solid var(--settings-border); box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.04); } .danger-button {
-            background: linear-gradient(135deg, #ef4444, #b91c1c); box-shadow: 0
-            10px 20px rgba(239, 68, 68, 0.22); } .primary-button:hover,
-            .secondary-button:hover, .danger-button:hover { transform:
-            translateY(-1px); } .primary-button:disabled,
-            .secondary-button:disabled, .danger-button:disabled { opacity: 0.6;
-            cursor: not-allowed; transform: none; } .inline-result { min-height:
-            20px; color: var(--gtss-muted); font-weight: 700; }
-            .inline-result.success { color: var(--gtss-success); }
-            .inline-result.error { color: var(--gtss-danger); }
-            .limits-table-wrap { overflow: auto; } .limits-table { width: 100%;
-            border-collapse: collapse; min-width: 720px; } .limits-table th,
-            .limits-table td { padding: 12px; border-bottom: 1px solid
-            var(--settings-border); color: var(--gtss-text); text-align: left; }
-            .limits-table th { color: var(--gtss-muted); font-size: 11px;
-            text-transform: uppercase; letter-spacing: 0.08em; } .limits-table
-            input { width: 110px; } .checkbox-list { display: grid;
-            grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 10px;
-            margin-top: 12px; } .checkbox-list label { display: flex; gap: 8px;
-            align-items: center; color: var(--gtss-text); } .tabs { display:
-            flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; } .tab-button
-            { border: 1px solid var(--settings-border); border-radius:
-            var(--gtss-radius); padding: 9px 12px; background: rgba(15, 23, 42,
-            0.7); color: var(--gtss-muted); cursor: pointer; transition: border
-            180ms ease, color 180ms ease, background 180ms ease; }
-            .tab-button.active { border-color: rgba(56, 189, 248, 0.7); color:
-            var(--gtss-text); background: rgba(56, 189, 248, 0.14); }
-            .variable-badges { display: flex; flex-wrap: wrap; gap: 8px;
-            margin-top: 10px; } .variable-badge { border: 1px solid
-            var(--settings-border); border-radius: 999px; padding: 6px 10px;
-            background: rgba(15, 23, 42, 0.7); color: var(--gtss-text); cursor:
-            pointer; transition: transform 160ms ease, border 160ms ease; }
-            .variable-badge:hover { transform: translateY(-1px); border-color:
-            rgba(56, 189, 248, 0.6); } .system-grid { display: grid;
-            grid-template-columns: 1fr 1fr; gap: 16px; } .warning-box { border:
-            1px solid rgba(239, 68, 68, 0.35); border-radius:
-            var(--gtss-radius); padding: 12px; color: #fecaca; background:
-            rgba(239, 68, 68, 0.1); } .confirm-backdrop { position: fixed;
-            inset: 0; z-index: 3000; display: none; place-items: center;
-            padding: 20px; background: rgba(2, 6, 23, 0.72); backdrop-filter:
-            blur(6px); } .confirm-backdrop.visible { display: grid; }
-            .confirm-modal { width: min(520px, 100%); padding: 22px; border: 1px
-            solid var(--settings-border); border-radius: calc(var(--gtss-radius)
-            + 4px); background: rgba(10, 15, 27, 0.98); color: var(--gtss-text);
-            box-shadow: 0 20px 40px rgba(2, 6, 23, 0.6); } .confirm-actions {
-            display: flex; justify-content: flex-end; gap: 10px; margin-top:
-            18px; } @keyframes fadeUp { from { opacity: 0; transform:
-            translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-            @media (max-width: 1100px) { .settings-grid, .checkbox-list,
-            .system-grid { grid-template-columns: 1fr 1fr; } } @media
-            (max-width: 760px) { .settings-page { padding: 22px 16px 40px; }
-            .settings-grid, .checkbox-list, .system-grid {
-            grid-template-columns: 1fr; } .section-head { flex-direction:
-            column; align-items: flex-start; } }
+          </div>
+          <div class="form-row">
+            <label class="field">Gemini API Key
+              <input id="gemini-key" type="password" placeholder="gAI...xyz" />
+            </label>
+            <button id="toggle-gemini" class="secondary-button" type="button">Show</button>
+            <button id="save-gemini" class="primary-button" type="button">Save</button>
+            <button id="test-gemini" class="secondary-button" type="button">Test Connection</button>
+          </div>
+        </section>
+
+        <section class="settings-section gtss-card">
+          <div class="section-head">
+            <h2>Daily Action Limits</h2>
+            <div>
+              <button id="reset-limits" class="secondary-button" type="button">Reset to Defaults</button>
+              <button id="save-limits" class="primary-button" type="button">Save Limits</button>
+            </div>
+          </div>
+          <div class="limits-table-wrap">
+            <table class="limits-table">
+              <thead>
+                <tr>
+                  <th>Platform</th>
+                  <th>Connections/Requests</th>
+                  <th>DMs</th>
+                  <th>Follows</th>
+                  <th>Likes</th>
+                </tr>
+              </thead>
+              <tbody id="limits-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="settings-section gtss-card">
+          <div class="section-head">
+            <h2>Pipeline Configuration</h2>
+            <div>
+              <button id="save-pipeline" class="primary-button" type="button">Save Pipeline Settings</button>
+              <button id="run-pipeline" class="secondary-button" type="button">▶ Run Pipeline Now</button>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <div class="form-row">
+              <label class="field">Pipeline Mode
+                <select id="pipeline-mode">
+                  <option value="ai">AI (Gemini + fallback)</option>
+                  <option value="manual">Manual (templates/rules only)</option>
+                </select>
+              </label>
+              <label class="field">Auto-approve Variant
+                <select id="pipeline-auto-approve">
+                  <option value="B">Variant B</option>
+                  <option value="A">Variant A</option>
+                </select>
+              </label>
+              <label class="field">Pipeline Schedule (Cron)
+                <input id="pipeline-cron" type="text" placeholder="0 8 * * *" />
+              </label>
+            </div>
+
+            <div class="form-row">
+              <label class="field">Discovery Mode Override
+                <select id="discovery-mode" class="stage-mode-override">
+                  <option value="">Inherit from Pipeline Mode</option>
+                  <option value="ai">AI</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </label>
+              <label class="field">Qualification Mode Override
+                <select id="qualification-mode" class="stage-mode-override">
+                  <option value="">Inherit from Pipeline Mode</option>
+                  <option value="ai">AI</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </label>
+              <label class="field">Message Mode Override
+                <select id="message-mode" class="stage-mode-override">
+                  <option value="">Inherit from Pipeline Mode</option>
+                  <option value="ai">AI</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="form-row">
+              <label class="field">Qualification Threshold (0-100)
+                <input id="qualification-threshold" type="number" min="0" max="100" placeholder="50" />
+              </label>
+              <label class="field">Manual Qualification Score
+                <input id="qualification-manual-score" type="number" min="0" max="100" placeholder="75" />
+              </label>
+            </div>
+
+            <div class="form-row">
+              <label class="field">LinkedIn Outreach Mode
+                <select id="linkedin-outreach-mode">
+                  <option value="connect_first">Connect First (Warm up with Connection request)</option>
+                  <option value="dm_only">Direct Message Only (Direct DM / InMail)</option>
+                </select>
+              </label>
+              <label class="field">X Outreach Mode
+                <select id="x-outreach-mode">
+                  <option value="follow_first">Follow First (Warm up with Follow, then DM)</option>
+                  <option value="dm_only">Direct Message Only (DM directly without follow)</option>
+                  <option value="dm_first">Direct Message First (DM first, follow if failed/needed)</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div style="margin-top: 18px">
+            <h3 style="margin: 0 0 12px">Discovery Keywords</h3>
+            <p class="muted" style="font-size: 12px; margin: 0 0 10px">
+              Keywords are also configurable in the
+              <strong>Brand &amp; Audience Context</strong> section above,
+              where they are saved to the central context store and shared with
+              all pipeline workflows.
+            </p>
+            <div
+              id="keywords-list"
+              class="form-grid"
+              style="gap: 6px; max-height: 200px; overflow-y: auto"
+            ></div>
+            <div class="form-row" style="margin-top: 10px">
+              <label class="field" style="flex: 3">
+                <input
+                  id="new-keyword"
+                  type="text"
+                  placeholder="Add keyword, e.g. restaurant owner Nairobi"
+                />
+              </label>
+              <button id="add-keyword" class="primary-button" type="button">Add Keyword</button>
+            </div>
+          </div>
+
+          <div style="margin-top: 18px">
+            <h3 style="margin: 0 0 12px">Recent Pipeline Runs</h3>
+            <div class="limits-table-wrap">
+              <table class="limits-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Trigger</th>
+                    <th>Mode</th>
+                    <th>Status</th>
+                    <th>Started</th>
+                    <th>Discovery</th>
+                    <th>Qualified</th>
+                    <th>Messages</th>
+                    <th>Sent</th>
+                  </tr>
+                </thead>
+                <tbody id="pipeline-runs-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <span
+            id="pipeline-result"
+            class="inline-result"
+            style="margin-top: 10px; display: block"
+          ></span>
+        </section>
+
+        <section class="settings-section gtss-card">
+          <div class="section-head">
+            <h2>Notification Settings</h2>
+            <span id="email-result" class="inline-result"></span>
+          </div>
+          <div class="form-grid">
+            <div class="form-row">
+              <label class="field">Gmail address
+                <input id="gmail-user" type="email" placeholder="you@gmail.com" />
+              </label>
+              <label class="field">Gmail app password
+                <input id="gmail-password" type="password" />
+              </label>
+              <button id="toggle-gmail" class="secondary-button" type="button">Show</button>
+              <button id="save-gmail" class="primary-button" type="button">Save</button>
+              <button id="test-email" class="secondary-button" type="button">Send Test Email</button>
+            </div>
             <div class="checkbox-list">
-              <label
-                ><input
-                  class="notification-checkbox"
-                  data-key="lead_replies"
-                  type="checkbox"
-                />
-                Lead replies</label
-              >
-              <label
-                ><input
-                  class="notification-checkbox"
-                  data-key="session_expired"
-                  type="checkbox"
-                />
-                Session expired</label
-              >
-              <label
-                ><input
-                  class="notification-checkbox"
-                  data-key="daily_limit_reached"
-                  type="checkbox"
-                />
-                Daily limit reached</label
-              >
-              <label
-                ><input
-                  class="notification-checkbox"
-                  data-key="automation_errors"
-                  type="checkbox"
-                />
-                Automation errors</label
-              >
+              <label><input class="notification-checkbox" data-key="lead_replies" type="checkbox" /> Lead replies</label>
+              <label><input class="notification-checkbox" data-key="session_expired" type="checkbox" /> Session expired</label>
+              <label><input class="notification-checkbox" data-key="daily_limit_reached" type="checkbox" /> Daily limit reached</label>
+              <label><input class="notification-checkbox" data-key="automation_errors" type="checkbox" /> Automation errors</label>
             </div>
           </div>
         </section>

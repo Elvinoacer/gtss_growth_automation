@@ -11,7 +11,8 @@ const fileMap = {
   Settings: 'settings.html',
   InstagramWarmup: 'instagram-warmup.html',
   Campaigns: 'campaigns.html',
-  CampaignDetail: 'campaign-detail.html'
+  CampaignDetail: 'campaign-detail.html',
+  Pipelines: 'pipelines.html'
 };
 
 function renderPage(res, page) {

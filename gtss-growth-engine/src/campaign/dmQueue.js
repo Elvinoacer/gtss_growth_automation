@@ -84,6 +84,8 @@ async function processDmQueue(page, options = {}) {
 
   const maxRetries = options.maxRetries || 5;
   const expiredPlatforms = new Set();
+  const maxDmsPerRun = options.maxDmsPerRun;
+  let dmsSentThisRun = 0;
 
   queueLog(
     "info",
@@ -136,6 +138,15 @@ async function processDmQueue(page, options = {}) {
   );
 
   for (const job of eligibleJobs) {
+    if (typeof maxDmsPerRun === "number" && dmsSentThisRun >= maxDmsPerRun) {
+      queueLog(
+        "info",
+        "dm_queue",
+        "SYSTEM",
+        `Stopping DM processing: hit max_dms_per_run cap of ${maxDmsPerRun}.`,
+      );
+      break;
+    }
     // Isolated nested exception handling to guarantee queue survival
     try {
       const normPlatform = String(job.platform).toLowerCase().trim();
@@ -569,6 +580,7 @@ async function processDmQueue(page, options = {}) {
 
           queueLog("info", "dm_queue", job.id, "Successfully sent DM to lead.");
           report.success++;
+          dmsSentThisRun++;
         } else if (res.outcome === "skipped") {
           db.transaction(() => {
             db.prepare(

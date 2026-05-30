@@ -429,7 +429,29 @@ function initializeSchema(database) {
     );
   } catch (_) {}
 
+  try {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS pipeline_schedules (
+        id          TEXT PRIMARY KEY,          -- 'outreach' | 'content'
+        name        TEXT NOT NULL,
+        description TEXT,
+        enabled     INTEGER NOT NULL DEFAULT 0,
+        cron        TEXT NOT NULL,             -- standard 5-field cron expression
+        limits_json TEXT NOT NULL DEFAULT '{}', -- arbitrary per-pipeline limit bag
+        last_run_at DATETIME,
+        next_run_at DATETIME,
+        last_status TEXT,                       -- 'completed' | 'failed' | 'running'
+        run_count   INTEGER NOT NULL DEFAULT 0,
+        created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+  } catch (_) {
+    /* table exists */
+  }
+
   seedDefaultSettings(database);
+  seedDefaultPipelineSchedules(database);
 }
 
 function seedDefaultSettings(database) {
@@ -478,6 +500,48 @@ function seedDefaultSettings(database) {
       )
       .run("connect_first");
   }
+
+  // Seed content pipeline overlap lock
+  const contentPipelineLockRow = database
+    .prepare("SELECT value FROM settings WHERE key = 'content_pipeline_lock'")
+    .get();
+  if (!contentPipelineLockRow) {
+    database
+      .prepare(
+        "INSERT INTO settings (key, value) VALUES ('content_pipeline_lock', ?) ON CONFLICT(key) DO NOTHING",
+      )
+      .run("false");
+  }
+}
+
+function seedDefaultPipelineSchedules(database) {
+  // Outreach pipeline — disabled by default until user turns it on
+  database.prepare(`
+    INSERT OR IGNORE INTO pipeline_schedules
+      (id, name, description, enabled, cron, limits_json)
+    VALUES (
+      'outreach',
+      'Lead Outreach Pipeline',
+      'Discovery → Qualification → Message Generation → DM Send',
+      0,
+      '0 8 * * *',
+      '{"max_leads_per_keyword": 10, "max_dms_per_run": 20, "max_connections_per_run": 15}'
+    )
+  `).run();
+
+  // Content pipeline — disabled by default until user configures topic/platforms
+  database.prepare(`
+    INSERT OR IGNORE INTO pipeline_schedules
+      (id, name, description, enabled, cron, limits_json)
+    VALUES (
+      'content',
+      'Auto-Content Posting Pipeline',
+      'Gemini image generation → Caption generation → Multi-platform post',
+      0,
+      '0 9 * * *',
+      '{"platforms": ["instagram", "linkedin"], "topic": "", "style": "photorealistic", "max_posts_per_run": 1}'
+    )
+  `).run();
 }
 
 const db = openDatabase();

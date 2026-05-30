@@ -148,6 +148,23 @@ test.after(() => {
   cleanupTestImages();
 });
 
+test("preparePlatformPostBody keeps X captions inside 280 characters", () => {
+  const longCaption = `${"Growth automation ".repeat(30)} #nairobieats #restaurants`;
+  const prepared = schedulerService.preparePlatformPostBody("x", longCaption);
+
+  assert.ok(prepared.length <= 280, `X caption was ${prepared.length} chars`);
+  assert.match(prepared, /\.\.\.$/);
+});
+
+test("preparePlatformPostBody adds a trailing space after final Facebook hashtag", () => {
+  const prepared = schedulerService.preparePlatformPostBody(
+    "facebook",
+    "Fresh lunch ideas for teams #nairobieats",
+  );
+
+  assert.equal(prepared.endsWith("#nairobieats "), true);
+});
+
 test("validateForFeed correctly qualifies and rejects formats, sizes, and ratios", async () => {
   // Valid Square
   const resSquare = await imageValidator.validateForFeed(path.join(TEST_DIR, "square.jpg"));

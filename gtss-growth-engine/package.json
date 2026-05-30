@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test",
+    "test": "NODE_ENV=test TEST_NO_BROWSER_LAUNCH=true DISABLE_CDP_AUTO_LAUNCH=true node --test",
     "migrate:retry-columns": "node scripts/migrate-retry-columns.js",
     "migrate:message-columns": "node scripts/migrate-message-columns.js",
     "migrate:pipeline": "node scripts/migrate-pipeline.js",

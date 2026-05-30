@@ -695,7 +695,7 @@ async function createValidatedBrowser(platform, emit) {
   return { browserState: null, authState: lastState };
 }
 
-async function processActionQueue(jobId, sseRes) {
+async function processActionQueue(jobId, sseRes, options = {}) {
   const emit = createEmitter(sseRes);
 
   if (ACTIVE_JOB_ID) {
@@ -752,6 +752,8 @@ async function processActionQueue(jobId, sseRes) {
     let successes = 0;
     let failures = 0;
     let skipped = 0;
+    const maxDmsPerRun = options.maxDmsPerRun;
+    let dmsSentThisRun = 0;
 
     // Cache one browser/tab per platform — reuse across all actions in this run
     const browserCache = new Map();
@@ -807,6 +809,13 @@ async function processActionQueue(jobId, sseRes) {
 
       const { platform } = action;
       const actionType = determineActionType(action);
+      const isDm = actionType === "dm" || actionType === "instagram_dm";
+
+      if (isDm && typeof maxDmsPerRun === "number" && dmsSentThisRun >= maxDmsPerRun) {
+        emit("info", `Stopping DM actions: hit max_dms_per_run cap of ${maxDmsPerRun}.`);
+        break;
+      }
+
       const eventBase = {
         platform,
         actionType,
@@ -1001,7 +1010,12 @@ async function processActionQueue(jobId, sseRes) {
           },
         });
 
-        if (outcomeObj.outcome === "sent") successes++;
+        if (outcomeObj.outcome === "sent") {
+          successes++;
+          if (actionType === "dm" || actionType === "instagram_dm") {
+            dmsSentThisRun++;
+          }
+        }
         else if (
           [
             "skipped",
@@ -1111,8 +1125,8 @@ async function processActionQueue(jobId, sseRes) {
   }
 }
 
-function enqueueActionQueue(jobId, sseRes) {
-  const run = () => processActionQueue(jobId, sseRes);
+function enqueueActionQueue(jobId, sseRes, options = {}) {
+  const run = () => processActionQueue(jobId, sseRes, options);
   const queuedRun = RUN_QUEUE.then(run, run);
   RUN_QUEUE = queuedRun.catch((error) => {
     logger.error("AUTOMATION", "Queued automation run failed", error);

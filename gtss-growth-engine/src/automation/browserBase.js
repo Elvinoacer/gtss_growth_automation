@@ -11,6 +11,82 @@ const { markSessionInvalid } = require("./sessionManager");
 const { sendNotification } = require("../services/notificationService");
 const { getDb } = require("../db/database");
 const { getContext } = require("../services/contextService");
+const { spawn } = require("child_process");
+const net = require("net");
+
+function isPortOpen(port) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const onError = () => {
+      socket.destroy();
+      resolve(false);
+    };
+    socket.setTimeout(1000);
+    socket.once("error", onError);
+    socket.once("timeout", onError);
+    socket.connect(port, "127.0.0.1", () => {
+      socket.end();
+      resolve(true);
+    });
+  });
+}
+
+function getPortFromEndpoint(endpoint) {
+  try {
+    const url = new URL(endpoint);
+    return parseInt(url.port) || 9222;
+  } catch (_) {
+    const match = endpoint.match(/:(\d+)/);
+    return match ? parseInt(match[1]) : 9222;
+  }
+}
+
+function isTruthyEnv(value) {
+  return ["1", "true", "yes", "on"].includes(
+    String(value || "")
+      .trim()
+      .toLowerCase(),
+  );
+}
+
+function shouldAutoLaunchCdp() {
+  return !isTruthyEnv(process.env.DISABLE_CDP_AUTO_LAUNCH);
+}
+
+function shouldAllowStandaloneBrowserLaunch() {
+  return !isTruthyEnv(process.env.TEST_NO_BROWSER_LAUNCH);
+}
+
+async function launchCdpChrome(port = 9222) {
+  if (!shouldAutoLaunchCdp()) {
+    logger.info(
+      "BROWSER",
+      `CDP port ${port} is closed and CDP auto-launch is disabled.`,
+    );
+    return false;
+  }
+
+  logger.info("BROWSER", `CDP port ${port} is closed. Launching Chrome with remote debugging...`);
+  const scriptPath = path.resolve(__dirname, "../../scripts/launch-chrome.sh");
+  const env = { ...process.env, CDP_PORT: String(port) };
+  
+  const child = spawn("bash", [scriptPath], {
+    detached: true,
+    stdio: "ignore",
+    env,
+  });
+  child.unref();
+
+  for (let i = 0; i < 10; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    if (await isPortOpen(port)) {
+      logger.info("BROWSER", `Chrome CDP started successfully and is listening on port ${port}.`);
+      return true;
+    }
+  }
+  logger.warn("BROWSER", `Failed to detect Chrome CDP listening on port ${port} after 5 seconds.`);
+  return false;
+}
 
 // Tracks the last date warmup was completed (format: "YYYY-MM-DD")
 let _lastWarmupDate = null;
@@ -823,6 +899,13 @@ async function createBrowser(platform, options = {}) {
       );
     }
 
+    const port = getPortFromEndpoint(cdpEndpoint);
+    const isOpen = await isPortOpen(port);
+    if (!isOpen) {
+      await launchCdpChrome(port);
+    }
+
+
     try {
       lock = acquireBrowserLock(platform, mode, cdpEndpoint);
       const browser = await chromium.connectOverCDP(cdpEndpoint);
@@ -861,6 +944,12 @@ async function createBrowser(platform, options = {}) {
   }
 
   if (mode === "persistent") {
+    if (!shouldAllowStandaloneBrowserLaunch()) {
+      throw new Error(
+        `Standalone persistent browser launch is disabled for ${platform}. Use the shared CDP Chrome session instead.`,
+      );
+    }
+
     const userDataDir = getProfileDir(platform, options);
     fs.mkdirSync(userDataDir, { recursive: true });
 
@@ -900,6 +989,12 @@ async function createBrowser(platform, options = {}) {
       releaseBrowserLock(lock);
       throw error;
     }
+  }
+
+  if (!shouldAllowStandaloneBrowserLaunch()) {
+    throw new Error(
+      `Standalone Chromium launch is disabled for ${platform}. Use the shared CDP Chrome session instead.`,
+    );
   }
 
   const browser = await chromium.launch({ headless });
@@ -1450,6 +1545,12 @@ async function createInstagramBrowser(options = {}) {
   if (requestedMode !== "persistent" && cdpEndpoint) {
     let lock = null;
 
+    const port = getPortFromEndpoint(cdpEndpoint);
+    const isOpen = await isPortOpen(port);
+    if (!isOpen) {
+      await launchCdpChrome(port);
+    }
+
     try {
       lock = acquireBrowserLock("instagram", "cdp", cdpEndpoint);
       logger.info(
@@ -1575,6 +1676,12 @@ async function createInstagramBrowser(options = {}) {
   }
 
   logger.info("BROWSER", "Launching standalone Instagram Chromium instance...");
+
+  if (!shouldAllowStandaloneBrowserLaunch()) {
+    throw new Error(
+      "Standalone Chromium launch is disabled for this run. Use the shared CDP Chrome session instead.",
+    );
+  }
 
   const browser = await chromium.launch({
     headless: false,

@@ -471,6 +471,62 @@ function normalizeLinkedInText(text) {
   return normalized;
 }
 
+function normalizePlainPostText(text) {
+  return decodeHtmlEntities(text)
+    .normalize("NFKC")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\u00A0/g, " ")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[–—]/g, "-")
+    .replace(/…/g, "...")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function truncateForLimit(text, limit) {
+  const normalized = normalizePlainPostText(text);
+  if (normalized.length <= limit) return normalized;
+
+  const suffix = "...";
+  const hardLimit = Math.max(0, limit - suffix.length);
+  let candidate = normalized.slice(0, hardLimit).trimEnd();
+  const lastWhitespace = candidate.search(/\s+\S*$/);
+  if (lastWhitespace > Math.floor(limit * 0.72)) {
+    candidate = candidate.slice(0, lastWhitespace).trimEnd();
+  }
+
+  return `${candidate.replace(/[.,;:!?-]+$/g, "")}${suffix}`.slice(0, limit);
+}
+
+function preparePlatformPostBody(platform, body) {
+  const normalizedPlatform = String(platform || "").toLowerCase();
+
+  if (normalizedPlatform === "linkedin") {
+    return normalizeLinkedInText(body);
+  }
+
+  if (normalizedPlatform === "x") {
+    return truncateForLimit(body, POST_CHAR_LIMITS.x);
+  }
+
+  const normalized = normalizePlainPostText(body);
+
+  if (normalizedPlatform === "facebook") {
+    // Facebook opens hashtag suggestion overlays while the caret sits at the
+    // end of a tag. A trailing space commits the tag and keeps Post clickable.
+    return /(^|\s)#[\p{L}\p{N}_]+$/u.test(normalized)
+      ? `${normalized} `
+      : normalized;
+  }
+
+  return normalized;
+}
+
 function resolveMediaFilePath(mediaPath) {
   if (!mediaPath) return null;
 
@@ -900,6 +956,8 @@ async function postToLinkedIn(page, body, mediaPath, emit) {
 
 async function postToX(page, body, mediaPath, emit) {
   try {
+    const cleanBody = preparePlatformPostBody("x", body);
+
     // Navigate to X home — the compose modal must be triggered from here
     await page.goto("https://x.com/home", {
       waitUntil: "domcontentloaded",
@@ -981,7 +1039,7 @@ async function postToX(page, body, mediaPath, emit) {
 
     await editor.locator.click();
     await humanDelay(500, 1000);
-    await humanTypeText(page, editor.locator, body);
+    await humanTypeText(page, editor.locator, cleanBody);
     await humanDelay(1000, 2000);
 
     // ── Media attachment ───────────────────────────────────────────────────
@@ -1066,6 +1124,8 @@ async function postToX(page, body, mediaPath, emit) {
 
 async function postToFacebook(page, body, mediaPath, emit) {
   try {
+    const cleanBody = preparePlatformPostBody("facebook", body);
+
     await page.goto("https://www.facebook.com/", {
       waitUntil: "domcontentloaded",
       timeout: 30000,
@@ -1153,7 +1213,9 @@ async function postToFacebook(page, body, mediaPath, emit) {
     await editor.locator.click();
     await humanDelay(500, 1000);
 
-    await humanTypeText(page, editor.locator, body);
+    await humanTypeText(page, editor.locator, cleanBody);
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.keyboard.press("Escape").catch(() => {});
     await humanDelay(1000, 2000);
 
     // ── Step 4: Attach media if provided ──────────────────────────────────
@@ -1203,6 +1265,8 @@ async function postToFacebook(page, body, mediaPath, emit) {
     }
 
     // ── Step 5: Click the Post button ─────────────────────────────────────
+    await page.keyboard.press("Escape").catch(() => {});
+    await humanDelay(500, 900);
     emit({ type: "info", platform: "facebook", message: "Submitting post..." });
 
     const postBtnSelectors = [
@@ -1446,24 +1510,25 @@ async function publishPost(postId, emit, browserOptions = {}) {
       browser = browserState.browser;
       context = browserState.context;
       const page = browserState.page;
+      const platformBody = preparePlatformPostBody(platform, post.body);
 
       let success = false;
       switch (platform) {
         case "linkedin":
           success = await postToLinkedIn(
             page,
-            post.body,
+            platformBody,
             post.media_path,
             emit,
           );
           break;
         case "x":
-          success = await postToX(page, post.body, post.media_path, emit);
+          success = await postToX(page, platformBody, post.media_path, emit);
           break;
         case "facebook":
           success = await postToFacebook(
             page,
-            post.body,
+            platformBody,
             post.media_path,
             emit,
           );
@@ -1492,7 +1557,7 @@ async function publishPost(postId, emit, browserOptions = {}) {
                 page,
                 {
                   imagePaths: getPostMediaPaths(post),
-                  caption: post.body,
+                  caption: platformBody,
                   locationTag,
                 },
                 emit,
@@ -1509,7 +1574,7 @@ async function publishPost(postId, emit, browserOptions = {}) {
             } else {
               const res = await instagram.postImage(
                 page,
-                { imagePath: post.media_path, caption: post.body, locationTag },
+                { imagePath: post.media_path, caption: platformBody, locationTag },
                 emit,
               );
               success = res.success;
@@ -1629,12 +1694,13 @@ Platform character limit: ${limit}
 Target audience: ${ctx.ctx_audience_ideal_profile}
 Location context: ${Array.isArray(ctx.ctx_audience_geographies) ? ctx.ctx_audience_geographies[0] : "Kenya"}
 End with this call to action: ${ctx.ctx_content_cta}
-${platformHashtags ? `Append these hashtags: ${platformHashtags}` : ""}
+${platformHashtags ? `Append these hashtags only if the final text still fits inside the character limit: ${platformHashtags}` : ""}
 Use plain text only. Do not use markdown formatting, HTML entities, bullets, or special styling characters.
+For X, the final caption must be ${POST_CHAR_LIMITS.x} characters or fewer including spaces and hashtags.
 Return ONLY the caption text, no explanations.`;
 
   const caption = await callGeminiText(prompt);
-  return platform === "linkedin" ? normalizeLinkedInText(caption) : caption;
+  return preparePlatformPostBody(platform, caption);
 }
 
 module.exports = {
@@ -1644,6 +1710,7 @@ module.exports = {
   emitJobEvent,
   closeJobStream,
   POST_CHAR_LIMITS,
+  preparePlatformPostBody,
   getPostMediaPaths,
   getPrimaryPostMediaPath,
   getPostLocationTag,

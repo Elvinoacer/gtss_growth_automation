@@ -29,7 +29,7 @@ const logger = require('../utils/logger');
  * @param {Function} emit - Event emitter for pipeline SSE stream
  * @returns {Promise<{sent: number, failed: number, skipped: number, limitReached: boolean}>}
  */
-async function runSendStage(pipelineRunId, emit) {
+async function runSendStage(pipelineRunId, emit, maxDmsPerRun) {
   const db = getDb();
 
   // ── 1. Check the queue ──────────────────────────────────────────────────
@@ -98,7 +98,7 @@ async function runSendStage(pipelineRunId, emit) {
   const jobId = crypto.randomUUID();
 
   try {
-    await enqueueActionQueue(jobId, null);
+    await enqueueActionQueue(jobId, null, { maxDmsPerRun });
   } catch (err) {
     logger.error('PIPELINE', 'Executor error during send stage', { error: err.message });
     emit({ type: 'error', message: `Executor error: ${err.message}` });

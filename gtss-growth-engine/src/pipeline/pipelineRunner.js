@@ -199,6 +199,10 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
     process.env.PIPELINE_MODE = options.mode;
   }
 
+  const limits = options.limits || {};
+  const maxLeadsPerKeyword = limits.max_leads_per_keyword;
+  const maxDmsPerRun = limits.max_dms_per_run;
+
   const pipelineRunId = createPipelineRun(triggerSource);
   const emit = buildPipelineEmitter(pipelineRunId);
 
@@ -220,7 +224,7 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
     if (stagesToRun.includes("discovery")) {
       emit({ type: "stage", message: "Starting Stage 1: Lead Discovery" });
       try {
-        const result = await runDiscoveryStage(pipelineRunId, emit);
+        const result = await runDiscoveryStage(pipelineRunId, emit, maxLeadsPerKeyword);
         emit({
           type: "stage_done",
           message: `Discovery: ${result.newLeads} new leads found across ${result.keywordsRun} keywords`,
@@ -283,7 +287,7 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
     if (stagesToRun.includes("send")) {
       emit({ type: "stage", message: "Starting Stage 4: Send" });
       try {
-        const result = await runSendStage(pipelineRunId, emit);
+        const result = await runSendStage(pipelineRunId, emit, maxDmsPerRun);
         emit({
           type: "stage_done",
           message: `Send: ${result.sent} sent, ${result.failed} failed, ${result.skipped} skipped`,

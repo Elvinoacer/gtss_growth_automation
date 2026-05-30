@@ -157,3 +157,19 @@ CREATE TABLE IF NOT EXISTS image_gen_jobs (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   completed_at DATETIME
 );
+
+CREATE TABLE IF NOT EXISTS pipeline_schedules (
+  id          TEXT PRIMARY KEY,          -- 'outreach' | 'content'
+  name        TEXT NOT NULL,
+  description TEXT,
+  enabled     INTEGER NOT NULL DEFAULT 0,
+  cron        TEXT NOT NULL,             -- standard 5-field cron expression
+  limits_json TEXT NOT NULL DEFAULT '{}', -- arbitrary per-pipeline limit bag
+  last_run_at DATETIME,
+  next_run_at DATETIME,
+  last_status TEXT,                       -- 'completed' | 'failed' | 'running'
+  run_count   INTEGER NOT NULL DEFAULT 0,
+  created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+

@@ -256,10 +256,22 @@ test("Instagram module exports all 10 outreach functions", () => {
 });
 
 test("Inbox helpers delegate to the working reply checker or report unsupported operations", async () => {
-  const inboxResult = await instagram.checkInbox();
-  assert.equal(inboxResult.success, true);
-  assert.equal(typeof inboxResult.primaryUnreadCount, "number");
-  assert.equal(typeof inboxResult.requestsCount, "number");
+  const replyChecker = require("../src/services/instagramReplyChecker");
+  const originalCheckInbox = replyChecker.checkInbox;
+  replyChecker.checkInbox = async () => ({
+    success: true,
+    primaryUnreadCount: 0,
+    requestsCount: 0,
+  });
+
+  try {
+    const inboxResult = await instagram.checkInbox();
+    assert.equal(inboxResult.success, true);
+    assert.equal(typeof inboxResult.primaryUnreadCount, "number");
+    assert.equal(typeof inboxResult.requestsCount, "number");
+  } finally {
+    replyChecker.checkInbox = originalCheckInbox;
+  }
 
   const scrapeResult = await instagram.scrapeProfile();
   assert.deepEqual(scrapeResult, {

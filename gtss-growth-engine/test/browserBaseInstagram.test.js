@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const { chromium } = require("playwright");
 const {
   checkInstagramSessionState,
   checkForInstagramBlock,
@@ -177,13 +178,55 @@ test("dailySessionWarmup executes simulateOrganicBrowse and completes", async ()
 });
 
 test("createInstagramBrowser launches headed, configured with Nairobi geolocation", async () => {
-  const browserState = await createInstagramBrowser();
-  assert.equal(browserState.platform, "instagram");
-  assert.equal(browserState.mode, "ephemeral");
-  assert.ok(browserState.browser);
-  assert.ok(browserState.context);
-  assert.ok(browserState.page);
-  
-  // Close the browser afterwards
-  await browserState.browser.close();
+  const originalConnectOverCDP = chromium.connectOverCDP;
+  const originalLaunch = chromium.launch;
+  const events = {};
+  const page = createMockInstagramPage({
+    url: "https://www.instagram.com/",
+    visibleSelectors: ['a[href="/"]', 'svg[aria-label="Home"]'],
+  });
+  page.bringToFront = async () => {};
+  page.close = async () => {};
+  page.waitForTimeout = async () => {};
+  page.context = () => context;
+
+  const context = {
+    addInitScript: async () => {},
+    grantPermissions: async () => {},
+    setGeolocation: async () => {},
+    addCookies: async () => {},
+    pages: () => [page],
+    newPage: async () => page,
+    once: (event, handler) => {
+      events[`context:${event}`] = handler;
+    },
+    tracing: { start: async () => {} },
+  };
+  const browser = {
+    contexts: () => [context],
+    once: (event, handler) => {
+      events[`browser:${event}`] = handler;
+    },
+    close: async () => {},
+  };
+
+  chromium.connectOverCDP = async () => browser;
+  chromium.launch = async () => {
+    throw new Error("createInstagramBrowser should use shared CDP in tests");
+  };
+
+  try {
+    const browserState = await createInstagramBrowser({
+      cdpEndpoint: "http://127.0.0.1:39999",
+      skipDailyWarmup: true,
+    });
+    assert.equal(browserState.platform, "instagram");
+    assert.equal(browserState.mode, "cdp");
+    assert.equal(browserState.browser, browser);
+    assert.equal(browserState.context, context);
+    assert.equal(browserState.page, page);
+  } finally {
+    chromium.connectOverCDP = originalConnectOverCDP;
+    chromium.launch = originalLaunch;
+  }
 });
