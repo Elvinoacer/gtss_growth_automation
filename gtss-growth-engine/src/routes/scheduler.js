@@ -14,6 +14,7 @@ const {
   closeJobStream,
   POST_CHAR_LIMITS,
 } = require("../services/schedulerService");
+const { runImageGenJob } = require("../services/imageGenService");
 const logger = require("../utils/logger");
 const { broadcast } = require("../services/socketService");
 
@@ -699,6 +700,34 @@ router.post("/api/scheduler/generate-caption", async (req, res) => {
     logger.error("Caption generation failed", { error: error.message });
     res.status(500).json({ error: error.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// API: AI Image Generation (Gemini Web)
+// ---------------------------------------------------------------------------
+
+router.post("/api/scheduler/generate-image", async (req, res) => {
+  const { topic, style, platform } = req.body;
+  if (!topic) return res.status(400).json({ error: "topic is required" });
+
+  // Return the jobId immediately; client subscribes to SSE stream for progress
+  const jobId = crypto.randomUUID();
+  res.json({ jobId });
+
+  // Run async - do NOT await here
+  runImageGenJob({ jobId, topic, style, platform }).catch((err) =>
+    logger.error("IMAGE_GEN_ROUTE", err.message),
+  );
+});
+
+// Query job status + result
+router.get("/api/scheduler/generate-image/:jobId", (req, res) => {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT * FROM image_gen_jobs WHERE id=?")
+    .get(req.params.jobId);
+  if (!row) return res.status(404).json({ error: "Job not found" });
+  res.json(row);
 });
 
 // ---------------------------------------------------------------------------

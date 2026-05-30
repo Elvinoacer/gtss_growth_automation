@@ -316,6 +316,47 @@
         </div>
       </div>
 
+      <!-- Gemini Image Test -->
+      <div class="bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm p-4 flex flex-col gap-3">
+        <div class="flex items-center justify-between gap-3">
+          <h3 class="text-[16px] font-semibold text-on-surface flex items-center gap-2">
+            <span class="material-symbols-outlined text-primary text-[18px]">image</span>
+            Gemini Image
+          </h3>
+          <span id="image-gen-status" class="text-body-xs text-on-surface-variant">Idle</span>
+        </div>
+        <textarea id="image-gen-topic" class="w-full rounded border border-outline-variant bg-surface p-2 text-body-xs text-on-surface focus:border-primary focus:ring-1 focus:ring-primary resize-none" rows="3" placeholder="Image topic or description"></textarea>
+        <div class="grid grid-cols-2 gap-2">
+          <select id="image-gen-style" class="rounded border border-outline-variant bg-surface p-2 text-body-xs h-9">
+            <option value="photorealistic">Photorealistic</option>
+            <option value="cinematic">Cinematic</option>
+            <option value="editorial">Editorial</option>
+            <option value="minimalist">Minimalist</option>
+          </select>
+          <select id="image-gen-platform" class="rounded border border-outline-variant bg-surface p-2 text-body-xs h-9">
+            <option value="instagram">Instagram</option>
+            <option value="linkedin">LinkedIn</option>
+            <option value="facebook">Facebook</option>
+            <option value="x">X</option>
+          </select>
+        </div>
+        <button id="image-gen-start-btn" class="bg-secondary-container text-on-surface h-9 rounded text-body-sm font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition-opacity">
+          <span class="material-symbols-outlined text-[16px]">auto_awesome</span>
+          Generate Image
+        </button>
+        <div id="image-gen-output" class="hidden rounded border border-outline-variant/70 bg-surface p-3 flex flex-col gap-2">
+          <div>
+            <div class="font-label-caps text-label-caps text-on-surface-variant mb-1">PROMPT</div>
+            <p id="image-gen-prompt" class="text-body-xs text-on-surface-variant max-h-28 overflow-y-auto whitespace-pre-wrap"></p>
+          </div>
+          <div>
+            <div class="font-label-caps text-label-caps text-on-surface-variant mb-1">SAVED FILE</div>
+            <p id="image-gen-file" class="text-body-xs text-on-surface break-all"></p>
+          </div>
+        </div>
+        <div id="image-gen-log" class="hidden max-h-[180px] overflow-y-auto text-body-xs text-on-surface-variant space-y-1 font-mono-code border-t border-outline-variant/60 pt-2"></div>
+      </div>
+
       <!-- Live Publish Log -->
       <div id="live-log-panel" class="hidden bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm flex flex-col">
         <div class="p-3 border-b border-outline-variant flex items-center gap-2">

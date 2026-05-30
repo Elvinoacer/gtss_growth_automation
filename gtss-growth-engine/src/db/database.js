@@ -98,6 +98,24 @@ function initializeSchema(database) {
     /* tables exist */
   }
 
+  try {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS image_gen_jobs (
+        id           TEXT PRIMARY KEY,
+        meta_prompt  TEXT NOT NULL,
+        gen_prompt   TEXT,
+        status       TEXT DEFAULT 'pending',
+        file_path    TEXT,
+        file_name    TEXT,
+        error        TEXT,
+        created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+        completed_at DATETIME
+      );
+    `);
+  } catch (_) {
+    /* table exists */
+  }
+
   // Pipeline migrations
   try {
     database.exec(`

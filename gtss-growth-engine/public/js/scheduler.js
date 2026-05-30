@@ -47,6 +47,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const liveLogPanel = $("live-log-panel");
   const liveLogBody = $("live-log-body");
   const publishedBody = $("published-body");
+  const imageGenTopic = $("image-gen-topic");
+  const imageGenStyle = $("image-gen-style");
+  const imageGenPlatform = $("image-gen-platform");
+  const imageGenStartBtn = $("image-gen-start-btn");
+  const imageGenStatus = $("image-gen-status");
+  const imageGenOutput = $("image-gen-output");
+  const imageGenPrompt = $("image-gen-prompt");
+  const imageGenFile = $("image-gen-file");
+  const imageGenLog = $("image-gen-log");
 
   // Instagram Custom DOM refs
   const igPostOptions = $("ig-post-options");
@@ -634,6 +643,87 @@ document.addEventListener("DOMContentLoaded", () => {
     socket.on("scheduler:event", onSchedulerEvent);
   }
 
+  function appendImageGenLog(message, tone = "") {
+    if (!imageGenLog) return;
+    imageGenLog.classList.remove("hidden");
+    const line = document.createElement("div");
+    line.textContent = message;
+    if (tone === "error") line.classList.add("text-error");
+    if (tone === "success") line.classList.add("text-green-600");
+    imageGenLog.appendChild(line);
+    imageGenLog.scrollTop = imageGenLog.scrollHeight;
+  }
+
+  async function refreshImageGenResult(jobId) {
+    try {
+      const row = await fetchJSON(`/api/scheduler/generate-image/${jobId}`);
+      if (row.gen_prompt) {
+        imageGenOutput.classList.remove("hidden");
+        imageGenPrompt.textContent = row.gen_prompt;
+      }
+      if (row.file_path) {
+        imageGenOutput.classList.remove("hidden");
+        imageGenFile.textContent = row.file_path;
+      }
+      if (row.error) {
+        appendImageGenLog(row.error, "error");
+      }
+    } catch (err) {
+      appendImageGenLog(`Could not load job result: ${err.message}`, "error");
+    }
+  }
+
+  function startImageGenStream(jobId) {
+    imageGenStatus.textContent = "Running";
+    imageGenLog.innerHTML = "";
+    imageGenLog.classList.remove("hidden");
+    imageGenOutput.classList.add("hidden");
+    imageGenPrompt.textContent = "";
+    imageGenFile.textContent = "";
+
+    const stream = window.gtss.initSSE(
+      `/api/scheduler/stream/${jobId}`,
+      async (data) => {
+        if (!data) return;
+        if (data.type === "connected") {
+          appendImageGenLog("Connected to job stream.");
+          return;
+        }
+        if (data.jobId && String(data.jobId) !== String(jobId)) return;
+
+        appendImageGenLog(data.message || data.type);
+        if (data.genPrompt) {
+          imageGenOutput.classList.remove("hidden");
+          imageGenPrompt.textContent = data.genPrompt;
+        }
+        if (data.filePath) {
+          imageGenOutput.classList.remove("hidden");
+          imageGenFile.textContent = data.filePath;
+        }
+
+        if (data.type === "download_complete") {
+          imageGenStatus.textContent = "Complete";
+          appendImageGenLog("Download complete.", "success");
+          await refreshImageGenResult(jobId);
+          stream.close();
+          imageGenStartBtn.disabled = false;
+          imageGenStartBtn.innerHTML =
+            '<span class="material-symbols-outlined text-[16px]">auto_awesome</span> Generate Image';
+        }
+
+        if (data.type === "error") {
+          imageGenStatus.textContent = "Failed";
+          appendImageGenLog(data.message || "Image generation failed.", "error");
+          await refreshImageGenResult(jobId);
+          stream.close();
+          imageGenStartBtn.disabled = false;
+          imageGenStartBtn.innerHTML =
+            '<span class="material-symbols-outlined text-[16px]">auto_awesome</span> Generate Image';
+        }
+      },
+    );
+  }
+
   // ── Event Binding ──
 
   function bindEvents() {
@@ -821,6 +911,36 @@ document.addEventListener("DOMContentLoaded", () => {
           '<span class="material-symbols-outlined text-[16px]">auto_awesome</span> Generate';
       }
     });
+
+    if (imageGenStartBtn) {
+      imageGenStartBtn.addEventListener("click", async () => {
+        const topic = imageGenTopic.value.trim();
+        if (!topic) return showToast("Enter an image topic first", "error");
+
+        imageGenStartBtn.disabled = true;
+        imageGenStartBtn.innerHTML =
+          '<span class="material-symbols-outlined text-[16px] animate-spin">sync</span> Running...';
+        imageGenStatus.textContent = "Starting";
+
+        try {
+          const data = await fetchJSON("/api/scheduler/generate-image", {
+            method: "POST",
+            body: JSON.stringify({
+              topic,
+              style: imageGenStyle.value,
+              platform: imageGenPlatform.value,
+            }),
+          });
+          startImageGenStream(data.jobId);
+        } catch (err) {
+          imageGenStatus.textContent = "Failed";
+          imageGenStartBtn.disabled = false;
+          imageGenStartBtn.innerHTML =
+            '<span class="material-symbols-outlined text-[16px]">auto_awesome</span> Generate Image';
+          showToast(err.message, "error");
+        }
+      });
+    }
 
     // Post Now
     postNowBtn.addEventListener("click", async () => {
