@@ -5,6 +5,7 @@ const { getPrimaryPlatform } = require("./platformCatalog");
 const { callGeminiText } = require("./aiService");
 const logger = require("../utils/logger");
 const { stageMode, autoApproveVariant } = require("../config/pipelineConfig");
+const { getContext } = require("./contextService");
 
 // ---------------------------------------------------------------------------
 // SSE infrastructure (mirrors qualificationService pattern)
@@ -97,7 +98,9 @@ function loadTemplates() {
 function getTemplate(platform, type) {
   const db = getDb();
   const settingKey = `template_${platform}_${type || "dm"}`;
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(settingKey);
+  const row = db
+    .prepare("SELECT value FROM settings WHERE key = ?")
+    .get(settingKey);
   if (row && row.value) return row.value;
 
   const templates = loadTemplates();
@@ -119,15 +122,27 @@ function getFirstName(name) {
   return cleaned.split(/\s+/)[0];
 }
 
-function extractPainPoint(scoreReason) {
-  if (!scoreReason) return "managing restaurant operations more efficiently";
+function extractPainPoint(scoreReason, painPoints) {
+  // painPoints is the ctx_product_pain_points array from context
+  const fallback =
+    (painPoints && painPoints[0]) ||
+    "managing your operations more efficiently";
+  if (!scoreReason) return fallback;
+
   const lower = scoreReason.toLowerCase();
-  if (lower.includes("restaurant") || lower.includes("food")) return "streamlining restaurant operations and orders";
-  if (lower.includes("hotel")) return "optimising hotel staff scheduling and guest management";
-  if (lower.includes("cafe") || lower.includes("coffee")) return "managing café orders and inventory efficiently";
-  if (lower.includes("sme") || lower.includes("enterprise"))
-    return "simplifying business operations with smart software";
-  return "managing business operations more efficiently";
+  if (!painPoints || !Array.isArray(painPoints)) return fallback;
+
+  // Try to match a contextual pain point to the score reason keywords
+  for (const point of painPoints) {
+    const pointLower = point.toLowerCase();
+    if (lower.includes("restaurant") && pointLower.includes("restaurant"))
+      return point;
+    if (lower.includes("hotel") && pointLower.includes("hotel")) return point;
+    if (lower.includes("cafe") && pointLower.includes("cafe")) return point;
+    if (lower.includes("outage") && pointLower.includes("outage")) return point;
+  }
+
+  return fallback;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,32 +161,45 @@ function stripCodeFences(text) {
 
 /**
  * Generate messages from the canonical template.
- * Both variants A and B use the same template — personalised with lead name only.
+ * Both variants A and B use the same template - personalised with lead name only.
  * No AI generation is used for outreach DMs.
  *
  * @param {Object} lead - Lead record from DB
- * @param {string} [productPitch] - Unused, kept for API compatibility
  * @returns {{variantA: {id: number, body: string}, variantB: {id: number, body: string}}}
  */
-function generateFromTemplate(lead, productPitch) {
+function generateFromTemplate(lead) {
   const db = getDb();
+  const ctx = getContext();
   const resolvedPlatform = lead.platform || getPrimaryPlatform();
   const messageType = resolvedPlatform === "linkedin" ? "connect" : "dm";
   const template = getTemplate(resolvedPlatform, messageType);
+
+  const painPoints = Array.isArray(ctx.ctx_product_pain_points)
+    ? ctx.ctx_product_pain_points
+    : [];
+  const geographies = Array.isArray(ctx.ctx_audience_geographies)
+    ? ctx.ctx_audience_geographies
+    : [];
 
   const templateVars = {
     lead_name: getFirstName(lead.name),
     role: lead.role || "",
     company: lead.company || "your business",
-    location: lead.location || "Kenya",
-    product: productPitch || "Restaurant Manager",
-    pain_point: extractPainPoint(lead.score_reason),
+    location: lead.location || geographies[0] || "Kenya",
+    product: ctx.ctx_product_name,
+    product_tagline: ctx.ctx_product_tagline,
+    pain_point: extractPainPoint(lead.score_reason, painPoints),
+    value_prop: ctx.ctx_product_value_prop,
+    sender_name: ctx.ctx_sender_name,
+    sign_off: ctx.ctx_sender_sign_off,
+    cta: ctx.ctx_content_cta,
+    biz_name: ctx.ctx_biz_name,
   };
 
   // Both variants use the same canonical template
   let body = template
     ? fillTemplate(template, templateVars)
-    : `Hi ${templateVars.lead_name},\n\nI'm reaching out because I know how much of a nightmare it is when a sudden ISP outage brings a busy dining room to a standstill. I develop localized management systems specifically designed to maintain 100% operational uptime during internet drops—meaning kitchen routing and mobile payments keep flowing no matter what.\n\nIs relying on a stable connection something that currently causes friction for your front-of-house team?\n\nWould love to connect!\n\nBest,\nElvin`;
+    : `Hi ${templateVars.lead_name},\n\n${ctx.ctx_product_value_prop}\n\nWould love to connect!\n\n${ctx.ctx_sender_sign_off}`;
 
   // Strict character limit enforcement
   const limit = getCharLimit(resolvedPlatform, messageType);
@@ -202,8 +230,8 @@ async function generateMessages(leadId, platform, productPitch, tone) {
   const lead = db.prepare("SELECT * FROM leads WHERE id = ?").get(leadId);
   if (!lead) throw new Error(`Lead ${leadId} not found`);
 
-  // Always use template — no AI generation for outreach DMs
-  return generateFromTemplate(lead, productPitch);
+  // Always use template - productPitch parameter is deprecated, context is the source of truth
+  return generateFromTemplate(lead);
 }
 
 // ---------------------------------------------------------------------------
@@ -226,7 +254,12 @@ async function generateFollowUp(leadId) {
 
   const daysSince = originalMsg
     ? Math.floor(
-        (Date.now() - new Date(originalMsg.sent_at || originalMsg.approved_at || originalMsg.generated_at).getTime()) /
+        (Date.now() -
+          new Date(
+            originalMsg.sent_at ||
+              originalMsg.approved_at ||
+              originalMsg.generated_at,
+          ).getTime()) /
           86400000,
       )
     : 7;
@@ -255,7 +288,11 @@ Return ONLY the message body (max 300 chars).`;
 
     return { id: result.lastInsertRowid, body: cleanBody };
   } catch (error) {
-    logger.error("MESSAGES", `Failed to generate follow-up for lead ${leadId}`, error);
+    logger.error(
+      "MESSAGES",
+      `Failed to generate follow-up for lead ${leadId}`,
+      error,
+    );
     throw error;
   }
 }
@@ -296,7 +333,12 @@ async function generateAllMessages(jobId, productPitch, tone) {
 
       for (const lead of batch) {
         try {
-          const result = await generateMessages(lead.id, lead.platform, productPitch, tone);
+          const result = await generateMessages(
+            lead.id,
+            lead.platform,
+            null,
+            tone,
+          );
           succeeded++;
           emit({
             type: "generated",
@@ -413,7 +455,10 @@ async function runMessageStage(jobId, emit) {
         });
       }
     } catch (err) {
-      emit({ type: "warn", message: `Failed for ${lead.name || lead.id}: ${err.message}` });
+      emit({
+        type: "warn",
+        message: `Failed for ${lead.name || lead.id}: ${err.message}`,
+      });
     }
 
     // Batch delay every BATCH_SIZE leads

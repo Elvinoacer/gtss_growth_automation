@@ -848,10 +848,19 @@ async function followAccount(page, { username, leadId }, emitter) {
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
     await humanDelay(3000, 5000);
 
+    const blockCheck = await checkForInstagramBlock(page);
+    if (blockCheck.blocked) {
+      safeEmit(
+        emitter,
+        "error",
+        `Instagram block detected: ${blockCheck.reason}`,
+      );
+      return { success: false, error: blockCheck.reason };
+    }
+
     // 1. Locate current Follow action
     const followBtn = await firstVisible(page, IG_SELECTORS.followButton, 4000);
     if (!followBtn) {
-      safeEmit(emitter, "info", `Already following @${username}`);
       const unfollowBtn = await firstVisible(
         page,
         IG_SELECTORS.unfollowButton,
@@ -868,9 +877,17 @@ async function followAccount(page, { username, leadId }, emitter) {
           );
           return { success: true, requestPending: true };
         }
+
+        safeEmit(emitter, "info", `Already following @${username}`);
+        return { success: true, alreadyFollowing: true };
       }
 
-      return { success: true, alreadyFollowing: true };
+      safeEmit(
+        emitter,
+        "error",
+        `Could not find a follow control for @${resolvedUsername}`,
+      );
+      return { success: false, error: "follow_button_not_found" };
     }
 
     // Double check followBtn text in case it indicates requested/following state

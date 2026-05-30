@@ -1,5 +1,5 @@
 /**
- * GTSS Growth Engine Input Validation Utilities
+ * Growth Engine Input Validation Utilities
  */
 
 const { isKnownPlatform } = require("../services/platformCatalog");
@@ -57,17 +57,33 @@ function isValidPlatform(platform) {
  * Any status can always stay the same (no-op).
  */
 const VALID_TRANSITIONS = {
-  discovered:            ["qualified", "deprioritized", "dismissed", "pending_qualification"],
-  pending_qualification: ["qualified", "deprioritized", "dismissed", "discovered"],
-  scoring_failed:        ["qualified", "deprioritized", "dismissed", "discovered", "pending_qualification"],
-  qualified:             ["messaged", "deprioritized", "dismissed"],
-  deprioritized:         ["qualified", "dismissed", "discovered"],
-  dismissed:             ["discovered", "qualified", "deprioritized"],
-  messaged:              ["replied", "meeting_booked", "lost", "dismissed"],
-  replied:               ["meeting_booked", "converted", "lost"],
-  meeting_booked:        ["converted", "lost", "replied"],
-  converted:             ["lost"],
-  lost:                  ["messaged", "replied", "meeting_booked"],
+  discovered: [
+    "qualified",
+    "deprioritized",
+    "dismissed",
+    "pending_qualification",
+  ],
+  pending_qualification: [
+    "qualified",
+    "deprioritized",
+    "dismissed",
+    "discovered",
+  ],
+  scoring_failed: [
+    "qualified",
+    "deprioritized",
+    "dismissed",
+    "discovered",
+    "pending_qualification",
+  ],
+  qualified: ["messaged", "deprioritized", "dismissed"],
+  deprioritized: ["qualified", "dismissed", "discovered"],
+  dismissed: ["discovered", "qualified", "deprioritized"],
+  messaged: ["replied", "meeting_booked", "lost", "dismissed"],
+  replied: ["meeting_booked", "converted", "lost"],
+  meeting_booked: ["converted", "lost", "replied"],
+  converted: ["lost"],
+  lost: ["messaged", "replied", "meeting_booked"],
 };
 
 function isValidStatusTransition(oldStatus, newStatus) {

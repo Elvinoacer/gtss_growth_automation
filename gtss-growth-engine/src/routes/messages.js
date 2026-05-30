@@ -60,7 +60,7 @@ router.post("/api/messages/generate", async (req, res) => {
     const result = await generateMessages(
       leadId,
       platform || null,
-      productPitch || "Restaurant Manager",
+      null,
       tone || "friendly",
     );
 
@@ -289,7 +289,11 @@ router.patch("/api/messages/:id/approve", (req, res) => {
      WHERE lead_id = ? AND id != ? AND status = 'pending' AND is_follow_up = ?`,
   ).run(msg.lead_id, id, msg.is_follow_up);
 
-  broadcast('messages:mutation', { type: 'approved', messageId: id, leadId: msg.lead_id });
+  broadcast("messages:mutation", {
+    type: "approved",
+    messageId: id,
+    leadId: msg.lead_id,
+  });
   return res.json({ success: true, id });
 });
 
@@ -317,7 +321,11 @@ router.patch("/api/messages/:id/skip", (req, res) => {
     "UPDATE leads SET status = 'deprioritized', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
   ).run(msg.lead_id);
 
-  broadcast('messages:mutation', { type: 'skipped', messageId: id, leadId: msg.lead_id });
+  broadcast("messages:mutation", {
+    type: "skipped",
+    messageId: id,
+    leadId: msg.lead_id,
+  });
   return res.json({ success: true, id });
 });
 
@@ -343,7 +351,7 @@ router.post("/api/messages/:id/regenerate", async (req, res) => {
     const result = await generateMessages(
       msg.lead_id,
       msg.platform || null,
-      productPitch || "Restaurant Manager",
+      null,
       tone || "friendly",
     );
 

@@ -13,6 +13,7 @@ const { notFoundHandler, errorHandler } = require("./utils/errorHandlers");
 const { stopAllJobs } = require("./automation/executor");
 const { closeAllBrowsers } = require("./automation/browserBase");
 const { initSocketIO } = require("./services/socketService");
+const { getContext } = require("./services/contextService");
 const packageJson = require("../package.json");
 
 const app = express();
@@ -73,7 +74,7 @@ function performStartupChecks() {
   }
 }
 
-const { startBackgroundJobs } = require('./jobs/backgroundJobs');
+const { startBackgroundJobs } = require("./jobs/backgroundJobs");
 
 function startBackgroundJobsWorker() {
   if (
@@ -121,6 +122,7 @@ app.use("/", require("./routes/auth"));
 // Protected API Routes
 app.use("/api", require("./routes/api"));
 app.use("/api/settings", require("./routes/settings").apiRouter);
+app.use("/api/context", require("./routes/context"));
 app.use("/api/discovery", require("./routes/discovery"));
 app.use("/api/campaigns", require("./routes/campaigns"));
 
@@ -144,7 +146,7 @@ app.use(errorHandler);
 const server = app.listen(PORT, () => {
   logger.info(
     "SERVER",
-    `GTSS Growth Engine v${packageJson.version} started on http://localhost:${PORT}`,
+    `${getContext().ctx_biz_name} Growth Engine v${packageJson.version} started on http://localhost:${PORT}`,
   );
 
   // Initialize Socket.IO on the HTTP server

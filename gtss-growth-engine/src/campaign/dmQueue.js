@@ -12,6 +12,7 @@ const { getDb } = require("../db/database");
 const platformAdapter = require("./platformAdapter");
 const platformPolicies = require("../config/platformPolicies");
 const limits = require("../config/limits");
+const { getContext } = require("../services/contextService");
 const {
   calculateBackoffDelay,
   recordCampaignEvent,
@@ -34,7 +35,10 @@ try {
     db.exec("ALTER TABLE dm_jobs ADD COLUMN next_retry_at TEXT");
   }
 } catch (err) {
-  console.error("[DM-QUEUE] Defensively handled schema migration error on startup:", err.message);
+  console.error(
+    "[DM-QUEUE] Defensively handled schema migration error on startup:",
+    err.message,
+  );
 }
 
 /**
@@ -46,7 +50,10 @@ try {
 function isWithinActiveWindow(policy) {
   if (!policy || !policy.activeWindow) return true;
   const currentHour = new Date().getHours();
-  return currentHour >= policy.activeWindow.startHour && currentHour < policy.activeWindow.endHour;
+  return (
+    currentHour >= policy.activeWindow.startHour &&
+    currentHour < policy.activeWindow.endHour
+  );
 }
 
 /**
@@ -78,7 +85,12 @@ async function processDmQueue(page, options = {}) {
   const maxRetries = options.maxRetries || 5;
   const expiredPlatforms = new Set();
 
-  queueLog("info", "dm_queue", "SYSTEM", "Executing DM messaging queue processing loop...");
+  queueLog(
+    "info",
+    "dm_queue",
+    "SYSTEM",
+    "Executing DM messaging queue processing loop...",
+  );
 
   let eligibleJobs = [];
   try {
@@ -102,7 +114,12 @@ async function processDmQueue(page, options = {}) {
       )
       .all(maxRetries);
   } catch (err) {
-    queueLog("error", "dm_queue", "SYSTEM", `Failed to query eligible DM jobs: ${err.message}`);
+    queueLog(
+      "error",
+      "dm_queue",
+      "SYSTEM",
+      `Failed to query eligible DM jobs: ${err.message}`,
+    );
     return report;
   }
 
@@ -111,7 +128,12 @@ async function processDmQueue(page, options = {}) {
     return report;
   }
 
-  queueLog("info", "dm_queue", "SYSTEM", `Found ${eligibleJobs.length} eligible DM jobs for active campaigns.`);
+  queueLog(
+    "info",
+    "dm_queue",
+    "SYSTEM",
+    `Found ${eligibleJobs.length} eligible DM jobs for active campaigns.`,
+  );
 
   for (const job of eligibleJobs) {
     // Isolated nested exception handling to guarantee queue survival
@@ -141,7 +163,12 @@ async function processDmQueue(page, options = {}) {
           `,
           ).run(getNextDayBusinessHourWindow(normPlatform), job.id);
         } catch (err) {
-          queueLog("error", "dm_queue", job.id, `Failed to postpone job after session expiration skip: ${err.message}`);
+          queueLog(
+            "error",
+            "dm_queue",
+            job.id,
+            `Failed to postpone job after session expiration skip: ${err.message}`,
+          );
         }
         queueLog(
           "info",
@@ -156,14 +183,26 @@ async function processDmQueue(page, options = {}) {
       // ── 1. RUNTIME CAMPAIGN STATUS RE-VALIDATION ───────────────────────────
       let campaignRow;
       try {
-        campaignRow = db.prepare("SELECT status FROM campaigns WHERE id = ?").get(job.campaign_id);
+        campaignRow = db
+          .prepare("SELECT status FROM campaigns WHERE id = ?")
+          .get(job.campaign_id);
       } catch (err) {
-        queueLog("error", "dm_queue", job.id, `Failed to query campaign status: ${err.message}`);
+        queueLog(
+          "error",
+          "dm_queue",
+          job.id,
+          `Failed to query campaign status: ${err.message}`,
+        );
         continue;
       }
 
       if (!campaignRow || campaignRow.status !== "active") {
-        queueLog("info", "dm_queue", job.id, `Skipping job since campaign is no longer active.`);
+        queueLog(
+          "info",
+          "dm_queue",
+          job.id,
+          `Skipping job since campaign is no longer active.`,
+        );
         continue;
       }
 
@@ -185,7 +224,12 @@ async function processDmQueue(page, options = {}) {
             `Postponed DM job to next business hour window (Snoozed until: ${nextWindow}).`,
           );
         } catch (err) {
-          queueLog("error", "dm_queue", job.id, `DB update failed during active window snooze: ${err.message}`);
+          queueLog(
+            "error",
+            "dm_queue",
+            job.id,
+            `DB update failed during active window snooze: ${err.message}`,
+          );
         }
         continue;
       }
@@ -193,11 +237,15 @@ async function processDmQueue(page, options = {}) {
       // ── 3. LINKEDIN CONNECTION GATING (WAITING BEHAVIOR) ────────────────────
       if (normPlatform === "linkedin") {
         const isAccepted =
-          job.connection_job_status === "accepted" || job.lead_status === "replied" || job.lead_status === "messaged";
+          job.connection_job_status === "accepted" ||
+          job.lead_status === "replied" ||
+          job.lead_status === "messaged";
         if (!isAccepted) {
           // Snooze/postpone by standard check interval (e.g. 6 hours)
           const snoozeIntervalHours = options.snoozeIntervalHours || 6;
-          const snoozeUntil = new Date(Date.now() + snoozeIntervalHours * 60 * 60 * 1000).toISOString();
+          const snoozeUntil = new Date(
+            Date.now() + snoozeIntervalHours * 60 * 60 * 1000,
+          ).toISOString();
           try {
             db.prepare(
               `
@@ -213,7 +261,12 @@ async function processDmQueue(page, options = {}) {
               `LinkedIn connection invite not accepted yet. Snoozing DM check for ${snoozeIntervalHours} hours.`,
             );
           } catch (err) {
-            queueLog("error", "dm_queue", job.id, `Failed to update LinkedIn DM snooze: ${err.message}`);
+            queueLog(
+              "error",
+              "dm_queue",
+              job.id,
+              `Failed to update LinkedIn DM snooze: ${err.message}`,
+            );
           }
           continue;
         }
@@ -249,7 +302,12 @@ async function processDmQueue(page, options = {}) {
           isDuplicate = true;
         }
       } catch (err) {
-        queueLog("error", "dm_queue", job.id, `Failed to check anti-duplication records: ${err.message}`);
+        queueLog(
+          "error",
+          "dm_queue",
+          job.id,
+          `Failed to check anti-duplication records: ${err.message}`,
+        );
       }
 
       if (isDuplicate) {
@@ -263,13 +321,24 @@ async function processDmQueue(page, options = {}) {
           ).run(job.id);
 
           recordCampaignEvent(db, job.campaign_id, job.lead_id, "dm_skipped", {
-            reason: "Anti-duplication check blocked repeated outreach to prevent account spam",
+            reason:
+              "Anti-duplication check blocked repeated outreach to prevent account spam",
           });
 
-          queueLog("warn", "dm_queue", job.id, `Prevented duplicate DM send to lead ${job.lead_id}. Skipping.`);
+          queueLog(
+            "warn",
+            "dm_queue",
+            job.id,
+            `Prevented duplicate DM send to lead ${job.lead_id}. Skipping.`,
+          );
           report.skipped++;
         } catch (err) {
-          queueLog("error", "dm_queue", job.id, `Failed to register skipped duplicate job: ${err.message}`);
+          queueLog(
+            "error",
+            "dm_queue",
+            job.id,
+            `Failed to register skipped duplicate job: ${err.message}`,
+          );
         }
         continue;
       }
@@ -278,8 +347,14 @@ async function processDmQueue(page, options = {}) {
       let limitToday = platformLimits.dms || platformLimits.messages || 20;
       if (policy.warmup?.enabled) {
         const campaignStart = new Date(job.campaign_created_at);
-        const diffDays = Math.floor((Date.now() - campaignStart) / (24 * 60 * 60 * 1000));
-        limitToday = Math.min(policy.warmup.startDailyCount + diffDays * policy.warmup.dailyIncrement, limitToday);
+        const diffDays = Math.floor(
+          (Date.now() - campaignStart) / (24 * 60 * 60 * 1000),
+        );
+        limitToday = Math.min(
+          policy.warmup.startDailyCount +
+            diffDays * policy.warmup.dailyIncrement,
+          limitToday,
+        );
       }
 
       // Query daily messaging actions count performed today
@@ -299,7 +374,12 @@ async function processDmQueue(page, options = {}) {
           .get(normPlatform);
         todayActionsCount = countRow ? countRow.count : 0;
       } catch (err) {
-        queueLog("error", "dm_queue", job.id, `Failed to query daily_actions count: ${err.message}`);
+        queueLog(
+          "error",
+          "dm_queue",
+          job.id,
+          `Failed to query daily_actions count: ${err.message}`,
+        );
       }
 
       if (todayActionsCount >= limitToday) {
@@ -313,10 +393,16 @@ async function processDmQueue(page, options = {}) {
           `,
           ).run(nextWindow, job.id);
 
-          recordCampaignEvent(db, job.campaign_id, job.lead_id, "limit_reached", {
-            platform: job.platform,
-            daily_limit: limitToday,
-          });
+          recordCampaignEvent(
+            db,
+            job.campaign_id,
+            job.lead_id,
+            "limit_reached",
+            {
+              platform: job.platform,
+              daily_limit: limitToday,
+            },
+          );
 
           queueLog(
             "info",
@@ -325,14 +411,21 @@ async function processDmQueue(page, options = {}) {
             `Daily outreach rate limit met for campaign (${todayActionsCount}/${limitToday}). Snoozed.`,
           );
         } catch (err) {
-          queueLog("error", "dm_queue", job.id, `Failed to record limit_reached event: ${err.message}`);
+          queueLog(
+            "error",
+            "dm_queue",
+            job.id,
+            `Failed to record limit_reached event: ${err.message}`,
+          );
         }
         continue;
       }
 
       // ── 6. CONCURRENCY JOB LOCKING (RUNNING STATE) ─────────────────────────
       try {
-        db.prepare("UPDATE dm_jobs SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(job.id);
+        db.prepare(
+          "UPDATE dm_jobs SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        ).run(job.id);
       } catch (err) {
         queueLog(
           "error",
@@ -366,13 +459,21 @@ async function processDmQueue(page, options = {}) {
         if (approvedMessage) {
           messageBody = approvedMessage.body;
           messageId = approvedMessage.id;
-          db.prepare("UPDATE dm_jobs SET message_id = ? WHERE id = ?").run(messageId, job.id);
+          db.prepare("UPDATE dm_jobs SET message_id = ? WHERE id = ?").run(
+            messageId,
+            job.id,
+          );
         } else {
           // Generic human outreach template
           messageBody = `Hi ${firstName}, I wanted to reach out and say hi! Hope you are doing great.`;
         }
       } catch (err) {
-        queueLog("error", "dm_queue", job.id, `Failed to check approved templates: ${err.message}`);
+        queueLog(
+          "error",
+          "dm_queue",
+          job.id,
+          `Failed to check approved templates: ${err.message}`,
+        );
         const firstName =
           String(job.lead_name || "there")
             .trim()
@@ -381,14 +482,25 @@ async function processDmQueue(page, options = {}) {
       }
 
       report.processed++;
-      queueLog("info", "dm_queue", job.id, `Processing DM job for lead ${job.lead_id} (${job.profile_url}).`);
+      queueLog(
+        "info",
+        "dm_queue",
+        job.id,
+        `Processing DM job for lead ${job.lead_id} (${job.profile_url}).`,
+      );
 
       // ── 8. BROWSER OUTREACH EXECUTION via platformAdapter ───────────────────
       let res;
       try {
-        res = await platformAdapter.runDmAction(job.platform, page, job, messageBody, (type, msg) => {
-          queueLog(type, "dm_queue", job.id, `[ADAPTER LOG] ${msg}`);
-        });
+        res = await platformAdapter.runDmAction(
+          job.platform,
+          page,
+          job,
+          messageBody,
+          (type, msg) => {
+            queueLog(type, "dm_queue", job.id, `[ADAPTER LOG] ${msg}`);
+          },
+        );
       } catch (err) {
         res = {
           outcome: "failed",
@@ -472,15 +584,31 @@ async function processDmQueue(page, options = {}) {
               INSERT INTO touchpoints (lead_id, type, platform, message_id, outcome, sent_at, notes)
               VALUES (?, 'dm', ?, ?, 'skipped', CURRENT_TIMESTAMP, ?)
             `,
-            ).run(job.lead_id, normPlatform, messageId, res.error || "Already messaged");
+            ).run(
+              job.lead_id,
+              normPlatform,
+              messageId,
+              res.error || "Already messaged",
+            );
 
-            recordCampaignEvent(db, job.campaign_id, job.lead_id, "dm_skipped", {
-              reason: res.error || "Already messaged",
-              metadata: res.metadata,
-            });
+            recordCampaignEvent(
+              db,
+              job.campaign_id,
+              job.lead_id,
+              "dm_skipped",
+              {
+                reason: res.error || "Already messaged",
+                metadata: res.metadata,
+              },
+            );
           })();
 
-          queueLog("info", "dm_queue", job.id, `DM skipped (Reason: ${res.error || "Already messaged"}).`);
+          queueLog(
+            "info",
+            "dm_queue",
+            job.id,
+            `DM skipped (Reason: ${res.error || "Already messaged"}).`,
+          );
           report.skipped++;
         } else if (res.outcome === "session_required") {
           expiredPlatforms.add(normPlatform);
@@ -492,19 +620,34 @@ async function processDmQueue(page, options = {}) {
           `,
           ).run(getNextDayBusinessHourWindow(normPlatform), job.id);
 
-          recordCampaignEvent(db, job.campaign_id, job.lead_id, "session_expired", {
-            error: res.error,
-          });
+          recordCampaignEvent(
+            db,
+            job.campaign_id,
+            job.lead_id,
+            "session_expired",
+            {
+              error: res.error,
+            },
+          );
 
           // Async session expiry email notification (Gracefully isolated)
+          const ctx = getContext();
           sendNotification(
-            `GTSS Session Expired - ${normPlatform}`,
+            `${ctx.ctx_biz_name} Session Expired - ${normPlatform}`,
             `The DM queue worker detected that the session for platform '${normPlatform}' has expired or is invalid.\n\nError: ${res.error || "No error details available."}\n\nPlease check the automation settings dashboard to re-authenticate.`,
           ).catch((err) => {
-            console.error("[CAMPAIGN-OBSERVABILITY] Failed to send session expiry notification: ", err.message);
+            console.error(
+              "[CAMPAIGN-OBSERVABILITY] Failed to send session expiry notification: ",
+              err.message,
+            );
           });
 
-          queueLog("warn", "dm_queue", job.id, "Platform session validation expired. Postponing job.");
+          queueLog(
+            "warn",
+            "dm_queue",
+            job.id,
+            "Platform session validation expired. Postponing job.",
+          );
           report.sessionExpired++;
         } else if (res.outcome === "blocked") {
           const nextWindow = getNextDayBusinessHourWindow(normPlatform);
@@ -516,11 +659,22 @@ async function processDmQueue(page, options = {}) {
           `,
           ).run(nextWindow, job.id);
 
-          recordCampaignEvent(db, job.campaign_id, job.lead_id, "captcha_detected", {
-            error: res.error,
-          });
+          recordCampaignEvent(
+            db,
+            job.campaign_id,
+            job.lead_id,
+            "captcha_detected",
+            {
+              error: res.error,
+            },
+          );
 
-          queueLog("error", "dm_queue", job.id, `Automation limit or captcha active (Error: ${res.error}). Snoozed.`);
+          queueLog(
+            "error",
+            "dm_queue",
+            job.id,
+            `Automation limit or captcha active (Error: ${res.error}). Snoozed.`,
+          );
           report.blocked++;
         } else {
           // General interaction failures - handled independently from connection queue
@@ -534,21 +688,41 @@ async function processDmQueue(page, options = {}) {
                 SET status = 'failed', retry_count = ?, error_message = ?, next_retry_at = NULL, updated_at = CURRENT_TIMESTAMP 
                 WHERE id = ?
               `,
-              ).run(newRetryCount, res.error || "Interaction failure cap reached", job.id);
+              ).run(
+                newRetryCount,
+                res.error || "Interaction failure cap reached",
+                job.id,
+              );
 
               db.prepare(
                 `
                 INSERT INTO touchpoints (lead_id, type, platform, message_id, outcome, sent_at, notes)
                 VALUES (?, 'dm', ?, ?, 'failed', CURRENT_TIMESTAMP, ?)
               `,
-              ).run(job.lead_id, normPlatform, messageId, res.error || "Terminal interactions crash");
+              ).run(
+                job.lead_id,
+                normPlatform,
+                messageId,
+                res.error || "Terminal interactions crash",
+              );
 
-              recordCampaignEvent(db, job.campaign_id, job.lead_id, "dm_failed_terminal", {
-                error: res.error || "Max retries hit",
-              });
+              recordCampaignEvent(
+                db,
+                job.campaign_id,
+                job.lead_id,
+                "dm_failed_terminal",
+                {
+                  error: res.error || "Max retries hit",
+                },
+              );
             })();
 
-            queueLog("error", "dm_queue", job.id, `Terminal DM failure: ${res.error || "Max retries hit"}`);
+            queueLog(
+              "error",
+              "dm_queue",
+              job.id,
+              `Terminal DM failure: ${res.error || "Max retries hit"}`,
+            );
             report.failed++;
           } else {
             // Retryable failure - apply progressive backoff
@@ -559,12 +733,23 @@ async function processDmQueue(page, options = {}) {
               SET status = 'failed', retry_count = ?, error_message = ?, next_retry_at = ?, updated_at = CURRENT_TIMESTAMP 
               WHERE id = ?
             `,
-            ).run(newRetryCount, res.error || "Interaction timeout", backoffTime, job.id);
+            ).run(
+              newRetryCount,
+              res.error || "Interaction timeout",
+              backoffTime,
+              job.id,
+            );
 
-            recordCampaignEvent(db, job.campaign_id, job.lead_id, "dm_failed_retryable", {
-              error: res.error || "Temporary timeout",
-              next_attempt: backoffTime,
-            });
+            recordCampaignEvent(
+              db,
+              job.campaign_id,
+              job.lead_id,
+              "dm_failed_retryable",
+              {
+                error: res.error || "Temporary timeout",
+                next_attempt: backoffTime,
+              },
+            );
 
             queueLog(
               "warn",
@@ -576,7 +761,12 @@ async function processDmQueue(page, options = {}) {
           }
         }
       } catch (err) {
-        queueLog("error", "dm_queue", job.id, `Failed to persist transaction outcomes in database: ${err.message}`);
+        queueLog(
+          "error",
+          "dm_queue",
+          job.id,
+          `Failed to persist transaction outcomes in database: ${err.message}`,
+        );
       }
 
       // ── 10. HUMAN-LIKE INTER-ACTION DELAY ─────────────────────────────────
@@ -585,7 +775,8 @@ async function processDmQueue(page, options = {}) {
       }
       const minSec = policy.delays?.actionMinSeconds || 20;
       const maxSec = policy.delays?.actionMaxSeconds || 60;
-      const randomDelay = Math.floor(Math.random() * (maxSec - minSec + 1) + minSec) * 1000;
+      const randomDelay =
+        Math.floor(Math.random() * (maxSec - minSec + 1) + minSec) * 1000;
 
       queueLog(
         "info",
@@ -595,11 +786,21 @@ async function processDmQueue(page, options = {}) {
       );
       await sleep(randomDelay);
     } catch (err) {
-      queueLog("error", "dm_queue", job.id, `Uncaught isolated item execution exception: ${err.message}`);
+      queueLog(
+        "error",
+        "dm_queue",
+        job.id,
+        `Uncaught isolated item execution exception: ${err.message}`,
+      );
     }
   }
 
-  queueLog("info", "dm_queue", "SYSTEM", `DM messaging queue batch finished: ${JSON.stringify(report)}`);
+  queueLog(
+    "info",
+    "dm_queue",
+    "SYSTEM",
+    `DM messaging queue batch finished: ${JSON.stringify(report)}`,
+  );
   return report;
 }
 

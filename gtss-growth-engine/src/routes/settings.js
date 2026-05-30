@@ -8,7 +8,11 @@ const { getDb, initializeDatabase } = require("../db/database");
 const defaultTemplates = require("../config/templates.json");
 const defaultLimits = require("../config/limits");
 const { upsertEnvValue } = require("../utils/envWriter");
-const { getPlatformCatalog, getLimitFields } = require("../services/platformCatalog");
+const {
+  getPlatformCatalog,
+  getLimitFields,
+} = require("../services/platformCatalog");
+const { getContext } = require("../services/contextService");
 
 const pageRouter = express.Router();
 const apiRouter = express.Router();
@@ -20,13 +24,16 @@ pageRouter.get("/", (req, res) => {
   renderPage(res, {
     title: "Settings",
     primaryHeading: "Configure growth engine",
-    primaryCopy: "Update limits, templates, account credentials, and platform session storage settings.",
+    primaryCopy:
+      "Update limits, templates, account credentials, and platform session storage settings.",
   });
 });
 
 apiRouter.get("/", (req, res) => {
   const catalog = getPlatformCatalog();
-  const rows = getDb().prepare("SELECT key, value FROM settings ORDER BY key").all();
+  const rows = getDb()
+    .prepare("SELECT key, value FROM settings ORDER BY key")
+    .all();
   const settings = {};
 
   rows.forEach((row) => {
@@ -34,7 +41,9 @@ apiRouter.get("/", (req, res) => {
       return;
     }
 
-    settings[row.key] = shouldMask(row.key) ? maskSecret(row.value) : parseSettingValue(row.value);
+    settings[row.key] = shouldMask(row.key)
+      ? maskSecret(row.value)
+      : parseSettingValue(row.value);
   });
 
   settings.limits = getStoredLimits();
@@ -61,7 +70,8 @@ apiRouter.post("/gemini-key", (req, res) => {
 
 apiRouter.post("/test-gemini", async (req, res) => {
   try {
-    const apiKey = getRawSetting("gemini_api_key") || process.env.GEMINI_API_KEY;
+    const apiKey =
+      getRawSetting("gemini_api_key") || process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return res.json({
         valid: false,
@@ -84,7 +94,9 @@ apiRouter.post("/test-gemini", async (req, res) => {
     if (!response.ok) {
       return res.json({
         valid: false,
-        error: data.error ? data.error.message : `Gemini returned ${response.status}`,
+        error: data.error
+          ? data.error.message
+          : `Gemini returned ${response.status}`,
       });
     }
 
@@ -99,7 +111,9 @@ apiRouter.post("/gmail", (req, res) => {
   const appPassword = String(req.body.appPassword || "");
 
   if (!email || !appPassword) {
-    return res.status(400).json({ error: "Gmail address and app password are required" });
+    return res
+      .status(400)
+      .json({ error: "Gmail address and app password are required" });
   }
 
   upsertSetting("gmail_user", email);
@@ -112,7 +126,8 @@ apiRouter.post("/gmail", (req, res) => {
 apiRouter.post("/test-email", async (req, res) => {
   try {
     const email = getRawSetting("gmail_user") || process.env.GMAIL_USER;
-    const appPassword = getRawSetting("gmail_app_password") || process.env.GMAIL_APP_PASSWORD;
+    const appPassword =
+      getRawSetting("gmail_app_password") || process.env.GMAIL_APP_PASSWORD;
 
     if (!email || !appPassword) {
       return res.status(400).json({ error: "Gmail is not configured" });
@@ -173,7 +188,9 @@ apiRouter.post("/passphrase", async (req, res) => {
   }
 
   if (!newPassphrase || newPassphrase.length < 8) {
-    return res.status(400).json({ error: "New passphrase must be at least 8 characters" });
+    return res
+      .status(400)
+      .json({ error: "New passphrase must be at least 8 characters" });
   }
 
   if (newPassphrase !== confirmPassphrase) {
@@ -233,10 +250,16 @@ apiRouter.post("/templates/apply-all", (req, res) => {
     .all();
 
   if (messages.length === 0) {
-    return res.json({ success: true, updated: 0, message: "No messages to update" });
+    return res.json({
+      success: true,
+      updated: 0,
+      message: "No messages to update",
+    });
   }
 
-  const updateStmt = db.prepare("UPDATE messages SET body = ?, generated_by = 'template' WHERE id = ?");
+  const updateStmt = db.prepare(
+    "UPDATE messages SET body = ?, generated_by = 'template' WHERE id = ?",
+  );
 
   let updated = 0;
   const txn = db.transaction(() => {
@@ -244,22 +267,40 @@ apiRouter.post("/templates/apply-all", (req, res) => {
       const platform = msg.platform || "linkedin";
       const messageType = platform === "linkedin" ? "connect" : "dm";
       const templateKey = `${platform}_${messageType}`;
-      const template = templates[templateKey] || templates[`${platform}_dm`] || "";
+      const template =
+        templates[templateKey] || templates[`${platform}_dm`] || "";
 
       if (!template) continue;
 
       // Substitute ALL template variables
+      const ctx = getContext();
+      const painPoints = Array.isArray(ctx.ctx_product_pain_points)
+        ? ctx.ctx_product_pain_points
+        : [];
+      const geographies = Array.isArray(ctx.ctx_audience_geographies)
+        ? ctx.ctx_audience_geographies
+        : [];
       const firstName =
         String(msg.name || "there")
           .trim()
           .split(/\s+/)[0] || "there";
+
       const body = template
         .replace(/\{\{lead_name\}\}/g, firstName)
         .replace(/\{\{company\}\}/g, msg.company || "your business")
         .replace(/\{\{role\}\}/g, msg.role || "")
-        .replace(/\{\{location\}\}/g, msg.location || "Kenya")
-        .replace(/\{\{product\}\}/g, "Restaurant Manager")
-        .replace(/\{\{pain_point\}\}/g, "operational efficiency");
+        .replace(/\{\{location\}\}/g, msg.location || geographies[0] || "Kenya")
+        .replace(/\{\{product\}\}/g, ctx.ctx_product_name)
+        .replace(/\{\{product_tagline\}\}/g, ctx.ctx_product_tagline)
+        .replace(
+          /\{\{pain_point\}\}/g,
+          painPoints[0] || "managing operations efficiently",
+        )
+        .replace(/\{\{value_prop\}\}/g, ctx.ctx_product_value_prop)
+        .replace(/\{\{sender_name\}\}/g, ctx.ctx_sender_name)
+        .replace(/\{\{sign_off\}\}/g, ctx.ctx_sender_sign_off)
+        .replace(/\{\{cta\}\}/g, ctx.ctx_content_cta)
+        .replace(/\{\{biz_name\}\}/g, ctx.ctx_biz_name);
 
       updateStmt.run(body, msg.id);
       updated++;
@@ -276,7 +317,11 @@ apiRouter.post("/clear-data", (req, res) => {
   }
 
   const db = getDb();
-  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all();
+  const tables = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .all();
 
   db.exec("PRAGMA foreign_keys = OFF");
   tables.forEach((table) => {
@@ -299,7 +344,9 @@ function upsertSetting(key, value) {
 }
 
 function getRawSetting(key) {
-  const row = getDb().prepare("SELECT value FROM settings WHERE key = ?").get(key);
+  const row = getDb()
+    .prepare("SELECT value FROM settings WHERE key = ?")
+    .get(key);
   return row ? row.value : null;
 }
 
@@ -318,7 +365,9 @@ function getStoredLimits() {
 
 function getTemplates() {
   const templates = { ...defaultTemplates };
-  const rows = getDb().prepare("SELECT key, value FROM settings WHERE key LIKE 'template_%'").all();
+  const rows = getDb()
+    .prepare("SELECT key, value FROM settings WHERE key LIKE 'template_%'")
+    .all();
 
   rows.forEach((row) => {
     templates[row.key.replace("template_", "")] = row.value;
@@ -392,7 +441,8 @@ const pipelineConfig = require("../config/pipelineConfig");
 
 apiRouter.get("/pipeline", (req, res) => {
   const db = getDb();
-  const getSettingValue = (key) => db.prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value;
+  const getSettingValue = (key) =>
+    db.prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value;
   res.json({
     pipelineMode: process.env.PIPELINE_MODE || "ai",
     discoveryMode: process.env.DISCOVERY_MODE || "",
@@ -403,9 +453,14 @@ apiRouter.get("/pipeline", (req, res) => {
     qualificationManualScore: pipelineConfig.manualQualificationScore(),
     autoApproveVariant: pipelineConfig.autoApproveVariant(),
     pipelineCron: pipelineConfig.pipelineCron(),
-    xOutreachMode: process.env.X_OUTREACH_MODE || getSettingValue("x_outreach_mode") || "follow_first",
+    xOutreachMode:
+      process.env.X_OUTREACH_MODE ||
+      getSettingValue("x_outreach_mode") ||
+      "follow_first",
     linkedinOutreachMode:
-      process.env.LINKEDIN_OUTREACH_MODE || getSettingValue("linkedin_outreach_mode") || "connect_first",
+      process.env.LINKEDIN_OUTREACH_MODE ||
+      getSettingValue("linkedin_outreach_mode") ||
+      "connect_first",
   });
 });
 

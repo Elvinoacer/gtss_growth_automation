@@ -1,5 +1,6 @@
 const { getDb } = require("../db/database");
 const { callGeminiText } = require("./aiService");
+const { getContext } = require("./contextService");
 const logger = require("../utils/logger");
 const {
   stageMode,
@@ -44,7 +45,7 @@ function emitJobEvent(jobId, event) {
 
   // Broadcast via Socket.IO
   const { broadcast } = require("./socketService");
-  broadcast('qualification:event', event);
+  broadcast("qualification:event", event);
 
   // Legacy SSE
   const streams = jobStreams.get(key);
@@ -67,16 +68,38 @@ function closeJobStream(jobId) {
 // ---------------------------------------------------------------------------
 
 function buildPrompt(lead) {
-  return `You are a lead qualification specialist for GTSS, a Kenyan tech company selling restaurant management software.
+  const ctx = getContext();
+  const industries = Array.isArray(ctx.ctx_audience_industries)
+    ? ctx.ctx_audience_industries.join(", ")
+    : ctx.ctx_audience_industries;
+  const geos = Array.isArray(ctx.ctx_audience_geographies)
+    ? ctx.ctx_audience_geographies.join(", ")
+    : ctx.ctx_audience_geographies;
+  const excluded = Array.isArray(ctx.ctx_audience_exclude_industries)
+    ? ctx.ctx_audience_exclude_industries.join(", ")
+    : ctx.ctx_audience_exclude_industries;
+  const weights = ctx.ctx_audience_scoring_weights || {
+    business_type: 30,
+    location: 20,
+    business_size: 20,
+    completeness: 15,
+    recency: 15,
+  };
 
-Score this lead from 0 to 100 based on likelihood to be a paying client.
+  return `You are a lead qualification specialist for ${ctx.ctx_biz_name}.
+Company description: ${ctx.ctx_biz_description}
+Product: ${ctx.ctx_product_name} - ${ctx.ctx_product_tagline}
+
+Ideal customer: ${ctx.ctx_audience_ideal_profile}
+
+Score this lead from 0 to 100 based on likelihood to become a paying client.
 
 Scoring factors:
-- Business type match (restaurant/cafe/hotel/SME = high score; unrelated = low): 30 points
-- Location (Kenya, especially Nairobi/Mombasa = high; outside Africa = low): 20 points
-- Business size signals (has website, company listed, professional profile = high): 20 points
-- Profile completeness (full profile = high; empty = low): 15 points
-- Activity recency (recent posts/activity signals = high): 15 points
+- Business type match (${industries} = high score; ${excluded} = low): ${weights.business_type} points
+- Location (${geos} = high; outside target region = low): ${weights.location} points
+- Business size signals (has website, company listed, professional profile = high): ${weights.business_size} points
+- Profile completeness (full profile = high; empty = low): ${weights.completeness} points
+- Activity recency (recent posts/activity = high): ${weights.recency} points
 
 Lead data:
 Name: ${lead.name || "N/A"}
@@ -87,10 +110,8 @@ Website: ${lead.website || "N/A"}
 Platform: ${lead.platform || "N/A"}
 
 Respond ONLY with valid JSON, no markdown, no preamble:
-{"score": 72, "reason": "Restaurant owner in Nairobi with active profile and website — strong match.", "factors": {"business_type": 25, "location": 18, "business_size": 15, "completeness": 8, "recency": 6}}`;
+{"score": 72, "reason": "Brief reason here.", "factors": {"business_type": 25, "location": 18, "business_size": 15, "completeness": 8, "recency": 6}}`;
 }
-
-
 
 // ---------------------------------------------------------------------------
 // Core scoring
@@ -102,7 +123,7 @@ async function scoreLead(lead) {
 
   try {
     const rawResult = await callGeminiText(prompt);
-    
+
     let result;
     try {
       result = JSON.parse(rawResult);
@@ -110,7 +131,9 @@ async function scoreLead(lead) {
       logger.error("GEMINI", "Failed to parse Gemini message content as JSON", {
         raw: rawResult,
       });
-      const contentError = new Error("Gemini did not return valid JSON content");
+      const contentError = new Error(
+        "Gemini did not return valid JSON content",
+      );
       contentError.status = "parse_failed";
       throw contentError;
     }
@@ -126,10 +149,19 @@ async function scoreLead(lead) {
        WHERE id = ?`,
     ).run(score, reason, status, lead.id);
 
-    if (status === "qualified" && (lead.platform === "instagram" || (lead.profile_url && lead.profile_url.includes("instagram.com")))) {
-      const { crawlAndQueueSuggestedAccounts } = require("./instagramDiscoveryService");
-      crawlAndQueueSuggestedAccounts(lead.id).catch(err => {
-        logger.error("IG_DISCOVERY", `Failed to crawl suggested accounts for lead ${lead.id}: ${err.message}`);
+    if (
+      status === "qualified" &&
+      (lead.platform === "instagram" ||
+        (lead.profile_url && lead.profile_url.includes("instagram.com")))
+    ) {
+      const {
+        crawlAndQueueSuggestedAccounts,
+      } = require("./instagramDiscoveryService");
+      crawlAndQueueSuggestedAccounts(lead.id).catch((err) => {
+        logger.error(
+          "IG_DISCOVERY",
+          `Failed to crawl suggested accounts for lead ${lead.id}: ${err.message}`,
+        );
       });
     }
 
@@ -138,14 +170,18 @@ async function scoreLead(lead) {
     logger.error("QUALIFICATION", `Error scoring lead ${lead.id}`, error);
 
     // In AI mode, fall back to manual score when Gemini is unavailable
-    const mode = stageMode('qualification');
-    if (mode === 'ai') {
+    const mode = stageMode("qualification");
+    if (mode === "ai") {
       const fallbackScore = manualQualificationScore();
       const threshold = qualificationThreshold();
-      const fallbackStatus = fallbackScore >= threshold ? 'qualified' : 'deprioritized';
+      const fallbackStatus =
+        fallbackScore >= threshold ? "qualified" : "deprioritized";
       const fallbackReason = `Auto-qualified: AI unavailable (${error.message}), score assigned by pipeline fallback`;
 
-      logger.warn('QUALIFICATION', `Gemini unavailable for lead ${lead.id}, using manual fallback score ${fallbackScore}`);
+      logger.warn(
+        "QUALIFICATION",
+        `Gemini unavailable for lead ${lead.id}, using manual fallback score ${fallbackScore}`,
+      );
 
       db.prepare(
         `UPDATE leads
@@ -153,10 +189,19 @@ async function scoreLead(lead) {
          WHERE id = ?`,
       ).run(fallbackScore, fallbackReason, fallbackStatus, lead.id);
 
-      if (fallbackStatus === "qualified" && (lead.platform === "instagram" || (lead.profile_url && lead.profile_url.includes("instagram.com")))) {
-        const { crawlAndQueueSuggestedAccounts } = require("./instagramDiscoveryService");
-        crawlAndQueueSuggestedAccounts(lead.id).catch(err => {
-          logger.error("IG_DISCOVERY", `Failed to crawl suggested accounts for lead ${lead.id}: ${err.message}`);
+      if (
+        fallbackStatus === "qualified" &&
+        (lead.platform === "instagram" ||
+          (lead.profile_url && lead.profile_url.includes("instagram.com")))
+      ) {
+        const {
+          crawlAndQueueSuggestedAccounts,
+        } = require("./instagramDiscoveryService");
+        crawlAndQueueSuggestedAccounts(lead.id).catch((err) => {
+          logger.error(
+            "IG_DISCOVERY",
+            `Failed to crawl suggested accounts for lead ${lead.id}: ${err.message}`,
+          );
         });
       }
 
@@ -257,58 +302,81 @@ async function scoreLeadsBatch(leadIds, jobId) {
  * @returns {Promise<{processed: number, qualified: number, deprioritized: number}>}
  */
 async function runQualificationStage(jobId, emit) {
-  const mode = stageMode('qualification');
+  const mode = stageMode("qualification");
   const db = getDb();
 
   // Find all leads that need qualification
-  const pending = db.prepare(
-    `SELECT id FROM leads
+  const pending = db
+    .prepare(
+      `SELECT id FROM leads
      WHERE status IN ('discovered', 'pending_qualification')
         OR (lead_score IS NULL AND status NOT IN ('dismissed', 'messaged', 'replied', 'meeting_booked', 'converted', 'lost'))
-     ORDER BY created_at DESC`
-  ).all().map(r => r.id);
+     ORDER BY created_at DESC`,
+    )
+    .all()
+    .map((r) => r.id);
 
   if (pending.length === 0) {
-    emit({ type: 'info', message: 'No pending leads to qualify' });
+    emit({ type: "info", message: "No pending leads to qualify" });
     return { processed: 0, qualified: 0, deprioritized: 0 };
   }
 
-  if (mode === 'manual') {
+  if (mode === "manual") {
     // Bulk qualify all leads — intentionally makes all pass so the operator
     // can reject on the Message Generator page before messages are sent
     const score = manualQualificationScore();
-    const reason = 'Pipeline manual mode — all leads pre-qualified for human review';
+    const reason =
+      "Pipeline manual mode — all leads pre-qualified for human review";
 
-    emit({ type: 'info', message: `Manual mode: qualifying ${pending.length} leads with score ${score}` });
+    emit({
+      type: "info",
+      message: `Manual mode: qualifying ${pending.length} leads with score ${score}`,
+    });
 
     db.prepare(
       `UPDATE leads
        SET lead_score = ?, score_reason = ?, status = 'qualified', updated_at = CURRENT_TIMESTAMP
-       WHERE id IN (${pending.map(() => '?').join(',')})`
+       WHERE id IN (${pending.map(() => "?").join(",")})`,
     ).run(score, reason, ...pending);
 
     for (const leadId of pending) {
       const lead = db.prepare("SELECT * FROM leads WHERE id = ?").get(leadId);
-      if (lead && (lead.platform === "instagram" || (lead.profile_url && lead.profile_url.includes("instagram.com")))) {
-        const { crawlAndQueueSuggestedAccounts } = require("./instagramDiscoveryService");
-        crawlAndQueueSuggestedAccounts(lead.id).catch(err => {
-          logger.error("IG_DISCOVERY", `Failed to crawl suggested accounts for lead ${lead.id}: ${err.message}`);
+      if (
+        lead &&
+        (lead.platform === "instagram" ||
+          (lead.profile_url && lead.profile_url.includes("instagram.com")))
+      ) {
+        const {
+          crawlAndQueueSuggestedAccounts,
+        } = require("./instagramDiscoveryService");
+        crawlAndQueueSuggestedAccounts(lead.id).catch((err) => {
+          logger.error(
+            "IG_DISCOVERY",
+            `Failed to crawl suggested accounts for lead ${lead.id}: ${err.message}`,
+          );
         });
       }
     }
 
     emit({
-      type: 'complete',
+      type: "complete",
       message: `Manual mode: ${pending.length} leads qualified with score ${score}`,
       qualified: pending.length,
       deprioritized: 0,
     });
 
-    return { processed: pending.length, qualified: pending.length, deprioritized: 0 };
+    return {
+      processed: pending.length,
+      qualified: pending.length,
+      deprioritized: 0,
+    };
   }
 
   // AI mode — calls existing scoreLeadsBatch with AI→manual fallback inside scoreLead
-  emit({ type: 'info', message: `AI mode: scoring ${pending.length} leads via Gemini` });
+  emit({
+    type: "info",
+    message: `AI mode: scoring ${pending.length} leads via Gemini`,
+  });
   return await scoreLeadsBatch(pending, jobId);
 }
 

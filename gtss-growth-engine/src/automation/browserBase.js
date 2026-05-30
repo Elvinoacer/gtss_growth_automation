@@ -10,6 +10,7 @@ const logger = require("../utils/logger");
 const { markSessionInvalid } = require("./sessionManager");
 const { sendNotification } = require("../services/notificationService");
 const { getDb } = require("../db/database");
+const { getContext } = require("../services/contextService");
 
 // Tracks the last date warmup was completed (format: "YYYY-MM-DD")
 let _lastWarmupDate = null;
@@ -1192,8 +1193,9 @@ async function checkForInstagramBlock(page, emitter = null) {
     logger.warn("INSTAGRAM_BLOCK", message);
 
     try {
+      const ctx = getContext();
       await sendNotification(
-        "[GTSS] Instagram action block detected",
+        `[${ctx.ctx_biz_name}] Instagram action block detected`,
         `An action block was encountered during Instagram automation.\n\nBlock Phrase: "${matchedPhrase}"\n\nAutomation will be paused until ${resumesAt} (24 hours).`,
       );
     } catch (err) {

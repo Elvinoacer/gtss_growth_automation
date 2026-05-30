@@ -328,6 +328,7 @@
         <textarea id="image-gen-topic" class="w-full rounded border border-outline-variant bg-surface p-2 text-body-xs text-on-surface focus:border-primary focus:ring-1 focus:ring-primary resize-none" rows="3" placeholder="Image topic or description"></textarea>
         <div class="grid grid-cols-2 gap-2">
           <select id="image-gen-style" class="rounded border border-outline-variant bg-surface p-2 text-body-xs h-9">
+            <option value="">Use context visual brief</option>
             <option value="photorealistic">Photorealistic</option>
             <option value="cinematic">Cinematic</option>
             <option value="editorial">Editorial</option>
@@ -339,6 +340,10 @@
             <option value="facebook">Facebook</option>
             <option value="x">X</option>
           </select>
+        </div>
+        <div class="rounded border border-outline-variant/70 bg-surface p-3 flex flex-col gap-1">
+          <div class="font-label-caps text-label-caps text-on-surface-variant">CONTEXT BRIEF</div>
+          <p id="image-gen-context" class="text-body-xs text-on-surface-variant whitespace-pre-wrap">Loading context...</p>
         </div>
         <button id="image-gen-start-btn" class="bg-secondary-container text-on-surface h-9 rounded text-body-sm font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition-opacity">
           <span class="material-symbols-outlined text-[16px]">auto_awesome</span>

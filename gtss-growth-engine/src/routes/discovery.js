@@ -1,116 +1,145 @@
-const express = require('express');
-const fs = require('fs');
-const path = require('path');
-const { renderPage } = require('./pageRenderer');
-const { getDb } = require('../db/database');
-const { keywordsFilePath } = require('../config/pipelineConfig');
+const express = require("express");
+const fs = require("fs");
+const path = require("path");
+const { renderPage } = require("./pageRenderer");
+const { getDb } = require("../db/database");
+const { getContext, setContext } = require("../services/contextService");
+const { keywordsFilePath } = require("../config/pipelineConfig");
+const logger = require("../utils/logger");
 const {
   discoverLeads,
   listDiscoverySources,
   registerJobStream,
   emitJobEvent,
   closeJobStream,
-  stopDiscovery
-} = require('../services/discoveryService');
+  stopDiscovery,
+} = require("../services/discoveryService");
 
 const router = express.Router();
 
-router.get('/', (req, res) => {
+router.get("/", (req, res) => {
   renderPage(res, {
-    title: 'Discovery',
-    primaryHeading: 'Find prospects',
-    primaryCopy: 'Collect and normalize leads from LinkedIn, X, Instagram, and Facebook.'
+    title: "Discovery",
+    primaryHeading: "Find prospects",
+    primaryCopy:
+      "Collect and normalize leads from LinkedIn, X, Instagram, and Facebook.",
   });
 });
 
-router.get('/config', (req, res) => {
-  const row = getDb().prepare("SELECT value FROM settings WHERE key = 'discovery_max_leads'").get();
+router.get("/config", (req, res) => {
+  const row = getDb()
+    .prepare("SELECT value FROM settings WHERE key = 'discovery_max_leads'")
+    .get();
   res.json({ maxLeads: row ? Number(row.value) : 20 });
 });
 
-router.post('/config', (req, res) => {
+router.post("/config", (req, res) => {
   const maxLeads = Number(req.body.maxLeads);
   if (!Number.isInteger(maxLeads) || maxLeads < 1 || maxLeads > 100) {
-    return res.status(400).json({ error: 'maxLeads must be between 1 and 100' });
+    return res
+      .status(400)
+      .json({ error: "maxLeads must be between 1 and 100" });
   }
-  getDb().prepare(`
+  getDb()
+    .prepare(
+      `
     INSERT INTO settings (key, value) VALUES ('discovery_max_leads', ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `).run(String(maxLeads));
+  `,
+    )
+    .run(String(maxLeads));
   res.json({ success: true });
 });
 
-router.post('/start', (req, res) => {
+router.post("/start", (req, res) => {
   const { keyword, platforms, maxLeads, ig_auto_warmup } = req.body;
   const selectedPlatforms = Array.isArray(platforms) ? platforms : [];
 
   if (ig_auto_warmup !== undefined) {
     const db = getDb();
-    const val = ig_auto_warmup ? '1' : '0';
-    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('auto_warmup_on_qualify', ?)").run(val);
+    const val = ig_auto_warmup ? "1" : "0";
+    db.prepare(
+      "INSERT OR REPLACE INTO settings (key, value) VALUES ('auto_warmup_on_qualify', ?)",
+    ).run(val);
   }
   const parsedMaxLeads = Number(maxLeads);
   const validPlatforms = listDiscoverySources();
 
   if (!keyword || !String(keyword).trim()) {
-    return res.status(400).json({ error: 'Keyword is required' });
+    return res.status(400).json({ error: "Keyword is required" });
   }
 
   if (selectedPlatforms.length === 0) {
-    return res.status(400).json({ error: 'At least one platform is required' });
+    return res.status(400).json({ error: "At least one platform is required" });
   }
 
-  if (selectedPlatforms.some((platform) => !validPlatforms.includes(platform))) {
-    return res.status(400).json({ error: 'Unsupported platform selected' });
+  if (
+    selectedPlatforms.some((platform) => !validPlatforms.includes(platform))
+  ) {
+    return res.status(400).json({ error: "Unsupported platform selected" });
   }
 
-  if (!Number.isInteger(parsedMaxLeads) || parsedMaxLeads < 1 || parsedMaxLeads > 100) {
-    return res.status(400).json({ error: 'maxLeads must be between 1 and 100' });
+  if (
+    !Number.isInteger(parsedMaxLeads) ||
+    parsedMaxLeads < 1 ||
+    parsedMaxLeads > 100
+  ) {
+    return res
+      .status(400)
+      .json({ error: "maxLeads must be between 1 and 100" });
   }
 
   const run = getDb()
     .prepare(
       `INSERT INTO discovery_runs (keyword, platforms, leads_found, status)
-       VALUES (?, ?, 0, 'running')`
+       VALUES (?, ?, 0, 'running')`,
     )
     .run(String(keyword).trim(), JSON.stringify(selectedPlatforms));
 
   const jobId = run.lastInsertRowid;
 
   setImmediate(() => {
-    discoverLeads(String(keyword).trim(), selectedPlatforms, parsedMaxLeads, jobId)
-      .catch((error) => {
-        getDb().prepare('UPDATE discovery_runs SET status = ? WHERE id = ?').run('failed', jobId);
-        emitJobEvent(jobId, { type: 'error', jobId, message: error.message });
-        closeJobStream(jobId);
-      });
+    discoverLeads(
+      String(keyword).trim(),
+      selectedPlatforms,
+      parsedMaxLeads,
+      jobId,
+    ).catch((error) => {
+      getDb()
+        .prepare("UPDATE discovery_runs SET status = ? WHERE id = ?")
+        .run("failed", jobId);
+      emitJobEvent(jobId, { type: "error", jobId, message: error.message });
+      closeJobStream(jobId);
+    });
   });
 
   return res.status(202).json({ jobId });
 });
 
-router.get('/stream/:jobId', (req, res) => {
+router.get("/stream/:jobId", (req, res) => {
   res.set({
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no'
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
   });
   res.flushHeaders();
 
   registerJobStream(req.params.jobId, res);
 });
 
-router.post('/stop/:jobId', (req, res) => {
+router.post("/stop/:jobId", (req, res) => {
   const result = getDb()
-    .prepare("UPDATE discovery_runs SET status = 'stopping' WHERE id = ? AND status = 'running'")
+    .prepare(
+      "UPDATE discovery_runs SET status = 'stopping' WHERE id = ? AND status = 'running'",
+    )
     .run(req.params.jobId);
 
   stopDiscovery(req.params.jobId);
   return res.json({ stopped: result.changes > 0 });
 });
 
-router.get('/results', (req, res) => {
+router.get("/results", (req, res) => {
   const page = Math.max(Number(req.query.page) || 1, 1);
   const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
   const offset = (page - 1) * limit;
@@ -118,26 +147,26 @@ router.get('/results', (req, res) => {
   const params = {};
 
   if (req.query.platform) {
-    where.push('platform = @platform');
+    where.push("platform = @platform");
     params.platform = req.query.platform;
   }
 
   if (req.query.keyword) {
-    where.push('source_keyword LIKE @keyword');
+    where.push("source_keyword LIKE @keyword");
     params.keyword = `%${req.query.keyword}%`;
   }
 
   if (req.query.dateFrom) {
-    where.push('DATE(created_at) >= DATE(@dateFrom)');
+    where.push("DATE(created_at) >= DATE(@dateFrom)");
     params.dateFrom = req.query.dateFrom;
   }
 
   if (req.query.dateTo) {
-    where.push('DATE(created_at) <= DATE(@dateTo)');
+    where.push("DATE(created_at) <= DATE(@dateTo)");
     params.dateTo = req.query.dateTo;
   }
 
-  const whereSql = where.join(' AND ');
+  const whereSql = where.join(" AND ");
   const total = getDb()
     .prepare(`SELECT COUNT(*) AS total FROM leads WHERE ${whereSql}`)
     .get(params).total;
@@ -147,7 +176,7 @@ router.get('/results', (req, res) => {
        FROM leads
        WHERE ${whereSql}
        ORDER BY created_at DESC, id DESC
-       LIMIT @limit OFFSET @offset`
+       LIMIT @limit OFFSET @offset`,
     )
     .all({ ...params, limit, offset });
 
@@ -155,68 +184,74 @@ router.get('/results', (req, res) => {
     page,
     limit,
     total,
-    leads
+    leads,
   });
 });
 
-router.post('/add-to-queue', (req, res) => {
+router.post("/add-to-queue", (req, res) => {
   const leadIds = sanitizeLeadIds(req.body.leadIds);
   if (leadIds.length === 0) {
-    return res.status(400).json({ error: 'leadIds is required' });
+    return res.status(400).json({ error: "leadIds is required" });
   }
 
-  const updated = updateLeadStatuses(leadIds, 'pending_qualification');
+  const updated = updateLeadStatuses(leadIds, "pending_qualification");
   return res.json({ updated });
 });
 
-router.post('/dismiss', (req, res) => {
+router.post("/dismiss", (req, res) => {
   const leadIds = sanitizeLeadIds(req.body.leadIds);
   if (leadIds.length === 0) {
-    return res.status(400).json({ error: 'leadIds is required' });
+    return res.status(400).json({ error: "leadIds is required" });
   }
 
-  const updated = updateLeadStatuses(leadIds, 'dismissed');
+  const updated = updateLeadStatuses(leadIds, "dismissed");
   return res.json({ updated });
 });
 
-router.get('/history', (req, res) => {
+router.get("/history", (req, res) => {
   const runs = getDb()
-    .prepare('SELECT * FROM discovery_runs ORDER BY run_at DESC, id DESC')
+    .prepare("SELECT * FROM discovery_runs ORDER BY run_at DESC, id DESC")
     .all()
     .map((run) => ({
       ...run,
-      platforms: parseJsonArray(run.platforms)
+      platforms: parseJsonArray(run.platforms),
     }));
 
   res.json({ runs });
 });
 
-router.post('/history/:id/rerun', (req, res) => {
+router.post("/history/:id/rerun", (req, res) => {
   const run = getDb()
-    .prepare('SELECT * FROM discovery_runs WHERE id = ?')
+    .prepare("SELECT * FROM discovery_runs WHERE id = ?")
     .get(req.params.id);
 
   if (!run) {
-    return res.status(404).json({ error: 'Discovery run not found' });
+    return res.status(404).json({ error: "Discovery run not found" });
   }
 
   const platforms = parseJsonArray(run.platforms);
   const created = getDb()
     .prepare(
       `INSERT INTO discovery_runs (keyword, platforms, leads_found, status)
-       VALUES (?, ?, 0, 'running')`
+       VALUES (?, ?, 0, 'running')`,
     )
     .run(run.keyword, JSON.stringify(platforms));
   const jobId = created.lastInsertRowid;
   const maxLeads = Number(req.body.maxLeads) || 50;
 
   setImmediate(() => {
-    discoverLeads(run.keyword, platforms, Math.min(Math.max(maxLeads, 1), 100), jobId)
-      .catch((error) => {
-        getDb().prepare('UPDATE discovery_runs SET status = ? WHERE id = ?').run('failed', jobId);
-        emitJobEvent(jobId, { type: 'error', jobId, message: error.message });
-        closeJobStream(jobId);
-      });
+    discoverLeads(
+      run.keyword,
+      platforms,
+      Math.min(Math.max(maxLeads, 1), 100),
+      jobId,
+    ).catch((error) => {
+      getDb()
+        .prepare("UPDATE discovery_runs SET status = ? WHERE id = ?")
+        .run("failed", jobId);
+      emitJobEvent(jobId, { type: "error", jobId, message: error.message });
+      closeJobStream(jobId);
+    });
   });
 
   return res.status(202).json({ jobId });
@@ -234,7 +269,7 @@ function updateLeadStatuses(leadIds, status) {
   const update = getDb().prepare(
     `UPDATE leads
      SET status = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
+     WHERE id = ?`,
   );
   const transaction = getDb().transaction((ids) => {
     let updated = 0;
@@ -249,7 +284,7 @@ function updateLeadStatuses(leadIds, status) {
 
 function parseJsonArray(value) {
   try {
-    const parsed = JSON.parse(value || '[]');
+    const parsed = JSON.parse(value || "[]");
     return Array.isArray(parsed) ? parsed : [];
   } catch (error) {
     return [];
@@ -265,50 +300,126 @@ function resolveKeywordsPath() {
 }
 
 function readKeywordsFile() {
-  const filePath = resolveKeywordsPath();
+  const ctx = getContext();
+  if (ctx.ctx_discovery_keywords && Array.isArray(ctx.ctx_discovery_keywords)) {
+    return {
+      version: 1,
+      keywords: ctx.ctx_discovery_keywords,
+      platforms: ctx.ctx_audience_geographies
+        ? ["linkedin", "x", "instagram"]
+        : ["linkedin", "x"],
+      maxLeadsPerKeyword: Number(ctx.ctx_discovery_max_per_keyword) || 10,
+    };
+  }
+  // Fallback: read from file
   try {
+    const filePath = resolveKeywordsPath();
     if (!fs.existsSync(filePath)) {
-      return { version: 1, keywords: [], platforms: ['linkedin', 'facebook'], maxLeadsPerKeyword: 10 };
+      return {
+        version: 1,
+        keywords: [],
+        platforms: ["linkedin", "facebook"],
+        maxLeadsPerKeyword: 10,
+      };
     }
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (err) {
-    return { version: 1, keywords: [], platforms: ['linkedin', 'facebook'], maxLeadsPerKeyword: 10 };
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return {
+      version: 1,
+      keywords: [],
+      platforms: ["linkedin", "facebook"],
+      maxLeadsPerKeyword: 10,
+    };
   }
 }
 
 function writeKeywordsFile(data) {
-  const filePath = resolveKeywordsPath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  // Write to context store (primary source after migration)
+  setContext("ctx_discovery_keywords", data.keywords || []);
+  if (data.maxLeadsPerKeyword !== undefined) {
+    setContext(
+      "ctx_discovery_max_per_keyword",
+      String(data.maxLeadsPerKeyword),
+    );
+  }
+
+  // Also write to file for backwards compatibility
+  try {
+    const filePath = resolveKeywordsPath();
+    require("fs").writeFileSync(
+      filePath,
+      JSON.stringify(data, null, 2),
+      "utf8",
+    );
+  } catch (err) {
+    logger.warn(
+      "DISCOVERY",
+      "Could not write keywords.json (non-fatal):",
+      err.message,
+    );
+  }
+}
+
+function normalizeKeywordEntry(entry) {
+  if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+    const keyword = String(entry.keyword || "").trim();
+    if (!keyword) return null;
+
+    const normalized = { ...entry, keyword };
+    if (Array.isArray(entry.platforms)) {
+      normalized.platforms = entry.platforms
+        .map((p) => String(p).trim().toLowerCase())
+        .filter(Boolean);
+    }
+    return normalized;
+  }
+
+  const keyword = String(entry || "").trim();
+  return keyword ? keyword : null;
+}
+
+function keywordIdentity(entry) {
+  if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+    return String(entry.keyword || "").trim().toLowerCase();
+  }
+  return String(entry || "").trim().toLowerCase();
 }
 
 // GET /api/discovery/keywords — returns keywords.json contents
-router.get('/keywords', (req, res) => {
+router.get("/keywords", (req, res) => {
   res.json(readKeywordsFile());
 });
 
 // POST /api/discovery/keywords — replaces full keywords config
-router.post('/keywords', (req, res) => {
+router.post("/keywords", (req, res) => {
   const { keywords, platforms, maxLeadsPerKeyword } = req.body;
 
   if (!Array.isArray(keywords) || keywords.length === 0) {
-    return res.status(400).json({ error: 'keywords must be a non-empty array' });
+    return res
+      .status(400)
+      .json({ error: "keywords must be a non-empty array" });
   }
 
   const sanitizedKeywords = keywords
-    .map(k => String(k || '').trim())
+    .map(normalizeKeywordEntry)
     .filter(Boolean);
 
   if (sanitizedKeywords.length === 0) {
-    return res.status(400).json({ error: 'At least one non-empty keyword is required' });
+    return res
+      .status(400)
+      .json({ error: "At least one non-empty keyword is required" });
   }
 
   const config = readKeywordsFile();
   config.keywords = sanitizedKeywords;
   if (Array.isArray(platforms) && platforms.length > 0) {
-    config.platforms = platforms.map(p => String(p).trim().toLowerCase());
+    config.platforms = platforms.map((p) => String(p).trim().toLowerCase());
   }
-  if (typeof maxLeadsPerKeyword === 'number' && maxLeadsPerKeyword >= 1 && maxLeadsPerKeyword <= 100) {
+  if (
+    typeof maxLeadsPerKeyword === "number" &&
+    maxLeadsPerKeyword >= 1 &&
+    maxLeadsPerKeyword <= 100
+  ) {
     config.maxLeadsPerKeyword = maxLeadsPerKeyword;
   }
   config.version = (config.version || 0) + 1;
@@ -318,15 +429,15 @@ router.post('/keywords', (req, res) => {
 });
 
 // POST /api/discovery/keywords/add — appends a single keyword
-router.post('/keywords/add', (req, res) => {
-  const keyword = String(req.body.keyword || '').trim();
+router.post("/keywords/add", (req, res) => {
+  const keyword = String(req.body.keyword || "").trim();
   if (!keyword) {
-    return res.status(400).json({ error: 'keyword is required' });
+    return res.status(400).json({ error: "keyword is required" });
   }
 
   const config = readKeywordsFile();
-  if (config.keywords.includes(keyword)) {
-    return res.status(409).json({ error: 'Keyword already exists', config });
+  if (config.keywords.some((item) => keywordIdentity(item) === keyword.toLowerCase())) {
+    return res.status(409).json({ error: "Keyword already exists", config });
   }
 
   config.keywords.push(keyword);
@@ -336,12 +447,16 @@ router.post('/keywords/add', (req, res) => {
 });
 
 // DELETE /api/discovery/keywords/:idx — removes keyword at index
-router.delete('/keywords/:idx', (req, res) => {
+router.delete("/keywords/:idx", (req, res) => {
   const idx = Number(req.params.idx);
   const config = readKeywordsFile();
 
   if (!Number.isInteger(idx) || idx < 0 || idx >= config.keywords.length) {
-    return res.status(400).json({ error: `Invalid index: ${req.params.idx}. Must be 0-${config.keywords.length - 1}` });
+    return res
+      .status(400)
+      .json({
+        error: `Invalid index: ${req.params.idx}. Must be 0-${config.keywords.length - 1}`,
+      });
   }
 
   const removed = config.keywords.splice(idx, 1)[0];

@@ -3,6 +3,7 @@ const fs = require("fs");
 const { getDb, increment_action_count } = require("../db/database");
 const { followAccount, viewStory, likeRecentPost } = require("./instagram");
 const { humanDelay } = require("./browserBase");
+const { getContext } = require("../services/contextService");
 
 /**
  * Emit an orchestration event to the active emitter or fall back to native logger.
@@ -48,7 +49,9 @@ function loadTemplates() {
 function getTemplate(platform, type) {
   const db = getDb();
   const settingKey = `template_${platform}_${type || "dm"}`;
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(settingKey);
+  const row = db
+    .prepare("SELECT value FROM settings WHERE key = ?")
+    .get(settingKey);
   if (row && row.value) return row.value;
 
   const templates = loadTemplates();
@@ -71,14 +74,21 @@ function getFirstName(name) {
 }
 
 function extractPainPoint(scoreReason) {
-  if (!scoreReason) return "managing restaurant operations more efficiently";
+  const ctx = getContext();
+  const painPoints = Array.isArray(ctx.ctx_product_pain_points)
+    ? ctx.ctx_product_pain_points
+    : [];
+  const fallback = painPoints[0] || "managing operations more efficiently";
+  if (!scoreReason) return fallback;
   const lower = scoreReason.toLowerCase();
-  if (lower.includes("restaurant") || lower.includes("food")) return "streamlining restaurant operations and orders";
-  if (lower.includes("hotel")) return "optimising hotel staff scheduling and guest management";
-  if (lower.includes("cafe") || lower.includes("coffee")) return "managing café orders and inventory efficiently";
-  if (lower.includes("sme") || lower.includes("enterprise"))
-    return "simplifying business operations with smart software";
-  return "managing business operations more efficiently";
+  for (const point of painPoints) {
+    const pl = point.toLowerCase();
+    if (lower.includes("restaurant") && pl.includes("restaurant")) return point;
+    if (lower.includes("hotel") && pl.includes("hotel")) return point;
+    if (lower.includes("cafe") && pl.includes("café")) return point;
+    if (lower.includes("outage") && pl.includes("outage")) return point;
+  }
+  return fallback;
 }
 
 // ── CORE STATE MACHINE METHODS ──────────────────────────────────────────────
@@ -92,7 +102,9 @@ function extractPainPoint(scoreReason) {
  */
 function startWarmupSequence(leadId) {
   const db = getDb();
-  const existing = db.prepare("SELECT id FROM ig_warmup_sequences WHERE lead_id = ?").get(leadId);
+  const existing = db
+    .prepare("SELECT id FROM ig_warmup_sequences WHERE lead_id = ?")
+    .get(leadId);
   if (existing) {
     return { success: false, error: "already_started" };
   }
@@ -157,7 +169,9 @@ function getLeadsDueForStep() {
  */
 async function advanceWarmupStep(page, { leadId }, emitter) {
   const db = getDb();
-  const sequence = db.prepare("SELECT * FROM ig_warmup_sequences WHERE lead_id = ?").get(leadId);
+  const sequence = db
+    .prepare("SELECT * FROM ig_warmup_sequences WHERE lead_id = ?")
+    .get(leadId);
   if (!sequence) {
     return { success: false, error: "sequence_not_found" };
   }
@@ -193,7 +207,11 @@ async function advanceWarmupStep(page, { leadId }, emitter) {
     }
   } else if (status === "following") {
     stepExecuted = "view_story";
-    safeEmit(emitter, "info", `[WARMUP] Starting story view step for @${username}`);
+    safeEmit(
+      emitter,
+      "info",
+      `[WARMUP] Starting story view step for @${username}`,
+    );
     actionResult = await viewStory(page, { username }, emitter);
     if (actionResult && actionResult.success) {
       success = true;
@@ -203,7 +221,11 @@ async function advanceWarmupStep(page, { leadId }, emitter) {
     }
   } else if (status === "story_viewed") {
     stepExecuted = "like";
-    safeEmit(emitter, "info", `[WARMUP] Starting post like step for @${username}`);
+    safeEmit(
+      emitter,
+      "info",
+      `[WARMUP] Starting post like step for @${username}`,
+    );
     actionResult = await likeRecentPost(page, { username }, emitter);
     if (actionResult && actionResult.success) {
       success = true;
@@ -247,7 +269,15 @@ async function advanceWarmupStep(page, { leadId }, emitter) {
           updated_at = CURRENT_TIMESTAMP
       WHERE lead_id = ?
     `,
-    ).run(nextStatus, nextStep, nextStepAfterStr, stepExecuted, stepExecuted, lastActionAtStr, leadId);
+    ).run(
+      nextStatus,
+      nextStep,
+      nextStepAfterStr,
+      stepExecuted,
+      stepExecuted,
+      lastActionAtStr,
+      leadId,
+    );
 
     // Record action in daily_actions for strict limit enforcement
     const dailyActionType = stepExecuted === "follow" ? "follows" : "likes";
@@ -369,21 +399,34 @@ function completeWarmup(leadId, emitter) {
   }
 
   // ig_is_message_request is 1 if follow_back_at is null, else 0
-  const ig_is_message_request = lead.ig_follow_back_at === null || lead.ig_follow_back_at === undefined ? 1 : 0;
+  const ig_is_message_request =
+    lead.ig_follow_back_at === null || lead.ig_follow_back_at === undefined
+      ? 1
+      : 0;
 
   // Generate personalized DM using template and details
   const template = getTemplate("instagram", "dm");
+  const ctx = getContext();
+  const geographies = Array.isArray(ctx.ctx_audience_geographies)
+    ? ctx.ctx_audience_geographies
+    : [];
   const templateVars = {
     lead_name: getFirstName(lead.name),
     role: lead.role || "",
     company: lead.company || "your business",
-    location: lead.location || "Kenya",
-    product: "Restaurant Manager",
+    location: lead.location || geographies[0] || "Kenya",
+    product: ctx.ctx_product_name,
+    product_tagline: ctx.ctx_product_tagline,
     pain_point: extractPainPoint(lead.score_reason),
+    value_prop: ctx.ctx_product_value_prop,
+    sender_name: ctx.ctx_sender_name,
+    sign_off: ctx.ctx_sender_sign_off,
+    cta: ctx.ctx_content_cta,
+    biz_name: ctx.ctx_biz_name,
   };
   let body = template
     ? fillTemplate(template, templateVars)
-    : `Hi ${templateVars.lead_name},\n\nI'm reaching out because I know how much of a nightmare it is when a sudden ISP outage brings a busy dining room to a standstill. I develop localized management systems specifically designed to maintain 100% operational uptime during internet drops—meaning kitchen routing and mobile payments keep flowing no matter what.\n\nIs relying on a stable connection something that currently causes friction for your front-of-house team?\n\nWould love to connect!\n\nBest,\nElvin`;
+    : `Hi ${templateVars.lead_name},\n\n${ctx.ctx_product_value_prop}\n\nWould love to connect!\n\n${ctx.ctx_sender_sign_off}`;
 
   // Limit check (1000 characters for instagram_dm)
   if (body.length > 1000) {

@@ -337,9 +337,78 @@ function initializeSchema(database) {
       .prepare("PRAGMA table_info(campaigns)")
       .all()
       .map((c) => c.name);
+    if (!cols.includes("name")) {
+      database.exec("ALTER TABLE campaigns ADD COLUMN name TEXT");
+    }
     if (!cols.includes("platform")) {
       database.exec("ALTER TABLE campaigns ADD COLUMN platform TEXT");
     }
+    if (!cols.includes("created_at")) {
+      database.exec("ALTER TABLE campaigns ADD COLUMN created_at DATETIME");
+    }
+    if (!cols.includes("updated_at")) {
+      database.exec("ALTER TABLE campaigns ADD COLUMN updated_at DATETIME");
+    }
+    database.exec(`
+      UPDATE campaigns
+      SET name = COALESCE(NULLIF(name, ''), 'Untitled Campaign ' || id),
+          platform = COALESCE(NULLIF(platform, ''), 'linkedin'),
+          created_at = COALESCE(created_at, CURRENT_TIMESTAMP),
+          updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
+    `);
+  } catch (_) {}
+
+  try {
+    const cols = database
+      .prepare("PRAGMA table_info(connection_jobs)")
+      .all()
+      .map((c) => c.name);
+    if (!cols.includes("created_at")) {
+      database.exec("ALTER TABLE connection_jobs ADD COLUMN created_at DATETIME");
+    }
+    if (!cols.includes("updated_at")) {
+      database.exec("ALTER TABLE connection_jobs ADD COLUMN updated_at DATETIME");
+    }
+    database.exec(`
+      UPDATE connection_jobs
+      SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP),
+          updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
+    `);
+  } catch (_) {}
+
+  try {
+    const cols = database
+      .prepare("PRAGMA table_info(dm_jobs)")
+      .all()
+      .map((c) => c.name);
+    if (!cols.includes("scheduled_at")) {
+      database.exec("ALTER TABLE dm_jobs ADD COLUMN scheduled_at DATETIME");
+    }
+    if (!cols.includes("created_at")) {
+      database.exec("ALTER TABLE dm_jobs ADD COLUMN created_at DATETIME");
+    }
+    if (!cols.includes("updated_at")) {
+      database.exec("ALTER TABLE dm_jobs ADD COLUMN updated_at DATETIME");
+    }
+    database.exec(`
+      UPDATE dm_jobs
+      SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP),
+          updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
+    `);
+  } catch (_) {}
+
+  try {
+    const cols = database
+      .prepare("PRAGMA table_info(campaign_events)")
+      .all()
+      .map((c) => c.name);
+    if (!cols.includes("created_at")) {
+      database.exec("ALTER TABLE campaign_events ADD COLUMN created_at DATETIME");
+    }
+    database.exec(`
+      UPDATE campaign_events
+      SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP)
+    `);
   } catch (_) {}
 
   try {
@@ -507,6 +576,47 @@ function getDb() {
 
 function initializeDatabase() {
   initializeSchema(db);
+  // Migrate keywords.json -> context store (runs once, skipped if already migrated)
+  migrateKeywordsToContextStore();
+}
+
+function migrateKeywordsToContextStore() {
+  try {
+    const db = getDb();
+    // Check if already migrated
+    const existing = db
+      .prepare(
+        "SELECT value FROM settings WHERE key = 'ctx_discovery_keywords'",
+      )
+      .get();
+    if (existing) return; // Already done
+
+    const fs = require("fs");
+    const path = require("path");
+    const filePath = path.resolve("./src/config/keywords.json");
+    if (!fs.existsSync(filePath)) return;
+
+    const fileContent = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const keywords = fileContent.keywords || [];
+    const maxPerKeyword = fileContent.maxLeadsPerKeyword || 10;
+
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES ('ctx_discovery_keywords', ?) ON CONFLICT(key) DO NOTHING",
+    ).run(JSON.stringify(keywords));
+
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES ('ctx_discovery_max_per_keyword', ?) ON CONFLICT(key) DO NOTHING",
+    ).run(String(maxPerKeyword));
+
+    const logger = require("../utils/logger");
+    logger.info(
+      "DB",
+      `Migrated ${keywords.length} keywords from keywords.json to context store`,
+    );
+  } catch (err) {
+    // Non-fatal - log and continue
+    console.warn("[DB] keywords.json migration skipped:", err.message);
+  }
 }
 
 module.exports = {

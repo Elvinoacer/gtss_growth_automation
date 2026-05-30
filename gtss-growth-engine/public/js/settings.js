@@ -1,10 +1,16 @@
 const variables = [
   "{{lead_name}}",
-  "{{role}}",
   "{{company}}",
+  "{{role}}",
   "{{location}}",
   "{{product}}",
+  "{{product_tagline}}",
   "{{pain_point}}",
+  "{{value_prop}}",
+  "{{sender_name}}",
+  "{{sign_off}}",
+  "{{cta}}",
+  "{{biz_name}}",
 ];
 let settingsState = {
   settings: {},
@@ -120,12 +126,16 @@ async function loadSettings() {
     "discovery_min_followers",
     "discovery_max_followers",
     "ig_selector_version",
-    "ig_blocked_until"
+    "ig_blocked_until",
   ];
-  igKeys.forEach(key => {
+  igKeys.forEach((key) => {
     const el = document.getElementById(key);
     if (el) {
-      el.value = settingsState.settings[key] !== undefined && settingsState.settings[key] !== null ? settingsState.settings[key] : "";
+      el.value =
+        settingsState.settings[key] !== undefined &&
+        settingsState.settings[key] !== null
+          ? settingsState.settings[key]
+          : "";
     }
   });
   renderTemplateTabs();
@@ -238,11 +248,10 @@ function renderTemplateEditor() {
   const editor = document.getElementById("template-editor");
   editor.value = settingsState.templates[settingsState.activeTemplate] || "";
   updateCharCount();
-  
+
   let currentVariables = variables;
   if (settingsState.activeTemplate === "instagram_dm") {
     editor.setAttribute("maxlength", "1000");
-    currentVariables = ["{{lead_name}}", "{{business_name}}", "{{product_name}}"];
   } else {
     editor.removeAttribute("maxlength");
   }
@@ -315,7 +324,9 @@ function bindEvents() {
   document.querySelectorAll(".notification-checkbox").forEach((checkbox) => {
     checkbox.addEventListener("change", saveNotifications);
   });
-  document.getElementById("save-instagram-settings").addEventListener("click", saveInstagramSettings);
+  document
+    .getElementById("save-instagram-settings")
+    .addEventListener("click", saveInstagramSettings);
   document.addEventListener("click", async (event) => {
     const templateButton = event.target.closest("[data-template-key]");
     const variableButton = event.target.closest("[data-variable]");
@@ -425,10 +436,10 @@ async function saveInstagramSettings() {
       "discovery_min_followers",
       "discovery_max_followers",
       "ig_selector_version",
-      "ig_blocked_until"
+      "ig_blocked_until",
     ];
     const formData = {};
-    igKeys.forEach(key => {
+    igKeys.forEach((key) => {
       const el = document.getElementById(key);
       if (el) {
         if (key === "ig_selector_version" || key === "ig_blocked_until") {
@@ -442,11 +453,14 @@ async function saveInstagramSettings() {
     const res = await window.gtss.fetchJSON("/api/settings/instagram", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(formData)
+      body: JSON.stringify(formData),
     });
 
     if (res.success) {
-      window.gtss.showToast("Instagram settings saved successfully!", "success");
+      window.gtss.showToast(
+        "Instagram settings saved successfully!",
+        "success",
+      );
       setInline("instagram-settings-result", "✓ Settings saved", "success");
     } else {
       window.gtss.showToast(res.error || "Failed to save settings.", "error");
@@ -491,13 +505,19 @@ async function applyTemplateToAll() {
   // First, save the current editor content for ALL platform templates
   const template = document.getElementById("template-editor").value;
   if (!template.trim()) {
-    window.gtss.showToast("Template is empty — write your message first", "error");
+    window.gtss.showToast(
+      "Template is empty — write your message first",
+      "error",
+    );
     return;
   }
 
-  if (!(await confirmModal(
-    `This will save this template to ALL platforms and overwrite ALL ${settingsState.templates ? 'existing' : ''} message bodies in the system. Continue?`
-  ))) return;
+  if (
+    !(await confirmModal(
+      `This will save this template to ALL platforms and overwrite ALL ${settingsState.templates ? "existing" : ""} message bodies in the system. Continue?`,
+    ))
+  )
+    return;
 
   btn.disabled = true;
   btn.textContent = "⏳ Applying...";
@@ -517,17 +537,23 @@ async function applyTemplateToAll() {
 
     // Now apply to all existing messages
     setInline("template-apply-result", "Updating all existing messages...", "");
-    const result = await window.gtss.fetchJSON("/api/settings/templates/apply-all", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
+    const result = await window.gtss.fetchJSON(
+      "/api/settings/templates/apply-all",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      },
+    );
 
     setInline(
       "template-apply-result",
       `✓ Updated ${result.updated}/${result.total} messages across all platforms`,
       "success",
     );
-    window.gtss.showToast(`Applied template to ${result.updated} messages`, "success");
+    window.gtss.showToast(
+      `Applied template to ${result.updated} messages`,
+      "success",
+    );
     renderTemplateTabs();
   } catch (error) {
     setInline("template-apply-result", `Failed: ${error.message}`, "error");
@@ -633,15 +659,22 @@ async function loadPipelineSettings() {
 
 function applyPipelineConfig(config) {
   document.getElementById("pipeline-mode").value = config.pipelineMode || "ai";
-  document.getElementById("pipeline-auto-approve").value = config.autoApproveVariant || "B";
-  document.getElementById("pipeline-cron").value = config.pipelineCron || "0 8 * * *";
+  document.getElementById("pipeline-auto-approve").value =
+    config.autoApproveVariant || "B";
+  document.getElementById("pipeline-cron").value =
+    config.pipelineCron || "0 8 * * *";
   document.getElementById("discovery-mode").value = config.discoveryMode || "";
-  document.getElementById("qualification-mode").value = config.qualificationMode || "";
+  document.getElementById("qualification-mode").value =
+    config.qualificationMode || "";
   document.getElementById("message-mode").value = config.messageMode || "";
-  document.getElementById("qualification-threshold").value = config.qualificationThreshold ?? 50;
-  document.getElementById("qualification-manual-score").value = config.qualificationManualScore ?? 75;
-  document.getElementById("linkedin-outreach-mode").value = config.linkedinOutreachMode || "connect_first";
-  document.getElementById("x-outreach-mode").value = config.xOutreachMode || "follow_first";
+  document.getElementById("qualification-threshold").value =
+    config.qualificationThreshold ?? 50;
+  document.getElementById("qualification-manual-score").value =
+    config.qualificationManualScore ?? 75;
+  document.getElementById("linkedin-outreach-mode").value =
+    config.linkedinOutreachMode || "connect_first";
+  document.getElementById("x-outreach-mode").value =
+    config.xOutreachMode || "follow_first";
 }
 
 function renderKeywords(data) {
@@ -650,24 +683,35 @@ function renderKeywords(data) {
     list.innerHTML = '<span class="muted">No keywords configured.</span>';
     return;
   }
-  list.innerHTML = data.keywords.map((kw, idx) => `
+  list.innerHTML = data.keywords
+    .map(
+      (kw, idx) => `
     <div style="display: flex; align-items: center; gap: 8px;">
       <span style="flex: 1; color: var(--gtss-text); font-size: 13px;">${idx + 1}. ${kw}</span>
       <button class="secondary-button" data-remove-keyword="${idx}" type="button" style="min-height: 30px; padding: 0 8px; font-size: 12px;">✕</button>
     </div>
-  `).join("");
+  `,
+    )
+    .join("");
 }
 
 function renderPipelineRuns(runs) {
   const body = document.getElementById("pipeline-runs-body");
   if (!runs || runs.length === 0) {
-    body.innerHTML = '<tr><td colspan="9" class="muted" style="text-align: center;">No pipeline runs yet</td></tr>';
+    body.innerHTML =
+      '<tr><td colspan="9" class="muted" style="text-align: center;">No pipeline runs yet</td></tr>';
     return;
   }
-  body.innerHTML = runs.map(run => {
-    const s = run.stages || {};
-    const statusClass = run.status === "completed" ? "color: var(--gtss-success)" : run.status === "failed" ? "color: var(--gtss-danger)" : "color: var(--gtss-warning, #f59e0b)";
-    return `<tr>
+  body.innerHTML = runs
+    .map((run) => {
+      const s = run.stages || {};
+      const statusClass =
+        run.status === "completed"
+          ? "color: var(--gtss-success)"
+          : run.status === "failed"
+            ? "color: var(--gtss-danger)"
+            : "color: var(--gtss-warning, #f59e0b)";
+      return `<tr>
       <td>${run.id}</td>
       <td>${run.trigger}</td>
       <td>${run.mode}</td>
@@ -678,7 +722,8 @@ function renderPipelineRuns(runs) {
       <td>${s.messages ? `${s.messages.generated || 0}` : "-"}</td>
       <td>${s.send ? `${s.send.sent || 0}` : "-"}</td>
     </tr>`;
-  }).join("");
+    })
+    .join("");
 }
 
 async function savePipelineSettings() {
@@ -688,14 +733,20 @@ async function savePipelineSettings() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         pipelineMode: document.getElementById("pipeline-mode").value,
-        autoApproveVariant: document.getElementById("pipeline-auto-approve").value,
+        autoApproveVariant: document.getElementById("pipeline-auto-approve")
+          .value,
         pipelineCron: document.getElementById("pipeline-cron").value,
         discoveryMode: document.getElementById("discovery-mode").value,
         qualificationMode: document.getElementById("qualification-mode").value,
         messageMode: document.getElementById("message-mode").value,
-        qualificationThreshold: document.getElementById("qualification-threshold").value,
-        qualificationManualScore: document.getElementById("qualification-manual-score").value,
-        linkedinOutreachMode: document.getElementById("linkedin-outreach-mode").value,
+        qualificationThreshold: document.getElementById(
+          "qualification-threshold",
+        ).value,
+        qualificationManualScore: document.getElementById(
+          "qualification-manual-score",
+        ).value,
+        linkedinOutreachMode: document.getElementById("linkedin-outreach-mode")
+          .value,
         xOutreachMode: document.getElementById("x-outreach-mode").value,
       }),
     });
@@ -709,7 +760,11 @@ async function runPipeline() {
   const btn = document.getElementById("run-pipeline");
   btn.disabled = true;
   btn.textContent = "⏳ Running...";
-  setInline("pipeline-result", "Pipeline running — this may take several minutes...", "");
+  setInline(
+    "pipeline-result",
+    "Pipeline running — this may take several minutes...",
+    "",
+  );
 
   try {
     const mode = document.getElementById("pipeline-mode").value;
@@ -718,11 +773,17 @@ async function runPipeline() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode }),
     });
-    setInline("pipeline-result", `Pipeline run #${result.runId} started. Refresh to see results.`, "success");
+    setInline(
+      "pipeline-result",
+      `Pipeline run #${result.runId} started. Refresh to see results.`,
+      "success",
+    );
     // Refresh runs after a short delay
     setTimeout(async () => {
       try {
-        pipelineState.runs = await window.gtss.fetchJSON("/api/pipeline/runs?limit=5");
+        pipelineState.runs = await window.gtss.fetchJSON(
+          "/api/pipeline/runs?limit=5",
+        );
         renderPipelineRuns(pipelineState.runs);
       } catch (_) {}
     }, 3000);
@@ -756,9 +817,12 @@ async function addKeyword() {
 
 async function removeKeyword(idx) {
   try {
-    const result = await window.gtss.fetchJSON(`/api/discovery/keywords/${idx}`, {
-      method: "DELETE",
-    });
+    const result = await window.gtss.fetchJSON(
+      `/api/discovery/keywords/${idx}`,
+      {
+        method: "DELETE",
+      },
+    );
     pipelineState.keywords = result.config;
     renderKeywords(result.config);
     window.gtss.showToast(`Removed: ${result.removed}`, "success");
@@ -768,8 +832,12 @@ async function removeKeyword(idx) {
 }
 
 function bindPipelineEvents() {
-  document.getElementById("save-pipeline").addEventListener("click", savePipelineSettings);
-  document.getElementById("run-pipeline").addEventListener("click", runPipeline);
+  document
+    .getElementById("save-pipeline")
+    .addEventListener("click", savePipelineSettings);
+  document
+    .getElementById("run-pipeline")
+    .addEventListener("click", runPipeline);
   document.getElementById("add-keyword").addEventListener("click", addKeyword);
   document.getElementById("new-keyword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") addKeyword();
@@ -782,11 +850,312 @@ function bindPipelineEvents() {
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// BRAND CONTEXT - Phase 1
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Fields that are stored as arrays in the DB but edited as multiline text in the UI
+const CTX_ARRAY_FIELDS = [
+  "ctx_product_key_features",
+  "ctx_product_pain_points",
+  "ctx_audience_industries",
+  "ctx_audience_geographies",
+  "ctx_audience_exclude_industries",
+  "ctx_content_post_themes",
+];
+
+// Fields that stay as plain strings
+const CTX_TEXT_FIELDS = [
+  "ctx_biz_name",
+  "ctx_biz_description",
+  "ctx_biz_industry",
+  "ctx_biz_location",
+  "ctx_biz_website",
+  "ctx_product_name",
+  "ctx_product_tagline",
+  "ctx_product_description",
+  "ctx_product_value_prop",
+  "ctx_audience_ideal_profile",
+  "ctx_audience_exclude_industries",
+  "ctx_sender_name",
+  "ctx_sender_full_name",
+  "ctx_sender_role",
+  "ctx_sender_sign_off",
+  "ctx_content_tone",
+  "ctx_content_language",
+  "ctx_content_cta",
+  "ctx_content_image_style",
+];
+
+async function loadContext() {
+  try {
+    const ctx = await window.gtss.fetchJSON("/api/context");
+    populateContextForm(ctx);
+  } catch (err) {
+    console.error("Failed to load context:", err);
+  }
+}
+
+function populateContextForm(ctx) {
+  // Plain text fields
+  CTX_TEXT_FIELDS.forEach((key) => {
+    const el = document.getElementById(key);
+    if (el && ctx[key] !== undefined) el.value = ctx[key];
+  });
+
+  // Array fields - join as one-per-line
+  CTX_ARRAY_FIELDS.forEach((key) => {
+    const el = document.getElementById(key);
+    if (!el) return;
+    const val = ctx[key];
+    el.value = Array.isArray(val) ? val.join("\n") : val || "";
+  });
+
+  // Scoring weights - render mini input fields
+  renderScoringWeights(ctx.ctx_audience_scoring_weights || {});
+}
+
+function renderScoringWeights(weights) {
+  const container = document.getElementById("scoring-weights-row");
+  if (!container) return;
+  container.innerHTML = "";
+  const labels = {
+    business_type: "Business Type",
+    location: "Location",
+    business_size: "Business Size",
+    completeness: "Profile Completeness",
+    recency: "Activity Recency",
+  };
+  Object.entries(weights).forEach(([key, value]) => {
+    const label = labels[key] || key;
+    container.insertAdjacentHTML(
+      "beforeend",
+      `
+      <label class="field" style="flex:0 0 auto;min-width:140px;">
+        ${label} <span class="muted">/ 100</span>
+        <input type="number" min="0" max="100" id="weight_${key}" value="${value}" style="width:80px;">
+      </label>
+    `,
+    );
+  });
+}
+
+function collectContextPayload() {
+  const payload = {};
+
+  // Plain text fields
+  CTX_TEXT_FIELDS.forEach((key) => {
+    const el = document.getElementById(key);
+    if (el) payload[key] = el.value.trim();
+  });
+
+  // Array fields - split by newline, trim, filter empties
+  CTX_ARRAY_FIELDS.forEach((key) => {
+    const el = document.getElementById(key);
+    if (el) {
+      payload[key] = el.value
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+  });
+
+  // Scoring weights
+  const weightKeys = [
+    "business_type",
+    "location",
+    "business_size",
+    "completeness",
+    "recency",
+  ];
+  const weights = {};
+  weightKeys.forEach((k) => {
+    const el = document.getElementById(`weight_${k}`);
+    if (el) weights[k] = Number(el.value) || 0;
+  });
+  payload.ctx_audience_scoring_weights = weights;
+
+  return payload;
+}
+
+async function saveContext() {
+  const resultEl = document.getElementById("context-result");
+  const btn = document.getElementById("save-context-btn");
+  try {
+    btn.disabled = true;
+    const payload = collectContextPayload();
+
+    // Client-side weight validation
+    const weightSum = Object.values(
+      payload.ctx_audience_scoring_weights,
+    ).reduce((s, v) => s + v, 0);
+    if (weightSum !== 100) {
+      resultEl.textContent = `Scoring weights must sum to 100 (currently ${weightSum})`;
+      resultEl.className = "inline-result error";
+      return;
+    }
+
+    const res = await window.gtss.fetchJSON("/api/context", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    resultEl.textContent = `Saved ${res.updated.length} fields ✓`;
+    resultEl.className = "inline-result success";
+    setTimeout(() => {
+      resultEl.textContent = "";
+      resultEl.className = "inline-result";
+    }, 3000);
+  } catch (err) {
+    resultEl.textContent = err.message;
+    resultEl.className = "inline-result error";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function resetContextToDefaults() {
+  if (
+    !confirm(
+      "Reset all context fields to built-in defaults? This cannot be undone.",
+    )
+  )
+    return;
+  const resultEl = document.getElementById("context-result");
+  try {
+    const res = await window.gtss.fetchJSON("/api/context/reset", {
+      method: "POST",
+    });
+    populateContextForm(res.context);
+    resultEl.textContent = "Reset to defaults ✓";
+    resultEl.className = "inline-result success";
+    setTimeout(() => {
+      resultEl.textContent = "";
+      resultEl.className = "inline-result";
+    }, 3000);
+  } catch (err) {
+    resultEl.textContent = err.message;
+    resultEl.className = "inline-result error";
+  }
+}
+
+// Preview modal
+let previewData = null;
+async function openContextPreview() {
+  const backdrop = document.getElementById("context-preview-backdrop");
+  const tabsEl = document.getElementById("preview-tabs");
+  const contentEl = document.getElementById("preview-content");
+  backdrop.classList.add("visible");
+  contentEl.textContent = "Loading preview...";
+  tabsEl.innerHTML = "";
+
+  try {
+    const previews = await window.gtss.fetchJSON("/api/context/preview");
+    const labelMap = {
+      qualification: "Lead Qualification",
+      messages: "Message Variables",
+      caption: "Post Caption",
+      image: "Image Generation",
+    };
+
+    Object.entries(previews).forEach(([key, text], i) => {
+      const label = labelMap[key] || key;
+      const btn = document.createElement("button");
+      btn.className = "tab-button" + (i === 0 ? " active" : "");
+      btn.textContent = label;
+      btn.addEventListener("click", () => {
+        tabsEl
+          .querySelectorAll(".tab-button")
+          .forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        contentEl.textContent = text;
+      });
+      tabsEl.appendChild(btn);
+      if (i === 0) contentEl.textContent = text;
+    });
+  } catch (err) {
+    contentEl.textContent = "Preview error: " + err.message;
+  }
+}
+
+function buildQualificationPreview(ctx) {
+  const industries = (ctx.ctx_audience_industries || []).join(", ");
+  const geos = (ctx.ctx_audience_geographies || []).join(", ");
+  const w = ctx.ctx_audience_scoring_weights || {};
+  return `You are a lead qualification specialist for ${ctx.ctx_biz_name}, ${ctx.ctx_biz_description}
+
+Ideal customer: ${ctx.ctx_audience_ideal_profile}
+
+Score this lead from 0 to 100.
+
+Scoring factors:
+- Business type match (${industries}): ${w.business_type || 30} points
+- Location (${geos}): ${w.location || 20} points
+- Business size signals: ${w.business_size || 20} points
+- Profile completeness: ${w.completeness || 15} points
+- Activity recency: ${w.recency || 15} points`;
+}
+
+function buildMessagePreview(ctx) {
+  return `Template variables resolved from context:
+{{product}}       → ${ctx.ctx_product_name}
+{{product_tagline}} → ${ctx.ctx_product_tagline}
+{{pain_point}}    → ${(ctx.ctx_product_pain_points || [])[0] || ""}
+{{value_prop}}    → ${ctx.ctx_product_value_prop}
+{{sender_name}}   → ${ctx.ctx_sender_name}
+{{sign_off}}      → ${ctx.ctx_sender_sign_off}
+{{cta}}           → ${ctx.ctx_content_cta}
+{{biz_name}}      → ${ctx.ctx_biz_name}`;
+}
+
+function buildCaptionPreview(ctx) {
+  return `Write a social media caption for [platform] about: [topic]
+Company: ${ctx.ctx_biz_name} — ${ctx.ctx_biz_description}
+Product: ${ctx.ctx_product_name}
+Tone: ${ctx.ctx_content_tone}
+Target audience: ${ctx.ctx_audience_ideal_profile}
+End with this call to action: ${ctx.ctx_content_cta}`;
+}
+
+function buildImagePreview(ctx) {
+  return `You are a creative director for ${ctx.ctx_biz_name}, ${ctx.ctx_biz_description}
+Write a detailed image-generation prompt for a [platform] post.
+
+Topic: [topic]
+Brand themes: ${(ctx.ctx_content_post_themes || []).join(", ")}
+Visual style: ${ctx.ctx_content_image_style}
+Target audience: ${ctx.ctx_audience_ideal_profile}
+Location context: ${(ctx.ctx_audience_geographies || [])[0] || ""}`;
+}
+
+// ── Wire up events ────────────────────────────────────────────────────────────
+document
+  .getElementById("save-context-btn")
+  ?.addEventListener("click", saveContext);
+document
+  .getElementById("reset-context-btn")
+  ?.addEventListener("click", resetContextToDefaults);
+document
+  .getElementById("preview-context-btn")
+  ?.addEventListener("click", openContextPreview);
+document.getElementById("close-preview-btn")?.addEventListener("click", () => {
+  document
+    .getElementById("context-preview-backdrop")
+    ?.classList.remove("visible");
+});
+document
+  .getElementById("context-preview-backdrop")
+  ?.addEventListener("click", (e) => {
+    if (e.target.id === "context-preview-backdrop")
+      e.target.classList.remove("visible");
+  });
+
 document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
   bindPipelineEvents();
   await loadSettings();
+  await loadContext();
   await loadSessions();
   await loadPipelineSettings();
 });
-

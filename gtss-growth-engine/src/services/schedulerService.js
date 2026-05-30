@@ -13,6 +13,7 @@ const {
 } = require("../automation/browserBase");
 const { isSessionValid } = require("../automation/sessionManager");
 const { callGeminiText } = require("./aiService");
+const { getContext } = require("./contextService");
 const logger = require("../utils/logger");
 
 // ---------------------------------------------------------------------------
@@ -312,8 +313,11 @@ async function attachFacebookMedia(page, dialogScope, mediaPath, emit) {
   ];
 
   const photoBtn =
-    (await firstEnabledLocator(dialogScope.locator, photoVideoSelectors, 8000)) ||
-    (await firstEnabledLocator(page, photoVideoSelectors, 3000));
+    (await firstEnabledLocator(
+      dialogScope.locator,
+      photoVideoSelectors,
+      8000,
+    )) || (await firstEnabledLocator(page, photoVideoSelectors, 3000));
 
   if (!photoBtn) {
     await captureFacebookDebugSnapshot(page, "media-button-not-found");
@@ -1176,8 +1180,11 @@ async function postToFacebook(page, body, mediaPath, emit) {
     ];
 
     const nextBtn =
-      (await firstEnabledLocator(dialogScope.locator, nextBtnSelectors, 5000)) ||
-      (await firstEnabledLocator(page, nextBtnSelectors, 2500));
+      (await firstEnabledLocator(
+        dialogScope.locator,
+        nextBtnSelectors,
+        5000,
+      )) || (await firstEnabledLocator(page, nextBtnSelectors, 2500));
     if (nextBtn) {
       emit({
         type: "info",
@@ -1215,8 +1222,11 @@ async function postToFacebook(page, body, mediaPath, emit) {
     const activeDialog =
       (await findFacebookComposerDialog(page, 2500)) || dialogScope;
     const postBtn =
-      (await firstEnabledLocator(activeDialog.locator, postBtnSelectors, 10000)) ||
-      (await firstEnabledLocator(page, postBtnSelectors, 3000));
+      (await firstEnabledLocator(
+        activeDialog.locator,
+        postBtnSelectors,
+        10000,
+      )) || (await firstEnabledLocator(page, postBtnSelectors, 3000));
     if (!postBtn) {
       await captureFacebookDebugSnapshot(page, "post-button-not-found");
       throw new Error("Facebook Post button not found — cannot submit post.");
@@ -1597,13 +1607,29 @@ async function publishPost(postId, emit, browserOptions = {}) {
 // ---------------------------------------------------------------------------
 
 async function generateCaption(topic, platform, tone) {
+  const ctx = getContext();
   const limit = POST_CHAR_LIMITS[platform] || 2200;
-  const toneLabel = tone || "engaging";
+  const toneLabel = tone || ctx.ctx_content_tone || "engaging";
+
+  // Build platform hashtags string
+  const hashtagSets = ctx.ctx_content_hashtag_sets || {};
+  const platformHashtags = Array.isArray(hashtagSets[platform])
+    ? hashtagSets[platform]
+        .slice(0, 5)
+        .map((h) => `#${h}`)
+        .join(" ")
+    : "";
 
   const prompt = `Write a social media caption for ${platform} about: ${topic}
+
+Company: ${ctx.ctx_biz_name} — ${ctx.ctx_biz_description}
+Product: ${ctx.ctx_product_name} — ${ctx.ctx_product_tagline}
 Tone: ${toneLabel}
 Platform character limit: ${limit}
-Make it engaging, relevant to Kenyan business owners, and end with a call to action.
+Target audience: ${ctx.ctx_audience_ideal_profile}
+Location context: ${Array.isArray(ctx.ctx_audience_geographies) ? ctx.ctx_audience_geographies[0] : "Kenya"}
+End with this call to action: ${ctx.ctx_content_cta}
+${platformHashtags ? `Append these hashtags: ${platformHashtags}` : ""}
 Use plain text only. Do not use markdown formatting, HTML entities, bullets, or special styling characters.
 Return ONLY the caption text, no explanations.`;
 

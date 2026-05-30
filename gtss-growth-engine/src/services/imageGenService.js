@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const { getDb } = require("../db/database");
 const { callGeminiText } = require("./aiService");
+const { getContext } = require("./contextService");
 const { generateImageViaGeminiWeb } = require("../automation/geminiWeb");
 const { emitJobEvent } = require("./schedulerService"); // reuse SSE helpers
 const logger = require("../utils/logger");
@@ -9,24 +10,45 @@ const logger = require("../utils/logger");
  * Build a meta-prompt that tells Gemini to produce a detailed image-generation prompt.
  * The richer the context the user gives (topic, style, platform), the better the result.
  */
-function buildMetaPrompt({
-  topic,
-  style = "photorealistic",
-  platform = "instagram",
-}) {
-  return `
-You are a creative director. Write a detailed, vivid image-generation prompt
-for an AI image model. The image should suit a ${platform} post.
+function firstArrayValue(value, fallback = "") {
+  return Array.isArray(value) ? value[0] || fallback : value || fallback;
+}
+
+function joinArrayValue(value) {
+  return Array.isArray(value) ? value.join(", ") : value || "";
+}
+
+function buildMetaPrompt({ topic, style, platform = "instagram" }) {
+  const ctx = getContext();
+  const resolvedPlatform = platform || "instagram";
+  const visualStyle = style || ctx.ctx_content_image_style || "photorealistic";
+  const themes = joinArrayValue(ctx.ctx_content_post_themes);
+  const features = joinArrayValue(ctx.ctx_product_key_features);
+  const painPoints = joinArrayValue(ctx.ctx_product_pain_points);
+  const location = firstArrayValue(ctx.ctx_audience_geographies, "Kenya");
+
+  return `You are a creative director for ${ctx.ctx_biz_name}, ${ctx.ctx_biz_description}
+Write a detailed, vivid image-generation prompt for an AI image model.
+The image should suit a ${resolvedPlatform} post for a ${ctx.ctx_biz_industry} brand.
 
 Topic: ${topic}
-Visual style: ${style}
+Product: ${ctx.ctx_product_name} - ${ctx.ctx_product_tagline}
+Product value proposition: ${ctx.ctx_product_value_prop}
+Key product features: ${features}
+Customer pain points to reflect visually: ${painPoints}
+Brand themes: ${themes}
+Visual style: ${visualStyle}
+Target audience: ${ctx.ctx_audience_ideal_profile}
+Location context: ${location}
+Brand tone: ${ctx.ctx_content_tone}
 
 Rules:
+- Keep imagery consistent with ${ctx.ctx_biz_name}'s brand and target audience.
+- Make the concept reinforce ${ctx.ctx_product_name}'s positioning without adding visible words, logos, or UI text.
 - Be specific about lighting, composition, colour palette, and mood.
-- Describe the scene as if briefing a photographer.
+- Describe the scene as if briefing a professional photographer.
 - Do NOT include any text, watermarks, or logos in the description.
-- Return ONLY the prompt text. No explanations, no preamble.
-`.trim();
+- Return ONLY the prompt text. No explanations, no preamble.`.trim();
 }
 
 /**
@@ -39,8 +61,14 @@ Rules:
  *
  * @returns {Promise<{jobId, filePath, fileName, genPrompt}>}
  */
-async function runImageGenJob({ jobId = crypto.randomUUID(), topic, style, platform }) {
+async function runImageGenJob({
+  jobId = crypto.randomUUID(),
+  topic,
+  style,
+  platform,
+}) {
   const db = getDb();
+  const metaPrompt = buildMetaPrompt({ topic, style, platform });
 
   // Insert job row
   db.prepare(
@@ -48,7 +76,7 @@ async function runImageGenJob({ jobId = crypto.randomUUID(), topic, style, platf
     INSERT INTO image_gen_jobs (id, meta_prompt, status)
     VALUES (?, ?, 'pending')
   `,
-  ).run(jobId, topic);
+  ).run(jobId, metaPrompt);
 
   // Emit helper - wraps schedulerService.emitJobEvent so the UI SSE stream works
   const emit = (event, message, data = {}) => {
@@ -62,7 +90,6 @@ async function runImageGenJob({ jobId = crypto.randomUUID(), topic, style, platf
 
     // -- Phase 1: Prompt refinement -----------------------------------------
     emit("prompt_generating", "Generating image prompt with Gemini API...");
-    const metaPrompt = buildMetaPrompt({ topic, style, platform });
     const genPrompt = await callGeminiText(metaPrompt);
 
     db.prepare(`UPDATE image_gen_jobs SET gen_prompt=? WHERE id=?`).run(
@@ -98,4 +125,4 @@ async function runImageGenJob({ jobId = crypto.randomUUID(), topic, style, platf
   }
 }
 
-module.exports = { runImageGenJob };
+module.exports = { runImageGenJob, buildMetaPrompt };

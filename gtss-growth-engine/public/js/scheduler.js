@@ -18,6 +18,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let editingPostMedia = null;
   let isPaused = false;
   let carouselFiles = []; // array of { id, file, path, filePath }
+  let schedulerContext = null;
 
   // DOM refs
   const $ = (id) => document.getElementById(id);
@@ -56,6 +57,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const imageGenPrompt = $("image-gen-prompt");
   const imageGenFile = $("image-gen-file");
   const imageGenLog = $("image-gen-log");
+  const imageGenContext = $("image-gen-context");
 
   // Instagram Custom DOM refs
   const igPostOptions = $("ig-post-options");
@@ -77,6 +79,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function init() {
     bindEvents();
+    await loadSchedulerContext();
     await loadPauseState();
     await refreshSchedulerViews();
 
@@ -136,6 +139,47 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function refreshSchedulerViews() {
     await Promise.allSettled([loadCalendar(), loadQueue()]);
+  }
+
+  function firstContextValue(value, fallback = "") {
+    return Array.isArray(value) ? value[0] || fallback : value || fallback;
+  }
+
+  function joinContextValue(value) {
+    return Array.isArray(value) ? value.join(", ") : value || "";
+  }
+
+  function getImageContextSummary(ctx) {
+    if (!ctx) return "Context unavailable.";
+    const themes = joinContextValue(ctx.ctx_content_post_themes);
+    return [
+      `${ctx.ctx_biz_name || "Business"} - ${ctx.ctx_product_name || "Product"}`,
+      `Audience: ${ctx.ctx_audience_ideal_profile || "Not configured"}`,
+      `Themes: ${themes || "Not configured"}`,
+      `Visual: ${ctx.ctx_content_image_style || "Not configured"}`,
+    ].join("\n");
+  }
+
+  async function loadSchedulerContext() {
+    if (!imageGenContext && !imageGenTopic) return;
+    try {
+      schedulerContext = await fetchJSON("/api/context");
+      if (imageGenContext) {
+        imageGenContext.textContent = getImageContextSummary(schedulerContext);
+      }
+
+      const topicHint =
+        firstContextValue(schedulerContext.ctx_content_post_themes) ||
+        schedulerContext.ctx_product_value_prop ||
+        schedulerContext.ctx_product_name;
+      if (imageGenTopic && topicHint) {
+        imageGenTopic.placeholder = `Image topic or description, e.g. ${topicHint}`;
+      }
+    } catch (err) {
+      if (imageGenContext) {
+        imageGenContext.textContent = `Could not load context: ${err.message}`;
+      }
+    }
   }
 
   // ── Character Counter ──
@@ -923,11 +967,16 @@ document.addEventListener("DOMContentLoaded", () => {
         imageGenStatus.textContent = "Starting";
 
         try {
+          if (schedulerContext) {
+            appendImageGenLog(
+              `Using context: ${schedulerContext.ctx_biz_name || "Business"} / ${schedulerContext.ctx_product_name || "Product"}`,
+            );
+          }
           const data = await fetchJSON("/api/scheduler/generate-image", {
             method: "POST",
             body: JSON.stringify({
               topic,
-              style: imageGenStyle.value,
+              style: imageGenStyle.value || undefined,
               platform: imageGenPlatform.value,
             }),
           });

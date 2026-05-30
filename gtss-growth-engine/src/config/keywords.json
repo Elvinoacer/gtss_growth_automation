@@ -1,66 +1,18 @@
 {
-  "version": 1,
+  "version": 2,
   "keywords": [
     "restaurant owner Nairobi",
-    "cafe owner Nairobi",
-    "hotel manager Nairobi",
-    "food and beverage manager Kenya",
-    "hospitality business Nairobi",
-    "bar owner Nairobi",
-    "restaurant manager Nairobi Kenya",
-    "chef owner Nairobi",
-    "fast food business Kenya",
-    "catering company Nairobi",
-    "lodge manager Kenya",
-    "resort manager Kenya",
-    "coffee shop owner Kenya",
-    "bakery owner Nairobi",
-    "pizzeria owner Nairobi",
-    "hotel owner Mombasa",
-    "restaurant owner Mombasa",
-    "hospitality entrepreneur Kenya",
-    "supper club Nairobi",
-    "food business owner Kenya",
-    "restaurant owner Kenya",
-    "hotel owner Kenya",
-    "#restaurantowner Nairobi",
-    "#NairobiCafe",
-    { "keyword": "#nairobieats", "platforms": ["instagram"] },
-    { "keyword": "#nairobifood", "platforms": ["instagram"] },
-    { "keyword": "#nairobirestaurants", "platforms": ["instagram"] },
-    { "keyword": "#mombasafood", "platforms": ["instagram"] },
-    { "keyword": "#mombasahotels", "platforms": ["instagram"] },
-    { "keyword": "#nairobicafes", "platforms": ["instagram"] },
-    { "keyword": "#kenyanfood", "platforms": ["instagram"] },
-    { "keyword": "#nairobihotels", "platforms": ["instagram"] },
-    { "keyword": "#nairobifoodie", "platforms": ["instagram"] },
-    { "keyword": "#mombasafoodie", "platforms": ["instagram"] },
-    { "keyword": "#kenyanfoodie", "platforms": ["instagram"] },
-    { "keyword": "#nairobichefs", "platforms": ["instagram"] },
-    { "keyword": "#nairobirestaurant", "platforms": ["instagram"] },
-    { "keyword": "#nairobicafe", "platforms": ["instagram"] },
-    { "keyword": "#mombasarestaurant", "platforms": ["instagram"] },
-    { "keyword": "#mombasarestaurants", "platforms": ["instagram"] },
-    { "keyword": "#tembeakenya", "platforms": ["instagram"] },
-    { "keyword": "#nairobicatering", "platforms": ["instagram"] },
-    { "keyword": "#kenyahospitality", "platforms": ["instagram"] },
-    { "keyword": "#mombasafoodies", "platforms": ["instagram"] },
-    { "keyword": "geolocation:12345:Nairobi City", "platforms": ["instagram"] },
-    { "keyword": "geolocation:23456:Mombasa Island", "platforms": ["instagram"] },
-    { "keyword": "geolocation:34567:Kilimani Nairobi", "platforms": ["instagram"] },
-    { "keyword": "geolocation:45678:Westlands Nairobi", "platforms": ["instagram"] },
-    { "keyword": "geolocation:56789:Nyali Mombasa", "platforms": ["instagram"] }
+    {
+      "keyword": "#nairobieats",
+      "platforms": [
+        "instagram"
+      ],
+      "industry": "restaurant"
+    }
   ],
-  "instagram": {
-    "hashtags": ["nairobieats", "nairobifood", "nairobirestaurants", "mombasafood", "tembeakenya"],
-    "geolocations": [
-      { "name": "Nairobi City", "id": "12345" },
-      { "name": "Mombasa Island", "id": "23456" },
-      { "name": "Kilimani Nairobi", "id": "34567" },
-      { "name": "Westlands Nairobi", "id": "45678" },
-      { "name": "Nyali Mombasa", "id": "56789" }
-    ]
-  },
-  "platforms": ["linkedin", "facebook", "x", "instagram"],
-  "maxLeadsPerKeyword": 10
+  "platforms": [
+    "linkedin",
+    "instagram"
+  ],
+  "maxLeadsPerKeyword": 7
 }
