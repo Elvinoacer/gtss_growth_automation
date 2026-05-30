@@ -110,6 +110,57 @@ async function firstVisibleLocator(page, selectors, timeoutMs = 5000) {
   return null;
 }
 
+async function waitForXPostCompletion(page, emit, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+
+  const toastSelectors = [
+    '[data-testid="toast"]',
+    'div:has-text("Your post was sent")',
+    'div:has-text("Tweet sent")',
+  ];
+
+  const editorSelector = 'div[role="textbox"][data-testid="tweetTextarea_0"]';
+
+  while (Date.now() < deadline) {
+    const toast = await firstVisibleLocator(page, toastSelectors, 800);
+    if (toast) {
+      const text = await toast.locator.innerText().catch(() => "");
+      emit({
+        type: "info",
+        platform: "x",
+        message: `X confirmation: ${text.trim() || "post submitted"}`,
+      });
+      return { verified: true, reason: "Success toast detected" };
+    }
+
+    const editorStillOpen = await page
+      .locator(editorSelector)
+      .isVisible()
+      .catch(() => false);
+    if (!editorStillOpen) {
+      return {
+        verified: true,
+        reason: "Compose dialog closed after submission",
+      };
+    }
+
+    const url = page.url();
+    if (!url.includes("/compose/")) {
+      return { verified: true, reason: "URL left compose route" };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  }
+
+  emit({
+    type: "warning",
+    platform: "x",
+    message:
+      "X post submission: compose dialog did not close within timeout. Post may still be pending.",
+  });
+  return { verified: false, timedOut: true };
+}
+
 async function isLocatorDisabled(locator) {
   const ariaDisabled = await locator
     .getAttribute("aria-disabled")
@@ -379,6 +430,12 @@ async function waitForFacebookPostCompletion(page, postButtonLocator, emit) {
     'div:has-text("try again")',
   ];
 
+  const successSelectors = [
+    'div:has-text("Your post is now shared")',
+    'div:has-text("Post shared")',
+    '[data-testid="story_feedback_react_like_total_count"]',
+  ];
+
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
     const warning = await firstVisibleLocator(page, warningSelectors, 750);
@@ -389,6 +446,9 @@ async function waitForFacebookPostCompletion(page, postButtonLocator, emit) {
         throw new Error(`Facebook showed a posting warning: ${text.trim()}`);
       }
     }
+
+    const successHint = await firstVisibleLocator(page, successSelectors, 500);
+    if (successHint) return true;
 
     const postStillVisible = await postButtonLocator
       .isVisible()
@@ -1103,7 +1163,11 @@ async function postToX(page, body, mediaPath, emit) {
     }
 
     await postBtn.locator.click();
-    await humanDelay(3000, 5000);
+
+    const verification = await waitForXPostCompletion(page, emit, 20000);
+    if (!verification.verified && !verification.timedOut) {
+      throw new Error("X post submission could not be confirmed.");
+    }
 
     emit({
       type: "info",
@@ -1265,8 +1329,7 @@ async function postToFacebook(page, body, mediaPath, emit) {
     }
 
     // ── Step 5: Click the Post button ─────────────────────────────────────
-    await page.keyboard.press("Escape").catch(() => {});
-    await humanDelay(500, 900);
+    // Do not press Escape here; it dismisses the compose dialog.
     emit({ type: "info", platform: "facebook", message: "Submitting post..." });
 
     const postBtnSelectors = [
@@ -1304,6 +1367,7 @@ async function postToFacebook(page, body, mediaPath, emit) {
     }
 
     await postBtn.locator.scrollIntoViewIfNeeded().catch(() => {});
+    await humanDelay(500, 900);
     await postBtn.locator.click({ timeout: 10000 });
     await waitForFacebookPostCompletion(page, postBtn.locator, emit);
     await humanDelay(1000, 2000);
@@ -1574,7 +1638,11 @@ async function publishPost(postId, emit, browserOptions = {}) {
             } else {
               const res = await instagram.postImage(
                 page,
-                { imagePath: post.media_path, caption: platformBody, locationTag },
+                {
+                  imagePath: post.media_path,
+                  caption: platformBody,
+                  locationTag,
+                },
                 emit,
               );
               success = res.success;

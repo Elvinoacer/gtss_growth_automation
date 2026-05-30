@@ -2,6 +2,15 @@ require("dotenv").config();
 
 const { initReplyChecker } = require("./replyChecker");
 const { initInstagramWarmupJobs } = require("./instagramWarmupJob");
+const {
+  initScheduledPoster,
+  isScheduledPosterRunning,
+} = require("./scheduledPoster");
+const {
+  checkInbox,
+  checkFollowBacks,
+  isCheckingInbox,
+} = require("../services/instagramReplyChecker");
 const { getDb } = require("../db/database");
 const { stopAllJobs } = require("../automation/executor");
 const browserBase = require("../automation/browserBase");
@@ -460,7 +469,6 @@ async function startBackgroundJobs() {
   }
 
   initReplyChecker();
-  const { initScheduledPoster } = require("./scheduledPoster");
   initScheduledPoster();
   initInstagramWarmupJobs();
 
@@ -505,14 +513,24 @@ async function startBackgroundJobs() {
     });
   });
 
-
-
   // Instagram Inbox Reply Checker cron (runs every 30 minutes)
-  const {
-    checkInbox,
-    checkFollowBacks,
-  } = require("../services/instagramReplyChecker");
   cron.schedule("*/30 * * * *", async () => {
+    if (isScheduledPosterRunning()) {
+      logger.info(
+        "SERVER",
+        "Instagram checkInbox skipped: scheduled poster is currently publishing. Will run on next tick.",
+      );
+      return;
+    }
+
+    if (isCheckingInbox()) {
+      logger.info(
+        "SERVER",
+        "Instagram checkInbox skipped: previous inbox scan still running.",
+      );
+      return;
+    }
+
     logger.info("SERVER", "Running scheduled Instagram checkInbox job...");
     try {
       await checkInbox();

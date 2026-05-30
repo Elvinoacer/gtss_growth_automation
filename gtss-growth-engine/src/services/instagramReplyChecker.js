@@ -10,6 +10,12 @@ const {
 const { getContext } = require("./contextService");
 const logger = require("../utils/logger");
 
+let checkingInbox = false;
+
+function isCheckingInbox() {
+  return checkingInbox;
+}
+
 /**
  * Configure Nodemailer transporter using GMAIL credentials from .env
  */
@@ -539,7 +545,7 @@ async function checkMessageRequests(page) {
  *
  * @returns {Promise<Object>} Execution status outcome.
  */
-async function checkInbox() {
+async function _checkInboxImpl() {
   const db = getDb();
   logger.info("INSTAGRAM_REPLY_CHECKER", "Initializing inbox reply scan...");
   const startTime = Date.now();
@@ -617,6 +623,23 @@ async function checkInbox() {
         },
       );
     }
+  }
+}
+
+async function checkInbox() {
+  if (checkingInbox) {
+    logger.warn(
+      "INSTAGRAM_REPLY_CHECKER",
+      "checkInbox skipped: already in progress.",
+    );
+    return { skipped: true };
+  }
+
+  checkingInbox = true;
+  try {
+    return await _checkInboxImpl();
+  } finally {
+    checkingInbox = false;
   }
 }
 
@@ -869,4 +892,5 @@ module.exports = {
   checkMessageRequests,
   checkInbox,
   checkFollowBacks,
+  isCheckingInbox,
 };

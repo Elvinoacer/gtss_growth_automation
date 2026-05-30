@@ -7,7 +7,7 @@ const {
   getPrimaryPostMediaPath,
   getPostLocationTag,
 } = require("../services/schedulerService");
-const { isCampaignQueueRunning } = require("./backgroundJobs");
+const { isCheckingInbox } = require("../services/instagramReplyChecker");
 const logger = require("../utils/logger");
 
 const MAX_RETRIES = 5;
@@ -52,6 +52,15 @@ function initScheduledPoster() {
         logger.debug("Scheduled poster already running, skipping tick.");
         return;
       }
+
+      if (isCheckingInbox()) {
+        logger.debug(
+          "Scheduled poster deferred: Instagram inbox checker is currently running.",
+        );
+        return;
+      }
+
+      const { isCampaignQueueRunning } = require("./backgroundJobs");
 
       if (isCampaignQueueRunning()) {
         logger.debug(
@@ -284,8 +293,13 @@ async function postToPlatform(platform, post, browser, emitter) {
   }
 }
 
+function isScheduledPosterRunning() {
+  return isPublishing;
+}
+
 module.exports = {
   initScheduledPoster,
   postToInstagram,
   postToPlatform,
+  isScheduledPosterRunning,
 };
