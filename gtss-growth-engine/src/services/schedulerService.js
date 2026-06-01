@@ -432,6 +432,31 @@ async function attachFacebookMedia(page, dialogScope, mediaPath, emit) {
   return resolvedMediaPath;
 }
 
+function isFacebookPostingProgressText(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized === "posting" ||
+    normalized === "posting..." ||
+    normalized.includes("posting") ||
+    normalized.includes("publishing") ||
+    normalized.includes("uploading")
+  );
+}
+
+function isFacebookHardFailureText(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes("something went wrong") ||
+    normalized.includes("couldn't") ||
+    normalized.includes("could not") ||
+    normalized.includes("try again") ||
+    normalized.includes("failed") ||
+    normalized.includes("error")
+  );
+}
+
 async function waitForFacebookPostCompletion(page, postButtonLocator, emit) {
   const warningSelectors = [
     '[role="alert"]',
@@ -446,12 +471,20 @@ async function waitForFacebookPostCompletion(page, postButtonLocator, emit) {
     '[data-testid="story_feedback_react_like_total_count"]',
   ];
 
-  const deadline = Date.now() + 30000;
+  let sawPostingProgress = false;
+  const deadline = Date.now() + 180000;
   while (Date.now() < deadline) {
     const warning = await firstVisibleLocator(page, warningSelectors, 750);
     if (warning) {
       const text = await warning.locator.innerText().catch(() => "");
-      if (text.trim()) {
+      if (isFacebookPostingProgressText(text)) {
+        sawPostingProgress = true;
+        emit({
+          type: "info",
+          platform: "facebook",
+          message: `Facebook is still processing: ${text.trim()}`,
+        });
+      } else if (isFacebookHardFailureText(text)) {
         await captureFacebookDebugSnapshot(page, "post-submit-warning");
         throw new Error(`Facebook showed a posting warning: ${text.trim()}`);
       }
@@ -466,6 +499,16 @@ async function waitForFacebookPostCompletion(page, postButtonLocator, emit) {
     if (!postStillVisible) return true;
 
     await new Promise((resolve) => setTimeout(resolve, 750));
+  }
+
+  if (sawPostingProgress) {
+    emit({
+      type: "info",
+      platform: "facebook",
+      message:
+        "Facebook stayed in posting state after submit; treating as submitted because Facebook often finishes after the automation tab closes.",
+    });
+    return true;
   }
 
   await captureFacebookDebugSnapshot(page, "post-submit-timeout");
