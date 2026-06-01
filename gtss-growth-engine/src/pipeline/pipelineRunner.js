@@ -92,6 +92,16 @@ function registerPipelineStream(runId, res) {
 }
 
 function buildPipelineEmitter(runId) {
+  function resolveLevel(event) {
+    const type = String(event.type || "").toLowerCase();
+    const stage = String(event.stage || "").toLowerCase();
+    if (type === "error" || stage === "error" || stage === "failed")
+      return "error";
+    if (type === "warn" || type === "warning") return "warn";
+    if (type === "retry" || stage === "retry") return "retry";
+    return "info";
+  }
+
   return (event) => {
     const key = String(runId);
     const payload = `data: ${JSON.stringify({ ...event, runId, timestamp: new Date().toISOString() })}\n\n`;
@@ -107,6 +117,15 @@ function buildPipelineEmitter(runId) {
     } else if (event.type === "stage" || event.type === "complete") {
       logger.info("PIPELINE", event.message || "", { runId });
     }
+
+    const stageLabel = event.stage || event.type || "event";
+    const message = event.message || String(stageLabel);
+    const level = resolveLevel(event);
+    logger.db(level, "outreach", stageLabel, message, {
+      jobId: runId,
+      eventType: event.type,
+      stage: event.stage,
+    });
   };
 }
 
@@ -224,7 +243,11 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
     if (stagesToRun.includes("discovery")) {
       emit({ type: "stage", message: "Starting Stage 1: Lead Discovery" });
       try {
-        const result = await runDiscoveryStage(pipelineRunId, emit, maxLeadsPerKeyword);
+        const result = await runDiscoveryStage(
+          pipelineRunId,
+          emit,
+          maxLeadsPerKeyword,
+        );
         emit({
           type: "stage_done",
           message: `Discovery: ${result.newLeads} new leads found across ${result.keywordsRun} keywords`,

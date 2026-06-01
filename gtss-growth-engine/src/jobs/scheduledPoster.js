@@ -15,6 +15,10 @@ const BACKOFF_MINUTES = [2, 5, 15, 30, 60];
 
 let isPublishing = false;
 
+function logScheduledPost(level, stage, message, context = {}) {
+  logger.db(level, "scheduled_post", stage, message, context);
+}
+
 function backoffMinutes(retryCount) {
   const index = Math.max(retryCount - 1, 0);
   return BACKOFF_MINUTES[Math.min(index, BACKOFF_MINUTES.length - 1)];
@@ -106,6 +110,14 @@ function initScheduledPoster() {
         logger.info(`Cron: Found ${duePosts.length} due post(s) to publish`);
 
         for (const post of duePosts) {
+          const jobId = `post:${post.id}`;
+          logScheduledPost(
+            "info",
+            "start",
+            `Scheduled post ${post.id} publish started`,
+            { jobId, postId: post.id, platforms: post.platforms },
+          );
+
           const noopEmit = (event) => {
             logger.info(
               `[Cron Publish] ${event.platform || ""}: ${event.message || event.type}`,
@@ -132,6 +144,12 @@ function initScheduledPoster() {
                  WHERE id = ?`,
               ).run(post.id);
               logger.info(`Cron: Post ${post.id} fully published.`);
+              logScheduledPost(
+                "info",
+                "complete",
+                `Scheduled post ${post.id} published`,
+                { jobId, postId: post.id, success: result.success },
+              );
               continue;
             }
 
@@ -161,6 +179,12 @@ function initScheduledPoster() {
               logger.error(
                 `Cron: Post ${post.id} permanently failed after ${MAX_RETRIES} retries.`,
               );
+              logScheduledPost(
+                "error",
+                "failed",
+                `Scheduled post ${post.id} permanently failed`,
+                { jobId, postId: post.id, error: failureSummary },
+              );
               continue;
             }
 
@@ -181,6 +205,12 @@ function initScheduledPoster() {
             logger.warn(
               `Cron: Post ${post.id} failed (attempt ${newRetryCount}/${MAX_RETRIES}). Retrying at ${nextRetryAt}`,
             );
+            logScheduledPost(
+              "retry",
+              "retry",
+              `Scheduled post ${post.id} retry scheduled (attempt ${newRetryCount}/${MAX_RETRIES})`,
+              { jobId, postId: post.id, nextRetryAt },
+            );
           } catch (err) {
             if (err.message && err.message.includes("already in use")) {
               logger.warn(
@@ -192,6 +222,13 @@ function initScheduledPoster() {
             logger.error(`Cron: Unhandled error publishing post ${post.id}`, {
               error: err.message,
             });
+
+            logScheduledPost(
+              "error",
+              "error",
+              `Scheduled post ${post.id} publish error`,
+              { jobId, postId: post.id, error: err.message },
+            );
 
             const newRetryCount = (post.retry_count || 0) + 1;
             if (newRetryCount > MAX_RETRIES) {

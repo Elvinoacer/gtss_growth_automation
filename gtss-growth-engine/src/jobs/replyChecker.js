@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const cron = require("node-cron");
 const { detectReplies } = require("../services/replyDetector");
 const { isSessionValid } = require("../automation/sessionManager");
@@ -12,6 +13,14 @@ function initReplyChecker() {
   cron.schedule(
     "*/30 * * * *",
     async () => {
+      const jobId = crypto.randomUUID();
+      logger.db(
+        "info",
+        "dm_check",
+        "start",
+        "Scheduled reply detection started",
+        { jobId },
+      );
       logger.info("Cron triggered: Starting scheduled reply detection...");
 
       let totalReplies = 0;
@@ -29,6 +38,13 @@ function initReplyChecker() {
             logger.error(`Cron error detecting replies for ${platform}`, {
               error: err.message,
             });
+            logger.db(
+              "error",
+              "dm_check",
+              "platform",
+              `Reply detection failed for ${platform}`,
+              { jobId, platform, error: err.message },
+            );
           }
         } else {
           logger.debug(
@@ -39,6 +55,13 @@ function initReplyChecker() {
 
       logger.info(
         `Scheduled reply detection completed. Total replies found: ${totalReplies}`,
+      );
+      logger.db(
+        "info",
+        "dm_check",
+        "complete",
+        "Scheduled reply detection completed",
+        { jobId, repliesFound: totalReplies },
       );
     },
     {

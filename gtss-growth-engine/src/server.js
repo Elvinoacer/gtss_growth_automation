@@ -86,7 +86,11 @@ function startBackgroundJobsWorker() {
   }
 
   startBackgroundJobs().catch((error) => {
-    logger.error("SERVER", "Background automation worker failed to start", error);
+    logger.error(
+      "SERVER",
+      "Background automation worker failed to start",
+      error,
+    );
   }); // Run inline, no fork
 
   logger.info("SERVER", "Background automation worker started inline");
@@ -128,6 +132,7 @@ app.use("/api/context", require("./routes/context"));
 app.use("/api/discovery", require("./routes/discovery"));
 app.use("/api/campaigns", require("./routes/campaigns"));
 app.use("/api/pipelines", authMiddleware, require("./routes/pipelines"));
+app.use("/api/monitoring", authMiddleware, require("./routes/monitoring"));
 
 // Protected Page Routes (wrapped in auth)
 app.use(authMiddleware);
@@ -142,6 +147,7 @@ app.use("/settings", require("./routes/settings")); // This is the pageRouter
 app.use("/", require("./routes/campaigns").pageRouter);
 app.use("/", require("./routes/instagram"));
 app.use("/", require("./routes/pipelinesPage"));
+app.use("/", require("./routes/monitoringPage"));
 
 // Global Error Handlers
 app.use(notFoundHandler);

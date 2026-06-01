@@ -11,23 +11,37 @@
  * audit trail visible in the Content Scheduler page.
  */
 
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
-const { getDb } = require('../db/database');
-const { generateCaption, publishPost } = require('../services/schedulerService');
-const { runImageGenJob } = require('../services/imageGenService');
-const logger = require('../utils/logger');
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+const { getDb } = require("../db/database");
+const {
+  generateCaption,
+  publishPost,
+} = require("../services/schedulerService");
+const { runImageGenJob } = require("../services/imageGenService");
+const logger = require("../utils/logger");
 
-const UPLOADS_DIR = path.resolve(__dirname, '../../public/uploads');
+const UPLOADS_DIR = path.resolve(__dirname, "../../public/uploads");
 
 function buildContentEmitter(jobId) {
   return (event) => {
-    logger.info('CONTENT-PIPELINE', `[${jobId}] ${event.stage || ''}: ${event.message || ''}`);
+    const stageLabel = event.stage || event.type || "event";
+    const message = event.message || String(stageLabel);
+    const level =
+      event.level ||
+      (String(stageLabel).toLowerCase() === "error" ? "error" : "info");
+
+    logger.info("CONTENT-PIPELINE", `[${jobId}] ${stageLabel}: ${message}`);
+    logger.db(level, "content", stageLabel, message, {
+      jobId,
+      stage: stageLabel,
+      platform: event.platform,
+    });
     // Broadcast via Socket.IO for live UI updates
     try {
-      const { broadcast } = require('../services/socketService');
-      broadcast('content_pipeline:event', { ...event, jobId });
+      const { broadcast } = require("../services/socketService");
+      broadcast("content_pipeline:event", { ...event, jobId });
     } catch (_) {}
   };
 }
@@ -37,13 +51,15 @@ function buildContentEmitter(jobId) {
  */
 function acquireLock() {
   const db = getDb();
-  const lockKey = 'content_pipeline_lock';
+  const lockKey = "content_pipeline_lock";
   db.prepare(
-    "INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'false')"
+    "INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'false')",
   ).run(lockKey);
-  const result = db.prepare(
-    "UPDATE settings SET value = 'true' WHERE key = ? AND value = 'false'"
-  ).run(lockKey);
+  const result = db
+    .prepare(
+      "UPDATE settings SET value = 'true' WHERE key = ? AND value = 'false'",
+    )
+    .run(lockKey);
   return result.changes > 0;
 }
 
@@ -52,7 +68,9 @@ function acquireLock() {
  */
 function releaseLock() {
   const db = getDb();
-  db.prepare("UPDATE settings SET value = 'false' WHERE key = 'content_pipeline_lock'").run();
+  db.prepare(
+    "UPDATE settings SET value = 'false' WHERE key = 'content_pipeline_lock'",
+  ).run();
 }
 
 /**
@@ -68,31 +86,36 @@ function releaseLock() {
  */
 async function runContentPipeline(config = {}) {
   const {
-    platforms: rawPlatforms = ['instagram', 'linkedin'],
+    platforms: rawPlatforms = ["instagram", "linkedin"],
     topic,
-    style = 'photorealistic',
-    trigger = 'manual',
+    style = "photorealistic",
+    trigger = "manual",
     max_posts_per_run = 1,
   } = config;
   const platforms = Array.isArray(rawPlatforms)
-    ? rawPlatforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean)
-    : ['instagram', 'linkedin'];
+    ? rawPlatforms
+        .map((platform) => String(platform).trim().toLowerCase())
+        .filter(Boolean)
+    : ["instagram", "linkedin"];
   const maxRuns = Math.max(1, Math.floor(Number(max_posts_per_run) || 1));
 
   if (!topic) {
-    logger.warn('CONTENT-PIPELINE', 'No topic configured — skipping run');
-    return { success: false, error: 'No topic configured' };
+    logger.warn("CONTENT-PIPELINE", "No topic configured — skipping run");
+    return { success: false, error: "No topic configured" };
   }
 
   if (platforms.length === 0) {
-    logger.warn('CONTENT-PIPELINE', 'No platforms configured — skipping run');
-    return { success: false, error: 'No platforms configured' };
+    logger.warn("CONTENT-PIPELINE", "No platforms configured — skipping run");
+    return { success: false, error: "No platforms configured" };
   }
 
   // Overlap lock — prevent concurrent content pipeline runs
   if (!acquireLock()) {
-    logger.info('CONTENT-PIPELINE', 'Skipping: another content pipeline run is already in progress');
-    return { success: false, error: 'Already running' };
+    logger.info(
+      "CONTENT-PIPELINE",
+      "Skipping: another content pipeline run is already in progress",
+    );
+    return { success: false, error: "Already running" };
   }
 
   const results = [];
@@ -102,6 +125,11 @@ async function runContentPipeline(config = {}) {
       const jobId = crypto.randomUUID();
       const emit = buildContentEmitter(jobId);
       const db = getDb();
+
+      emit({
+        stage: "start",
+        message: `Run started (trigger: ${trigger}, platforms: ${platforms.join(", ")})`,
+      });
 
       try {
         // ── Preflight: Gemini session check ──────────────────────────────
@@ -114,22 +142,30 @@ async function runContentPipeline(config = {}) {
           !process.env.X_CDP_ENDPOINT
         ) {
           emit({
-            stage: 'preflight',
-            message: 'Warning: No shared Chrome session configured. Gemini image gen may fail if not logged in.',
+            stage: "preflight",
+            message:
+              "Warning: No shared Chrome session configured. Gemini image gen may fail if not logged in.",
           });
         }
 
         // ── Stage 1: Generate image ──────────────────────────────────────
-        emit({ stage: 'image_gen', message: `Generating image for topic: "${topic}"...` });
+        emit({
+          stage: "image_gen",
+          message: `Generating image for topic: "${topic}"...`,
+        });
 
-        const { jobId: igJobId, filePath, fileName } = await runImageGenJob({
+        const {
+          jobId: igJobId,
+          filePath,
+          fileName,
+        } = await runImageGenJob({
           jobId,
           topic,
           style,
-          platform: platforms[0] || 'instagram',
+          platform: platforms[0] || "instagram",
         });
 
-        emit({ stage: 'image_gen', message: `Image saved: ${fileName}` });
+        emit({ stage: "image_gen", message: `Image saved: ${fileName}` });
 
         // Copy image to uploads directory so publishPost can find it
         fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -138,31 +174,51 @@ async function runContentPipeline(config = {}) {
         await fs.promises.copyFile(filePath, destPath);
         const mediaRelPath = `/uploads/${destName}`;
 
-        emit({ stage: 'image_gen', message: `Image copied to uploads: ${destName}` });
+        emit({
+          stage: "image_gen",
+          message: `Image copied to uploads: ${destName}`,
+        });
 
         // ── Stage 2: Generate captions per platform ──────────────────────
         const captions = {};
         for (const platform of platforms) {
-          emit({ stage: 'caption_gen', message: `Generating caption for ${platform}...` });
+          emit({
+            stage: "caption_gen",
+            message: `Generating caption for ${platform}...`,
+          });
           const caption = await generateCaption(topic, platform, null);
           captions[platform] = caption;
-          emit({ stage: 'caption_gen', message: `Caption ready for ${platform}` });
+          emit({
+            stage: "caption_gen",
+            message: `Caption ready for ${platform}`,
+          });
         }
 
         // Use the primary platform's caption as the post body
-        const primaryCaption = captions[platforms[0]] || Object.values(captions)[0] || '';
+        const primaryCaption =
+          captions[platforms[0]] || Object.values(captions)[0] || "";
 
         // ── Stage 3: Create post record ──────────────────────────────────
-        const insertResult = db.prepare(`
+        const insertResult = db
+          .prepare(
+            `
           INSERT INTO posts (platforms, body, media_path, status, scheduled_at)
           VALUES (?, ?, ?, 'draft', CURRENT_TIMESTAMP)
-        `).run(JSON.stringify(platforms), primaryCaption, mediaRelPath);
+        `,
+          )
+          .run(JSON.stringify(platforms), primaryCaption, mediaRelPath);
 
         const postId = insertResult.lastInsertRowid;
-        emit({ stage: 'post_record', message: `Post draft created (id: ${postId})` });
+        emit({
+          stage: "post_record",
+          message: `Post draft created (id: ${postId})`,
+        });
 
         // ── Stage 4: Publish ─────────────────────────────────────────────
-        emit({ stage: 'publish', message: `Publishing to: ${platforms.join(', ')}...` });
+        emit({
+          stage: "publish",
+          message: `Publishing to: ${platforms.join(", ")}...`,
+        });
 
         const publishResult = await publishPost(postId, emit, { trace: false });
 
@@ -175,21 +231,36 @@ async function runContentPipeline(config = {}) {
 
         if (publishedPlatforms.length > 0) {
           emit({
-            stage: 'publish',
-            message: `✓ Published to: ${publishedPlatforms.join(', ')}`,
+            stage: "publish",
+            message: `✓ Published to: ${publishedPlatforms.join(", ")}`,
           });
-          results.push({ success: true, postId, platforms: publishedPlatforms });
+          results.push({
+            success: true,
+            postId,
+            platforms: publishedPlatforms,
+          });
+          emit({
+            stage: "complete",
+            message: `Run complete (post ${postId} published)`,
+          });
         } else {
           emit({
-            stage: 'publish',
-            message: `✗ All platforms failed: ${failedPlatforms.join(', ')}`,
+            stage: "publish",
+            message: `✗ All platforms failed: ${failedPlatforms.join(", ")}`,
           });
-          results.push({ success: false, postId, error: 'All platforms failed' });
+          results.push({
+            success: false,
+            postId,
+            error: "All platforms failed",
+          });
+          emit({
+            stage: "complete",
+            message: `Run complete (post ${postId} failed)`,
+          });
         }
-
       } catch (err) {
-        logger.error('CONTENT-PIPELINE', `Run ${i + 1} failed`, err);
-        emit({ stage: 'error', message: err.message });
+        logger.error("CONTENT-PIPELINE", `Run ${i + 1} failed`, err);
+        emit({ stage: "error", message: err.message });
         results.push({ success: false, error: err.message });
       }
     }

@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const crypto = require("crypto");
 const { initReplyChecker } = require("./replyChecker");
 const { initInstagramWarmupJobs } = require("./instagramWarmupJob");
 const {
@@ -192,6 +193,7 @@ async function runConnectionQueueJob(options = {}) {
     return;
   }
 
+  const jobId = crypto.randomUUID();
   campaignQueueInProgress = true;
   let activePages = {};
 
@@ -199,6 +201,13 @@ async function runConnectionQueueJob(options = {}) {
     logger.info(
       "SERVER",
       "[CONNECTION-QUEUE] Starting campaign connection invite queue run...",
+    );
+    logger.db(
+      "info",
+      "campaign_connection",
+      "start",
+      "Campaign connection queue run started",
+      { jobId },
     );
 
     const maxRetries = 5;
@@ -245,11 +254,25 @@ async function runConnectionQueueJob(options = {}) {
       "SERVER",
       `[CONNECTION-QUEUE] Connection queue batch processing complete: ${JSON.stringify(report)}`,
     );
+    logger.db(
+      "info",
+      "campaign_connection",
+      "complete",
+      "Campaign connection queue run completed",
+      { jobId, report },
+    );
   } catch (err) {
     logger.error(
       "SERVER",
       "[CONNECTION-QUEUE] Connection queue cron runner encountered a critical error",
       err,
+    );
+    logger.db(
+      "error",
+      "campaign_connection",
+      "error",
+      "Campaign connection queue run failed",
+      { jobId, error: err.message },
     );
   } finally {
     await closeAllActivePages(activePages);
@@ -306,6 +329,7 @@ async function runDmQueueJob(options = {}) {
     return;
   }
 
+  const jobId = crypto.randomUUID();
   campaignQueueInProgress = true;
   let activePages = {};
 
@@ -314,6 +338,9 @@ async function runDmQueueJob(options = {}) {
       "SERVER",
       "[DM-QUEUE] Starting campaign DM messaging queue run...",
     );
+    logger.db("info", "campaign_dm", "start", "Campaign DM queue run started", {
+      jobId,
+    });
 
     const maxRetries = 5;
     const rows = db
@@ -359,12 +386,23 @@ async function runDmQueueJob(options = {}) {
       "SERVER",
       `[DM-QUEUE] DM queue batch processing complete: ${JSON.stringify(report)}`,
     );
+    logger.db(
+      "info",
+      "campaign_dm",
+      "complete",
+      "Campaign DM queue run completed",
+      { jobId, report },
+    );
   } catch (err) {
     logger.error(
       "SERVER",
       "[DM-QUEUE] DM queue cron runner encountered a critical error",
       err,
     );
+    logger.db("error", "campaign_dm", "error", "Campaign DM queue run failed", {
+      jobId,
+      error: err.message,
+    });
   } finally {
     await closeAllActivePages(activePages);
     currentPlatform = null;

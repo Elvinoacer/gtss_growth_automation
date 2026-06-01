@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Monitoring - GTSS Growth Engine</title>
+    <meta
+      name="description"
+      content="Monitor pipeline health, retries, and failures with persistent run logs."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/css/style.css" />
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              ink: "#0a0f1f",
+              cloud: "#f6f4ef",
+              slate: "#111827",
+              fog: "#1f2937",
+              mist: "#334155",
+              ember: "#f97316",
+              emberSoft: "#ffedd5",
+              tide: "#22d3ee",
+              tideSoft: "#cffafe",
+              moss: "#34d399",
+              mossSoft: "#d1fae5",
+              emberRed: "#f87171",
+            },
+            fontFamily: {
+              body: ["Space Grotesk", "system-ui", "sans-serif"],
+              mono: ["IBM Plex Mono", "monospace"],
+            },
+            boxShadow: {
+              glow: "0 24px 60px rgba(15, 23, 42, 0.25)",
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      :root {
+        color-scheme: light;
+        --monitor-bg: #f6f4ef;
+        --monitor-panel: rgba(255, 255, 255, 0.86);
+        --monitor-ink: #111827;
+        --monitor-muted: #6b7280;
+        --monitor-outline: rgba(15, 23, 42, 0.08);
+        --monitor-accent: #0ea5e9;
+        --monitor-warn: #f97316;
+        --monitor-error: #ef4444;
+        --monitor-ok: #10b981;
+      }
+
+      body {
+        background:
+          radial-gradient(
+            circle at top left,
+            rgba(34, 211, 238, 0.14),
+            transparent 45%
+          ),
+          radial-gradient(
+            circle at 60% 10%,
+            rgba(249, 115, 22, 0.12),
+            transparent 50%
+          ),
+          linear-gradient(135deg, #f6f4ef 0%, #f3f4f6 55%, #eef2ff 100%);
+        color: var(--monitor-ink);
+        font-family: "Space Grotesk", system-ui, sans-serif;
+      }
+
+      .monitor-shell {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+        padding: 24px 16px 40px;
+      }
+
+      .page-content {
+        background: transparent !important;
+        color: var(--monitor-ink) !important;
+      }
+
+      .page-content > main {
+        background: transparent !important;
+      }
+
+      .page-content .gtss-sidebar {
+        background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
+        border-right-color: rgba(15, 23, 42, 0.18);
+      }
+
+      .page-content .gtss-nav__link:hover,
+      .page-content .gtss-nav__link.active {
+        background: rgba(14, 165, 233, 0.12);
+        color: #ffffff;
+        border-left-color: #0ea5e9;
+      }
+
+      .monitor-hero {
+        background: var(--monitor-panel);
+        border: 1px solid var(--monitor-outline);
+        border-radius: 24px;
+        padding: 28px 28px 24px;
+        box-shadow: var(--monitor-shadow, 0 20px 45px rgba(15, 23, 42, 0.12));
+        position: relative;
+        overflow: hidden;
+      }
+
+      .monitor-hero::after {
+        content: "";
+        position: absolute;
+        top: -50px;
+        right: -50px;
+        width: 180px;
+        height: 180px;
+        border-radius: 50%;
+        background: radial-gradient(
+          circle,
+          rgba(34, 211, 238, 0.25),
+          transparent 70%
+        );
+      }
+
+      .monitor-hero h1 {
+        font-size: clamp(1.8rem, 2.6vw, 2.6rem);
+        font-weight: 700;
+        margin: 0 0 8px;
+      }
+
+      .monitor-hero p {
+        color: var(--monitor-muted);
+        margin: 0;
+        max-width: 620px;
+      }
+
+      .monitor-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .monitor-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 14px;
+        flex: 1;
+      }
+
+      .stat-card {
+        background: var(--monitor-panel);
+        border: 1px solid var(--monitor-outline);
+        border-radius: 16px;
+        padding: 16px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        box-shadow: var(--monitor-shadow, 0 14px 30px rgba(15, 23, 42, 0.1));
+        animation: rise-in 0.4s ease forwards;
+      }
+
+      .stat-card strong {
+        font-size: 1.4rem;
+      }
+
+      .stat-card span {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--monitor-muted);
+      }
+
+      .monitor-actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .monitor-actions button,
+      .monitor-actions label {
+        border-radius: 999px;
+        border: 1px solid var(--monitor-outline);
+        background: #111827;
+        color: #fff;
+        padding: 8px 16px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .monitor-actions button.secondary {
+        background: transparent;
+        color: var(--monitor-ink);
+      }
+
+      .monitor-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+        gap: 18px;
+      }
+
+      .monitor-board {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 16px;
+      }
+
+      .board-column {
+        background: var(--monitor-panel);
+        border: 1px solid var(--monitor-outline);
+        border-radius: 18px;
+        padding: 16px;
+        min-height: 240px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .board-column h3 {
+        margin: 0;
+        font-size: 1rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .board-column small {
+        color: var(--monitor-muted);
+      }
+
+      .job-card {
+        border-radius: 16px;
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        padding: 14px;
+        background: #ffffff;
+        display: grid;
+        gap: 8px;
+        animation: rise-in 0.45s ease forwards;
+      }
+
+      .job-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .job-type {
+        font-weight: 600;
+        font-size: 0.95rem;
+      }
+
+      .job-status {
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 700;
+      }
+
+      .status-running {
+        background: #cffafe;
+        color: #0e7490;
+      }
+
+      .status-completed {
+        background: #d1fae5;
+        color: #047857;
+      }
+
+      .status-failed {
+        background: #fee2e2;
+        color: #b91c1c;
+      }
+
+      .status-retrying {
+        background: #ffedd5;
+        color: #c2410c;
+      }
+
+      .job-meta {
+        display: grid;
+        gap: 4px;
+        font-size: 0.82rem;
+        color: var(--monitor-muted);
+      }
+
+      .job-meta code {
+        font-family: "IBM Plex Mono", monospace;
+        color: #0f172a;
+        font-size: 0.78rem;
+      }
+
+      .job-toggle {
+        border: 0;
+        background: transparent;
+        color: #0ea5e9;
+        font-weight: 600;
+        font-size: 0.8rem;
+        cursor: pointer;
+        text-align: left;
+        padding: 0;
+      }
+
+      .job-timeline {
+        border-top: 1px solid var(--monitor-outline);
+        margin-top: 6px;
+        padding-top: 10px;
+        display: grid;
+        gap: 8px;
+        font-size: 0.8rem;
+      }
+
+      .timeline-item {
+        display: grid;
+        gap: 4px;
+        padding: 8px 10px;
+        border-radius: 12px;
+        background: #f8fafc;
+      }
+
+      .timeline-item strong {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .monitor-errors {
+        background: var(--monitor-panel);
+        border: 1px solid var(--monitor-outline);
+        border-radius: 18px;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .monitor-errors select {
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--monitor-outline);
+        font-size: 0.85rem;
+      }
+
+      .error-item {
+        border: 1px solid rgba(239, 68, 68, 0.2);
+        border-radius: 12px;
+        padding: 10px 12px;
+        display: grid;
+        gap: 6px;
+        background: #fff7ed;
+      }
+
+      .error-item code {
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.76rem;
+        color: #7c2d12;
+      }
+
+      .last-updated {
+        font-size: 0.78rem;
+        color: var(--monitor-muted);
+      }
+
+      @keyframes rise-in {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (max-width: 1024px) {
+        .monitor-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body data-page-title="Monitoring">
+    <!-- SHELL -->
+    <main class="page-content">
+      <div class="monitor-shell mx-auto max-w-[1600px]">
+        <section class="monitor-hero">
+          <div class="flex flex-col gap-3">
+            <span class="text-xs uppercase tracking-[0.3em] text-slate-400">
+              System Monitoring
+            </span>
+            <h1>Pipeline health, retries, and error context in one view.</h1>
+            <p>
+              Follow every job from start to finish. Drill into timelines, watch
+              retries, and keep a persistent record of what happened.
+            </p>
+          </div>
+        </section>
+
+        <section class="monitor-controls">
+          <div class="monitor-stats" id="monitoring-stats">
+            <div class="stat-card">
+              <span>Running (24h)</span>
+              <strong id="stat-running">0</strong>
+            </div>
+            <div class="stat-card">
+              <span>Completed (24h)</span>
+              <strong id="stat-completed">0</strong>
+            </div>
+            <div class="stat-card">
+              <span>Failed (24h)</span>
+              <strong id="stat-failed">0</strong>
+            </div>
+            <div class="stat-card">
+              <span>Retrying (24h)</span>
+              <strong id="stat-retrying">0</strong>
+            </div>
+          </div>
+          <div class="monitor-actions">
+            <button type="button" class="secondary" id="monitoring-refresh">
+              Refresh
+            </button>
+            <label>
+              <input
+                type="checkbox"
+                id="monitoring-auto-refresh"
+                checked
+                style="margin-right: 6px"
+              />
+              Auto refresh
+            </label>
+          </div>
+        </section>
+
+        <section class="monitor-grid">
+          <div class="monitor-board">
+            <div class="board-column">
+              <h3>
+                Running
+                <small id="count-running">0</small>
+              </h3>
+              <div id="monitoring-running"></div>
+            </div>
+            <div class="board-column">
+              <h3>
+                Completed
+                <small id="count-completed">0</small>
+              </h3>
+              <div id="monitoring-completed"></div>
+            </div>
+            <div class="board-column">
+              <h3>
+                Failed
+                <small id="count-failed">0</small>
+              </h3>
+              <div id="monitoring-failed"></div>
+            </div>
+            <div class="board-column">
+              <h3>
+                Retrying
+                <small id="count-retrying">0</small>
+              </h3>
+              <div id="monitoring-retrying"></div>
+            </div>
+          </div>
+
+          <aside class="monitor-errors">
+            <div class="flex items-center justify-between">
+              <h3 class="m-0 text-lg">Error log</h3>
+              <select id="error-filter">
+                <option value="">All jobs</option>
+                <option value="outreach">Outreach</option>
+                <option value="content">Content</option>
+                <option value="dm_check">DM check</option>
+                <option value="scheduled_post">Scheduled post</option>
+                <option value="campaign_dm">Campaign DM</option>
+                <option value="campaign_connection">Campaign connection</option>
+              </select>
+            </div>
+            <div class="last-updated" id="monitoring-last-updated">
+              Last updated: --
+            </div>
+            <div id="monitoring-errors"></div>
+          </aside>
+        </section>
+      </div>
+    </main>
+    <script src="/js/app.js"></script>
+    <script src="/js/monitoring.js"></script>
+  </body>
+</html>

@@ -173,3 +173,18 @@ CREATE TABLE IF NOT EXISTS pipeline_schedules (
   updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS pipeline_events (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_type     TEXT NOT NULL,  -- 'outreach' | 'content' | 'dm_check' | 'discovery' | 'scheduled_post' | 'campaign_dm' | 'campaign_connection'
+  job_id       TEXT,           -- pipeline run ID or cron job UUID
+  stage        TEXT,
+  level        TEXT NOT NULL,  -- 'info' | 'warn' | 'error' | 'retry'
+  message      TEXT NOT NULL,
+  context_json TEXT,
+  created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_events_job_id ON pipeline_events(job_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_events_level ON pipeline_events(level);
+CREATE INDEX IF NOT EXISTS idx_pipeline_events_created ON pipeline_events(created_at DESC);
+
