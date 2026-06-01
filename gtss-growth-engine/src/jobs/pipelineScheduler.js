@@ -7,6 +7,10 @@ const { getDb } = require('../db/database');
 const cronRegistry = require('./cronRegistry');
 const { runFullPipeline } = require('../pipeline/pipelineRunner');
 const { runContentPipeline } = require('../pipeline/contentPipeline'); // Phase 3
+const { detectReplies } = require('../services/replyDetector');
+const { checkInbox, isCheckingInbox } = require('../services/instagramReplyChecker');
+const { isSessionValid } = require('../automation/sessionManager');
+const { isScheduledPosterRunning } = require('./scheduledPoster');
 const logger = require('../utils/logger');
 
 /** Map pipeline id → runner function */
@@ -25,7 +29,89 @@ const RUNNERS = {
       throw new Error(result.error || 'Content pipeline failed');
     }
   },
+  dm_check: async (limits = {}) => {
+    if (isPipelinePaused('dm_check')) {
+      logger.info('PIPELINE-SCHEDULER', 'DM checker skipped: pipeline paused');
+      return;
+    }
+    if (!isWithinActiveHours(limits.active_hours_start, limits.active_hours_end, limits.timezone)) {
+      logger.info('PIPELINE-SCHEDULER', 'DM checker skipped: outside active hours');
+      return;
+    }
+    if (isScheduledPosterRunning()) {
+      logger.info('PIPELINE-SCHEDULER', 'DM checker skipped: scheduled poster is running');
+      return;
+    }
+    if (isCheckingInbox()) {
+      logger.info('PIPELINE-SCHEDULER', 'DM checker skipped: previous Instagram scan is running');
+      return;
+    }
+
+    const jobId = require('crypto').randomUUID();
+    const platforms = Array.isArray(limits.platforms) && limits.platforms.length > 0
+      ? limits.platforms
+      : ['instagram'];
+    logger.db('info', 'dm_check', 'start', 'DM inbox checker started', {
+      jobId,
+      platforms,
+    });
+
+    let repliesFound = 0;
+    for (const platform of platforms) {
+      if (!isSessionValid(platform)) {
+        logger.db('warn', 'dm_check', 'platform', `Skipping ${platform}: no valid session`, {
+          jobId,
+          platform,
+        });
+        continue;
+      }
+      if (platform === 'instagram') {
+        const result = await checkInbox({ prompt: limits.prompt });
+        repliesFound += result?.repliesFound || 0;
+      } else {
+        const result = await detectReplies(platform, () => {}, {
+          headless: true,
+          allowHeadlessSocial: true,
+          trace: false,
+        });
+        repliesFound += result?.repliesFound || 0;
+      }
+    }
+
+    logger.db('info', 'dm_check', 'complete', 'DM inbox checker completed', {
+      jobId,
+      repliesFound,
+    });
+  },
 };
+
+function isPipelinePaused(id) {
+  const row = getDb()
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get(`pipeline_${id}_paused`);
+  return String(row?.value || 'false') === 'true';
+}
+
+function getHourInTimezone(timezone) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone || 'UTC',
+      hour: 'numeric',
+      hour12: false,
+    }).formatToParts(new Date());
+    return Number(parts.find((part) => part.type === 'hour')?.value);
+  } catch (_) {
+    return new Date().getHours();
+  }
+}
+
+function isWithinActiveHours(start = 0, end = 24, timezone = 'UTC') {
+  const startHour = Math.max(0, Math.min(23, Number(start) || 0));
+  const endHour = Math.max(1, Math.min(24, Number(end) || 24));
+  const hour = getHourInTimezone(timezone);
+  if (startHour < endHour) return hour >= startHour && hour < endHour;
+  return hour >= startHour || hour < endHour;
+}
 
 function parseCronField(field, min, max) {
   const allowed = new Set();
@@ -230,4 +316,6 @@ module.exports = {
   setPipelineCron,
   setPipelineLimits,
   computeNextRun,
+  isWithinActiveHours,
+  __getRunner: (id) => RUNNERS[id],
 };

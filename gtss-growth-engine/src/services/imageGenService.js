@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { getDb } = require("../db/database");
-const { callGeminiText } = require("./aiService");
+const { callGeminiText, unwrapGeminiText } = require("./aiService");
 const { getContext } = require("./contextService");
 const { generateImageViaGeminiWeb } = require("../automation/geminiWeb");
 const { emitJobEvent } = require("./schedulerService"); // reuse SSE helpers
@@ -90,7 +90,13 @@ async function runImageGenJob({
 
     // -- Phase 1: Prompt refinement -----------------------------------------
     emit("prompt_generating", "Generating image prompt with Gemini API...");
-    const genPrompt = await callGeminiText(metaPrompt);
+    const generation = await callGeminiText(metaPrompt);
+    const genPrompt = unwrapGeminiText(generation);
+    logger.db("info", "content", "image_prompt", "Gemini image prompt generated", {
+      jobId,
+      source: generation.source || "unknown",
+      model: generation.model,
+    });
 
     db.prepare(`UPDATE image_gen_jobs SET gen_prompt=? WHERE id=?`).run(
       genPrompt,

@@ -12,8 +12,9 @@ const {
   captureFailureArtifact,
 } = require("../automation/browserBase");
 const { isSessionValid } = require("../automation/sessionManager");
-const { callGeminiText } = require("./aiService");
+const { callGeminiText, unwrapGeminiText } = require("./aiService");
 const { getContext } = require("./contextService");
+const { logActivity } = require("./auditService");
 const logger = require("../utils/logger");
 
 // ---------------------------------------------------------------------------
@@ -1554,6 +1555,8 @@ async function publishPost(postId, emit, browserOptions = {}) {
   const failed = [];
   const failureMessages = [];
 
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
   for (const platform of platforms) {
     emit({ type: "info", platform, message: `Publishing to ${platform}...` });
 
@@ -1567,26 +1570,50 @@ async function publishPost(postId, emit, browserOptions = {}) {
       continue;
     }
 
-    let browserState;
-    let browser, context;
-    try {
-      if (platform === "instagram") {
-        // Instagram needs the specialized launcher so it can attach to the
-        // running Chrome session or restore cookies before posting. Posting
-        // must go straight to the compose flow; organic warmup belongs to the
-        // dedicated warmup job and can otherwise trap scheduled posts scrolling.
-        browserState = await createInstagramBrowser({ skipDailyWarmup: true });
-      } else {
-        browserState = await createBrowser(platform, launchOptions);
-      }
+    let platformSuccess = false;
+    let lastPlatformError = null;
 
-      browser = browserState.browser;
-      context = browserState.context;
-      const page = browserState.page;
-      const platformBody = preparePlatformPostBody(platform, post.body);
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      let browserState;
+      let browser, context;
+      try {
+        emit({
+          type: "info",
+          platform,
+          message: `Attempt ${attempt}/3 for ${platform}`,
+        });
+        logger.db("info", "content", "publish", `Publishing attempt ${attempt}/3 for ${platform}`, {
+          postId,
+          platform,
+          attempt,
+        });
+        logActivity({
+          activityType: "post_attempt",
+          entityType: "post",
+          entityId: postId,
+          platform,
+          status: "running",
+          summary: `Publishing ${platform} attempt ${attempt}/3`,
+          details: { attempt },
+        });
 
-      let success = false;
-      switch (platform) {
+        if (platform === "instagram") {
+          // Instagram needs the specialized launcher so it can attach to the
+          // running Chrome session or restore cookies before posting. Posting
+          // must go straight to the compose flow; organic warmup belongs to the
+          // dedicated warmup job and can otherwise trap scheduled posts scrolling.
+          browserState = await createInstagramBrowser({ skipDailyWarmup: true });
+        } else {
+          browserState = await createBrowser(platform, launchOptions);
+        }
+
+        browser = browserState.browser;
+        context = browserState.context;
+        const page = browserState.page;
+        const platformBody = preparePlatformPostBody(platform, post.body);
+
+        let success = false;
+        switch (platform) {
         case "linkedin":
           success = await postToLinkedIn(
             page,
@@ -1672,41 +1699,92 @@ async function publishPost(postId, emit, browserOptions = {}) {
             platform,
             message: `Unknown platform: ${platform}`,
           });
-          failed.push(platform);
-          continue;
+          throw new Error(`Unknown platform: ${platform}`);
       }
 
       if (success) {
         succeeded.push(platform);
+        platformSuccess = true;
         emit({
           type: "published",
           platform,
           postId,
           message: `✓ Posted to ${platform}`,
         });
-      } else {
-        failed.push(platform);
-        emit({
-          type: "error",
+        logger.db("info", "content", "publish", `Published to ${platform}`, {
+          postId,
           platform,
-          message: `Failed to post to ${platform}`,
+          attempt,
+        });
+        logActivity({
+          activityType: "post_attempt",
+          entityType: "post",
+          entityId: postId,
+          platform,
+          status: "success",
+          summary: `Published to ${platform}`,
+          details: { attempt },
+        });
+        break;
+      } else {
+        lastPlatformError = new Error(`Failed to post to ${platform}`);
+        emit({
+          type: attempt < 3 ? "warning" : "error",
+          platform,
+          message: `Attempt ${attempt}/3 failed for ${platform}`,
         });
       }
     } catch (err) {
-      logger.error(`Error publishing to ${platform}`, { error: err.message });
-      failureMessages.push(`${platform}: ${err.message}`);
+      lastPlatformError = err;
+      logger.error(`Error publishing to ${platform}`, { error: err.message, attempt });
       emit({
-        type: "error",
+        type: attempt < 3 ? "warning" : "error",
         platform,
-        message: `Error posting to ${platform}: ${err.message}`,
+        message: `Attempt ${attempt}/3 failed for ${platform}: ${err.message}`,
       });
-      failed.push(platform);
+      logger.db("warn", "content", "publish", `Platform ${platform} attempt ${attempt}/3 failed`, {
+        postId,
+        platform,
+        attempt,
+        error: err.message,
+      });
+      logActivity({
+        activityType: "post_attempt",
+        entityType: "post",
+        entityId: postId,
+        platform,
+        status: "failure",
+        summary: `${platform} attempt ${attempt}/3 failed`,
+        details: { attempt, error: err.message },
+      });
     } finally {
       if (browserState) {
         await closeBrowserContext(platform, browserState);
       } else if (browser) {
         await closeBrowser(browser, platform, context);
       }
+    }
+
+      if (!platformSuccess && attempt < 3) {
+        await wait(15000);
+      }
+    }
+
+    if (!platformSuccess) {
+      failed.push(platform);
+      const message =
+        lastPlatformError?.message || `All attempts failed for ${platform}`;
+      failureMessages.push(`${platform}: ${message}`);
+      emit({
+        type: "error",
+        platform,
+        message: `All 3 attempts failed for ${platform}: ${message}`,
+      });
+      logger.db("error", "content", "publish", `All 3 attempts failed for ${platform}`, {
+        postId,
+        platform,
+        error: message,
+      });
     }
   }
 
@@ -1776,7 +1854,13 @@ Use plain text only. Do not use markdown formatting, HTML entities, bullets, or 
 For X, the final caption must be ${POST_CHAR_LIMITS.x} characters or fewer including spaces and hashtags.
 Return ONLY the caption text, no explanations.`;
 
-  const caption = await callGeminiText(prompt);
+  const generation = await callGeminiText(prompt);
+  const caption = unwrapGeminiText(generation);
+  logger.db("info", "content", "caption_gen", "Gemini caption generated", {
+    platform,
+    source: generation.source || "unknown",
+    model: generation.model,
+  });
   return preparePlatformPostBody(platform, caption);
 }
 

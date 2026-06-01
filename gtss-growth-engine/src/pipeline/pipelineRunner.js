@@ -15,6 +15,9 @@ const { runMessageStage } = require("../services/messageService");
 const { runSendStage } = require("./sendPipeline");
 const { sendNotification } = require("../services/notificationService");
 const { getContext } = require("../services/contextService");
+const { logActivity } = require("../services/auditService");
+const { withRetry } = require("../utils/retryHelper");
+const jobRegistry = require("../jobs/jobRegistry");
 const logger = require("../utils/logger");
 
 // ---------------------------------------------------------------------------
@@ -67,6 +70,39 @@ function finalisePipelineRun(runId, status) {
   db.prepare(
     "UPDATE pipeline_runs SET status = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?",
   ).run(status, runId);
+}
+
+function isPaused(pipelineId) {
+  const row = getDb()
+    .prepare("SELECT value FROM settings WHERE key = ?")
+    .get(`pipeline_${pipelineId}_paused`);
+  return String(row?.value || "false") === "true";
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw new Error("Pipeline run aborted");
+}
+
+async function runStageWithRetry(stage, jobType, runId, emit, fn, signal) {
+  return withRetry(fn, {
+    signal,
+    entityType: "pipeline",
+    entityId: runId,
+    label: `${jobType}:${stage}`,
+    onRetry: (attempt, err, retryInfo) => {
+      emit({
+        type: "retry",
+        stage,
+        attempt,
+        message: `${stage} retry ${attempt}: ${err.message}`,
+      });
+      logger.db("retry", jobType, stage, `Retry ${attempt}: ${err.message}`, {
+        jobId: runId,
+        attempt,
+        nextRetryAt: retryInfo.nextRetryAt,
+      });
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +260,11 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
 
   const pipelineRunId = createPipelineRun(triggerSource);
   const emit = buildPipelineEmitter(pipelineRunId);
+  const controller =
+    options.signal || options.abortController
+      ? { signal: options.signal || options.abortController.signal }
+      : jobRegistry.startJob(pipelineRunId, { pipelineId: "outreach", type: "outreach" });
+  const signal = controller.signal;
 
   const stagesToRun = options.stages || [
     "discovery",
@@ -237,16 +278,40 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
     type: "start",
     message: `Pipeline started (mode: ${globalMode}, trigger: ${triggerSource}, stages: ${stagesToRun.join(", ")})`,
   });
+  logActivity({
+    activityType: "pipeline_run",
+    entityType: "pipeline",
+    entityId: pipelineRunId,
+    actor: triggerSource,
+    status: "running",
+    summary: `Outreach pipeline #${pipelineRunId} started`,
+    details: { stages: stagesToRun, limits, keywords: options.keywords || [] },
+  });
 
   try {
+    if (isPaused("outreach")) {
+      emit({ type: "warn", message: "Outreach pipeline is paused; run skipped" });
+      finalisePipelineRun(pipelineRunId, "skipped");
+      return pipelineRunId;
+    }
     // ── Stage 1: Discovery ──────────────────────────────────────────────
     if (stagesToRun.includes("discovery")) {
+      throwIfAborted(signal);
       emit({ type: "stage", message: "Starting Stage 1: Lead Discovery" });
       try {
-        const result = await runDiscoveryStage(
+        const result = await runStageWithRetry(
+          "discovery",
+          "outreach",
           pipelineRunId,
           emit,
-          maxLeadsPerKeyword,
+          () =>
+            runDiscoveryStage(
+              pipelineRunId,
+              emit,
+              maxLeadsPerKeyword,
+              options.keywords,
+            ),
+          signal,
         );
         emit({
           type: "stage_done",
@@ -264,9 +329,17 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
 
     // ── Stage 2: Qualification ──────────────────────────────────────────
     if (stagesToRun.includes("qualification")) {
+      throwIfAborted(signal);
       emit({ type: "stage", message: "Starting Stage 2: Lead Qualification" });
       try {
-        const result = await runQualificationStage(pipelineRunId, emit);
+        const result = await runStageWithRetry(
+          "qualification",
+          "outreach",
+          pipelineRunId,
+          emit,
+          () => runQualificationStage(pipelineRunId, emit),
+          signal,
+        );
         emit({
           type: "stage_done",
           message: `Qualification: ${result.qualified} qualified, ${result.deprioritized} deprioritized`,
@@ -286,9 +359,17 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
 
     // ── Stage 3: Message Generation ─────────────────────────────────────
     if (stagesToRun.includes("messages")) {
+      throwIfAborted(signal);
       emit({ type: "stage", message: "Starting Stage 3: Message Generation" });
       try {
-        const result = await runMessageStage(pipelineRunId, emit);
+        const result = await runStageWithRetry(
+          "messages",
+          "outreach",
+          pipelineRunId,
+          emit,
+          () => runMessageStage(pipelineRunId, emit),
+          signal,
+        );
         emit({
           type: "stage_done",
           message: `Messages: ${result.generated} generated, ${result.approved} auto-approved (variant ${autoApproveVariant()})`,
@@ -308,9 +389,17 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
 
     // ── Stage 4: Send ───────────────────────────────────────────────────
     if (stagesToRun.includes("send")) {
+      throwIfAborted(signal);
       emit({ type: "stage", message: "Starting Stage 4: Send" });
       try {
-        const result = await runSendStage(pipelineRunId, emit, maxDmsPerRun);
+        const result = await runStageWithRetry(
+          "send",
+          "outreach",
+          pipelineRunId,
+          emit,
+          () => runSendStage(pipelineRunId, emit, maxDmsPerRun),
+          signal,
+        );
         emit({
           type: "stage_done",
           message: `Send: ${result.sent} sent, ${result.failed} failed, ${result.skipped} skipped`,
@@ -326,6 +415,14 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
       type: "complete",
       message: "Pipeline finished. See dashboard for full summary.",
     });
+    logActivity({
+      activityType: "pipeline_run",
+      entityType: "pipeline",
+      entityId: pipelineRunId,
+      actor: triggerSource,
+      status: "success",
+      summary: `Outreach pipeline #${pipelineRunId} completed`,
+    });
   } catch (err) {
     logger.error("PIPELINE", "Unhandled pipeline error", {
       runId: pipelineRunId,
@@ -333,7 +430,17 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
     });
     finalisePipelineRun(pipelineRunId, "failed");
     emit({ type: "error", message: `Pipeline failed: ${err.message}` });
+    logActivity({
+      activityType: "pipeline_run",
+      entityType: "pipeline",
+      entityId: pipelineRunId,
+      actor: triggerSource,
+      status: "failure",
+      summary: `Outreach pipeline #${pipelineRunId} failed`,
+      details: { error: err.message },
+    });
   } finally {
+    jobRegistry.finishJob(pipelineRunId);
     closePipelineStream(pipelineRunId);
     await sendPipelineSummaryEmail(pipelineRunId);
   }

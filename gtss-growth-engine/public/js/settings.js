@@ -108,6 +108,15 @@ async function loadSettings() {
     settingsState.settings.gmail_app_password || "";
   applyNotifications(settingsState.settings.notification_settings || {});
   renderLimits(settingsState.settings.limits || {});
+  [
+    "retry_max_attempts",
+    "retry_delay_preset",
+    "content_asset_source",
+    "content_library_media_type",
+  ].forEach((key) => {
+    const el = document.getElementById(key);
+    if (el) el.value = settingsState.settings[key] || "";
+  });
 
   // Populate Instagram Settings
   const igKeys = [
@@ -327,6 +336,12 @@ function bindEvents() {
   document
     .getElementById("save-instagram-settings")
     .addEventListener("click", saveInstagramSettings);
+  const pipelineReliabilityButton = document.getElementById(
+    "save-pipeline-reliability",
+  );
+  if (pipelineReliabilityButton) {
+    pipelineReliabilityButton.addEventListener("click", savePipelineReliability);
+  }
   document.addEventListener("click", async (event) => {
     const templateButton = event.target.closest("[data-template-key]");
     const variableButton = event.target.closest("[data-variable]");
@@ -345,6 +360,25 @@ function bindEvents() {
     if (authButton) authenticatePlatform(authButton);
     if (clearButton) clearPlatform(clearButton.dataset.clearPlatform);
   });
+}
+
+async function savePipelineReliability() {
+  try {
+    await window.gtss.fetchJSON("/api/settings", {
+      method: "PATCH",
+      body: JSON.stringify({
+        retry_max_attempts: document.getElementById("retry_max_attempts").value,
+        retry_delay_preset: document.getElementById("retry_delay_preset").value,
+        content_asset_source: document.getElementById("content_asset_source").value,
+        content_library_media_type: document.getElementById(
+          "content_library_media_type",
+        ).value,
+      }),
+    });
+    setInline("pipeline-reliability-result", "Pipeline settings saved", "success");
+  } catch (error) {
+    setInline("pipeline-reliability-result", error.message, "error");
+  }
 }
 
 function togglePassword(inputId, buttonId) {

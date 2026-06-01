@@ -77,7 +77,12 @@ function loadKeywords() {
  * @param {Function} emit - Event emitter for pipeline SSE stream
  * @returns {Promise<{newLeads: number, keywordsRun: number, skipped: number}>}
  */
-async function runDiscoveryStage(pipelineRunId, emit, maxLeadsPerKeywordOverride) {
+async function runDiscoveryStage(
+  pipelineRunId,
+  emit,
+  maxLeadsPerKeywordOverride,
+  keywordsOverride,
+) {
   const mode = stageMode("discovery");
   const db = getDb();
 
@@ -106,6 +111,22 @@ async function runDiscoveryStage(pipelineRunId, emit, maxLeadsPerKeywordOverride
   // AI mode — full automated discovery
   const config = loadKeywords();
   let { keywords, platforms, maxLeadsPerKeyword } = config;
+  const selectedKeywords = Array.isArray(keywordsOverride)
+    ? keywordsOverride.map((keyword) => String(keyword).trim()).filter(Boolean)
+    : [];
+  if (selectedKeywords.length > 0) {
+    const selectedSet = new Set(selectedKeywords.map((keyword) => keyword.toLowerCase()));
+    keywords = keywords.filter((item) => {
+      const value =
+        item && typeof item === "object" ? item.keyword : String(item || "");
+      return selectedSet.has(String(value).trim().toLowerCase());
+    });
+    logger.db("info", "discovery", "keyword_filter", "Discovery keyword filter applied", {
+      jobId: pipelineRunId,
+      requested: selectedKeywords,
+      matched: keywords.length,
+    });
+  }
 
   if (typeof maxLeadsPerKeywordOverride === "number") {
     maxLeadsPerKeyword = maxLeadsPerKeywordOverride;

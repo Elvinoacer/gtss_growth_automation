@@ -37,6 +37,18 @@ const PIPELINE_META = {
     ],
     platformField: true,
   },
+  dm_check: {
+    icon: '🟢',
+    color: '#22c55e',
+    stages: 'Inbox scan → Reply detection → CRM update',
+    limitFields: [
+      { key: 'active_hours_start', label: 'Active start hour', type: 'number', default: 8 },
+      { key: 'active_hours_end', label: 'Active end hour', type: 'number', default: 22 },
+      { key: 'timezone', label: 'Timezone', type: 'text', default: 'Africa/Nairobi' },
+      { key: 'prompt', label: 'Response prompt', type: 'text', default: '' },
+    ],
+    platformField: true,
+  },
 };
 
 const ALL_PLATFORMS = ['instagram', 'linkedin', 'x', 'facebook'];
@@ -69,8 +81,8 @@ async function savePipeline(id) {
     limits[key] = el.type === 'number' ? Number(el.value) : el.value;
   });
 
-  // Collect platforms for content pipeline
-  if (id === 'content') {
+  // Collect platforms for content and DM checker pipelines
+  if (id === 'content' || id === 'dm_check') {
     const checked = [];
     card.querySelectorAll('[data-platform-checkbox]').forEach(cb => {
       if (cb.checked) checked.push(cb.dataset.platformCheckbox);
@@ -123,6 +135,30 @@ async function runNow(id) {
   }
 }
 
+async function pausePipeline(id, paused) {
+  try {
+    await gtss.fetchJSON(`/api/pipelines/${id}/${paused ? 'pause' : 'resume'}`, {
+      method: 'POST',
+    });
+    gtss.showToast(`Pipeline ${paused ? 'paused' : 'resumed'}`, 'success');
+    loadPipelines();
+  } catch (err) {
+    gtss.showToast(err.message, 'error');
+  }
+}
+
+async function stopPipeline(id) {
+  try {
+    const result = await gtss.fetchJSON(`/api/pipelines/${id}/stop`, {
+      method: 'POST',
+    });
+    gtss.showToast(`Stop requested (${result.stopped || 0} active job(s))`, 'info');
+    loadPipelines();
+  } catch (err) {
+    gtss.showToast(err.message, 'error');
+  }
+}
+
 async function loadHistory(id) {
   try {
     const data = await gtss.fetchJSON(`/api/pipelines/${id}/history?limit=10`);
@@ -149,6 +185,7 @@ function statusBadge(status) {
     completed: { bg: 'rgba(34,197,94,0.15)', color: '#22c55e', icon: '✓' },
     running: { bg: 'rgba(59,130,246,0.15)', color: '#60a5fa', icon: '⟳' },
     failed: { bg: 'rgba(248,113,113,0.15)', color: '#f87171', icon: '✗' },
+    paused: { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b', icon: 'Ⅱ' },
   };
   const s = map[status] || { bg: 'rgba(148,163,184,0.12)', color: '#94a3b8', icon: '—' };
   return `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;background:${s.bg};color:${s.color}">${s.icon} ${status || 'idle'}</span>`;
@@ -240,6 +277,7 @@ function renderPipelineCard(pipeline) {
   const meta = PIPELINE_META[pipeline.id] || {};
   const limits = pipeline.limits || {};
   const enabled = Boolean(pipeline.enabled);
+  const displayStatus = pipeline.paused ? 'paused' : pipeline.last_status;
   const needsTopic = pipeline.id === 'content' && (!limits.topic || !limits.topic.trim());
 
   return `
@@ -255,7 +293,7 @@ function renderPipelineCard(pipeline) {
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
-        ${statusBadge(pipeline.last_status)}
+        ${statusBadge(displayStatus)}
         <label class="pipeline-toggle" style="position:relative;display:inline-block;width:52px;height:28px;cursor:pointer">
           <input type="checkbox" class="pipeline-toggle-input" data-toggle-pipeline="${pipeline.id}"
             ${enabled ? 'checked' : ''}
@@ -317,6 +355,18 @@ function renderPipelineCard(pipeline) {
           transition:all 150ms" title="View run history">
           📋 History
         </button>
+        <button type="button" class="pipeline-action-btn" data-action="${pipeline.paused ? 'resume' : 'pause'}" data-pipeline="${pipeline.id}"
+          style="padding:8px 16px;border-radius:10px;border:1px solid rgba(245,158,11,0.3);
+          background:rgba(245,158,11,0.1);color:#fbbf24;font-size:13px;font-weight:600;cursor:pointer;
+          transition:all 150ms" title="${pipeline.paused ? 'Resume' : 'Pause'} this pipeline">
+          ${pipeline.paused ? '▶ Resume' : 'Ⅱ Pause'}
+        </button>
+        <button type="button" class="pipeline-action-btn" data-action="stop" data-pipeline="${pipeline.id}"
+          style="padding:8px 16px;border-radius:10px;border:1px solid rgba(248,113,113,0.3);
+          background:rgba(248,113,113,0.1);color:#f87171;font-size:13px;font-weight:600;cursor:pointer;
+          transition:all 150ms" title="Stop any active run">
+          ■ Stop
+        </button>
         <button type="button" class="pipeline-action-btn" data-action="save" data-pipeline="${pipeline.id}"
           style="padding:8px 16px;border-radius:10px;border:1px solid rgba(14,165,233,0.3);
           background:rgba(14,165,233,0.1);color:#38bdf8;font-size:13px;font-weight:600;cursor:pointer;
@@ -356,6 +406,9 @@ function attachCardListeners() {
       const id = btn.dataset.pipeline;
       if (action === 'run') runNow(id);
       else if (action === 'history') loadHistory(id);
+      else if (action === 'pause') pausePipeline(id, true);
+      else if (action === 'resume') pausePipeline(id, false);
+      else if (action === 'stop') stopPipeline(id);
       else if (action === 'save') savePipeline(id);
     });
   });
@@ -402,14 +455,19 @@ function renderHistoryModal(pipelineId, runs) {
     padding:20px;background:rgba(2,6,23,0.72);animation:fadeIn 200ms ease`;
 
   const isOutreach = pipelineId === 'outreach';
-  const title = isOutreach ? 'Outreach Pipeline History' : 'Content Pipeline History';
+  const isDmCheck = pipelineId === 'dm_check';
+  const title = isOutreach
+    ? 'Outreach Pipeline History'
+    : isDmCheck
+      ? 'DM Checker History'
+      : 'Content Pipeline History';
 
   let rowsHtml = '';
   if (runs.length === 0) {
     rowsHtml = `<tr><td colspan="5" style="padding:24px;text-align:center;color:#64748b">No runs yet</td></tr>`;
   } else {
     rowsHtml = runs.map(run => {
-      if (isOutreach) {
+      if (isOutreach || isDmCheck) {
         return `<tr>
           <td style="padding:10px 12px;border-bottom:1px solid rgba(148,163,184,0.12);color:#e2e8f0;font-size:13px">#${run.id}</td>
           <td style="padding:10px 12px;border-bottom:1px solid rgba(148,163,184,0.12);color:#94a3b8;font-size:13px">${run.trigger || '—'}</td>
@@ -431,6 +489,8 @@ function renderHistoryModal(pipelineId, runs) {
 
   const headers = isOutreach
     ? '<th>Run</th><th>Trigger</th><th>Status</th><th>Started</th><th>Finished</th>'
+    : isDmCheck
+      ? '<th>Job</th><th>Trigger</th><th>Status</th><th>Started</th><th>Finished</th>'
     : '<th>Post</th><th>Platforms</th><th>Status</th><th>Created</th><th>Details</th>';
 
   overlay.innerHTML = `

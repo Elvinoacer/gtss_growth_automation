@@ -116,6 +116,55 @@ function initializeSchema(database) {
     /* table exists */
   }
 
+  try {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS ig_warmup_sequences (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+        status TEXT DEFAULT 'pending',
+        current_step INTEGER DEFAULT 0,
+        story_views_count INTEGER DEFAULT 0,
+        post_likes_count INTEGER DEFAULT 0,
+        comments_count INTEGER DEFAULT 0,
+        last_action_at DATETIME,
+        next_action_at DATETIME,
+        next_step TEXT,
+        next_step_after DATETIME,
+        attempt_count INTEGER DEFAULT 0,
+        completed_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_ig_warmup_sequences_lead ON ig_warmup_sequences(lead_id);
+
+      CREATE TABLE IF NOT EXISTS ig_follow_tracker (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+        username TEXT,
+        status TEXT DEFAULT 'following',
+        followed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        unfollowed_at DATETIME,
+        eligible_for_unfollow INTEGER DEFAULT 1,
+        follow_back_at DATETIME,
+        follow_source TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_ig_follow_tracker_lead ON ig_follow_tracker(lead_id);
+      CREATE INDEX IF NOT EXISTS idx_ig_follow_tracker_username ON ig_follow_tracker(username);
+
+      CREATE TABLE IF NOT EXISTS ig_discovery_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ig_username TEXT NOT NULL,
+        source TEXT NOT NULL,
+        added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        processed INTEGER DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_ig_discovery_queue_username ON ig_discovery_queue(ig_username);
+    `);
+  } catch (_) {
+    /* tables exist */
+  }
+
   // Pipeline migrations
   try {
     database.exec(`
@@ -223,6 +272,11 @@ function initializeSchema(database) {
   } catch (_) {}
   try {
     database.exec("ALTER TABLE messages ADD COLUMN action_type TEXT");
+  } catch (_) {}
+  try {
+    database.exec(
+      "ALTER TABLE messages ADD COLUMN ig_is_message_request INTEGER DEFAULT 0",
+    );
   } catch (_) {}
   try {
     database.exec("ALTER TABLE touchpoints ADD COLUMN source TEXT");
@@ -450,6 +504,80 @@ function initializeSchema(database) {
     /* table exists */
   }
 
+  try {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS pipeline_events (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_type     TEXT NOT NULL,
+        job_id       TEXT,
+        stage        TEXT,
+        level        TEXT NOT NULL,
+        message      TEXT NOT NULL,
+        context_json TEXT,
+        created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_pipeline_events_job_id ON pipeline_events(job_id);
+      CREATE INDEX IF NOT EXISTS idx_pipeline_events_level ON pipeline_events(level);
+      CREATE INDEX IF NOT EXISTS idx_pipeline_events_created ON pipeline_events(created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS keyword_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        keywords TEXT NOT NULL,
+        platforms TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS asset_library (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        file_path TEXT NOT NULL UNIQUE,
+        file_url TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        mime_type TEXT,
+        size_bytes INTEGER,
+        tags TEXT,
+        times_used INTEGER DEFAULT 0,
+        last_used_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_asset_library_media_type ON asset_library(media_type);
+      CREATE INDEX IF NOT EXISTS idx_asset_library_times_used ON asset_library(times_used ASC);
+
+      CREATE TABLE IF NOT EXISTS asset_usage_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        asset_id INTEGER REFERENCES asset_library(id),
+        post_id INTEGER REFERENCES posts(id),
+        used_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        activity_type TEXT NOT NULL,
+        entity_type TEXT,
+        entity_id TEXT,
+        platform TEXT,
+        actor TEXT DEFAULT 'system',
+        status TEXT,
+        summary TEXT NOT NULL,
+        details_json TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_activity ON audit_log(activity_type);
+      CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_audit_platform ON audit_log(platform);
+
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        name TEXT PRIMARY KEY,
+        applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+  } catch (_) {
+    /* tables exist */
+  }
+
   seedDefaultSettings(database);
   seedDefaultPipelineSchedules(database);
 }
@@ -512,6 +640,37 @@ function seedDefaultSettings(database) {
       )
       .run("false");
   }
+
+  const defaults = {
+    retry_max_attempts: "5",
+    retry_delay_preset: "conservative",
+    pipeline_outreach_paused: "false",
+    pipeline_content_paused: "false",
+    pipeline_dm_check_paused: "false",
+    pipeline_discovery_paused: "false",
+    content_asset_source: "ai",
+    content_library_media_type: "image",
+    warmup_min_follow_to_story_hours: "24",
+    warmup_max_follow_to_story_hours: "48",
+    warmup_min_story_to_like_hours: "12",
+    warmup_max_story_to_like_hours: "24",
+    warmup_min_like_to_dm_hours: "24",
+    warmup_max_like_to_dm_hours: "48",
+    fast_warmup_enabled: "0",
+    auto_warmup_on_qualify: "1",
+    unfollow_after_days: "30",
+    unfollow_pending_after_days: "14",
+    max_following_ratio: "1.5",
+    discovery_max_per_hashtag: "30",
+    discovery_min_followers: "100",
+    discovery_max_followers: "100000",
+    ig_selector_version: "1",
+  };
+
+  const stmt = database.prepare(
+    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING",
+  );
+  Object.entries(defaults).forEach(([key, value]) => stmt.run(key, value));
 }
 
 function seedDefaultPipelineSchedules(database) {
@@ -540,6 +699,19 @@ function seedDefaultPipelineSchedules(database) {
       0,
       '0 9 * * *',
       '{"platforms": ["instagram", "linkedin"], "topic": "", "style": "photorealistic", "max_posts_per_run": 1}'
+    )
+  `).run();
+
+  database.prepare(`
+    INSERT OR IGNORE INTO pipeline_schedules
+      (id, name, description, enabled, cron, limits_json)
+    VALUES (
+      'dm_check',
+      'DM Inbox Checker',
+      'Scans connected social inboxes for new replies',
+      1,
+      '*/30 * * * *',
+      '{"active_hours_start": 8, "active_hours_end": 22, "timezone": "Africa/Nairobi", "platforms": ["instagram", "linkedin", "x", "facebook"], "prompt": ""}'
     )
   `).run();
 }

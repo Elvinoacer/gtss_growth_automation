@@ -1224,6 +1224,54 @@
 
         <section class="settings-section gtss-card">
           <div class="section-head">
+            <h2>Pipeline Reliability</h2>
+            <span class="muted">Retries and content media source</span>
+          </div>
+          <div class="form-row">
+            <label class="field"
+              >Retry Attempts
+              <input id="retry_max_attempts" type="number" min="1" max="10" />
+            </label>
+            <label class="field"
+              >Retry Delay Preset
+              <select id="retry_delay_preset">
+                <option value="aggressive">Aggressive</option>
+                <option value="conservative">Conservative</option>
+                <option value="patient">Patient</option>
+              </select>
+            </label>
+            <label class="field"
+              >Content Asset Source
+              <select id="content_asset_source">
+                <option value="ai">AI Generated</option>
+                <option value="library">My Asset Library</option>
+              </select>
+            </label>
+            <label class="field"
+              >Library Media Type
+              <select id="content_library_media_type">
+                <option value="image">Images</option>
+                <option value="video">Videos</option>
+                <option value="both">Both</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-row" style="margin-top: 10px">
+            <button id="save-pipeline-reliability" class="primary-button" type="button">
+              Save Pipeline Settings
+            </button>
+            <a class="secondary-button" href="/assets" style="display:inline-flex;align-items:center;text-decoration:none">
+              Open Asset Library
+            </a>
+            <a class="secondary-button" href="/pipelines" style="display:inline-flex;align-items:center;text-decoration:none">
+              Configure DM Checker
+            </a>
+          </div>
+          <span id="pipeline-reliability-result" class="inline-result"></span>
+        </section>
+
+        <section class="settings-section gtss-card">
+          <div class="section-head">
             <h2>Prompt Templates</h2>
             <span id="char-count" class="muted">0 chars</span>
           </div>

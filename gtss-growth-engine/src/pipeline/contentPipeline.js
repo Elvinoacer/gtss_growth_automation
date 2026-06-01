@@ -20,6 +20,10 @@ const {
   publishPost,
 } = require("../services/schedulerService");
 const { runImageGenJob } = require("../services/imageGenService");
+const { pickNextAsset, markAssetUsed } = require("../services/assetRotationService");
+const { logActivity } = require("../services/auditService");
+const { withRetry } = require("../utils/retryHelper");
+const jobRegistry = require("../jobs/jobRegistry");
 const logger = require("../utils/logger");
 
 const UPLOADS_DIR = path.resolve(__dirname, "../../public/uploads");
@@ -71,6 +75,19 @@ function releaseLock() {
   db.prepare(
     "UPDATE settings SET value = 'false' WHERE key = 'content_pipeline_lock'",
   ).run();
+}
+
+function getSetting(key, fallback = null) {
+  const row = getDb().prepare("SELECT value FROM settings WHERE key = ?").get(key);
+  return row ? row.value : fallback;
+}
+
+function isPaused() {
+  return String(getSetting("pipeline_content_paused", "false")) === "true";
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw new Error("Content pipeline aborted");
 }
 
 /**
@@ -125,13 +142,32 @@ async function runContentPipeline(config = {}) {
       const jobId = crypto.randomUUID();
       const emit = buildContentEmitter(jobId);
       const db = getDb();
+      const controller = config.signal
+        ? { signal: config.signal }
+        : jobRegistry.startJob(jobId, { pipelineId: "content", type: "content" });
+      const signal = controller.signal;
 
       emit({
         stage: "start",
         message: `Run started (trigger: ${trigger}, platforms: ${platforms.join(", ")})`,
       });
+      logActivity({
+        activityType: "pipeline_run",
+        entityType: "pipeline",
+        entityId: jobId,
+        actor: trigger,
+        status: "running",
+        summary: `Content pipeline ${jobId} started`,
+        details: { platforms, topic },
+      });
 
       try {
+        if (isPaused()) {
+          emit({ stage: "paused", level: "warn", message: "Content pipeline is paused; run skipped" });
+          results.push({ success: false, error: "Paused" });
+          continue;
+        }
+        throwIfAborted(signal);
         // ── Preflight: Gemini session check ──────────────────────────────
         if (
           !process.env.GEMINI_CDP_ENDPOINT &&
@@ -148,45 +184,88 @@ async function runContentPipeline(config = {}) {
           });
         }
 
-        // ── Stage 1: Generate image ──────────────────────────────────────
-        emit({
-          stage: "image_gen",
-          message: `Generating image for topic: "${topic}"...`,
-        });
+        let mediaRelPath;
+        let selectedAsset = null;
+        const assetSource = getSetting("content_asset_source", "ai");
+        if (assetSource === "library") {
+          const mediaType = getSetting("content_library_media_type", "image");
+          selectedAsset = pickNextAsset({ mediaType });
+          if (!selectedAsset) throw new Error("Asset library is empty");
+          mediaRelPath = selectedAsset.file_url;
+          emit({
+            stage: "asset_library",
+            message: `Selected library asset: ${selectedAsset.name}`,
+          });
+        } else {
+          // ── Stage 1: Generate image ──────────────────────────────────────
+          emit({
+            stage: "image_gen",
+            message: `Generating image for topic: "${topic}"...`,
+          });
 
-        const {
-          jobId: igJobId,
-          filePath,
-          fileName,
-        } = await runImageGenJob({
-          jobId,
-          topic,
-          style,
-          platform: platforms[0] || "instagram",
-        });
+          const { filePath, fileName } = await withRetry(
+            () =>
+              runImageGenJob({
+                jobId,
+                topic,
+                style,
+                platform: platforms[0] || "instagram",
+              }),
+            {
+              signal,
+              label: "content:image_gen",
+              entityType: "pipeline",
+              entityId: jobId,
+              onRetry: (attempt, err) =>
+                emit({
+                  stage: "image_gen",
+                  type: "retry",
+                  level: "retry",
+                  message: `Image generation retry ${attempt}: ${err.message}`,
+                }),
+            },
+          );
 
-        emit({ stage: "image_gen", message: `Image saved: ${fileName}` });
+          emit({ stage: "image_gen", message: `Image saved: ${fileName}` });
 
-        // Copy image to uploads directory so publishPost can find it
-        fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-        const destName = `auto-${Date.now()}-${fileName}`;
-        const destPath = path.join(UPLOADS_DIR, destName);
-        await fs.promises.copyFile(filePath, destPath);
-        const mediaRelPath = `/uploads/${destName}`;
+          fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+          const destName = `auto-${Date.now()}-${fileName}`;
+          const destPath = path.join(UPLOADS_DIR, destName);
+          await fs.promises.copyFile(filePath, destPath);
+          mediaRelPath = `/uploads/${destName}`;
 
-        emit({
-          stage: "image_gen",
-          message: `Image copied to uploads: ${destName}`,
-        });
+          emit({
+            stage: "image_gen",
+            message: `Image copied to uploads: ${destName}`,
+          });
+        }
 
         // ── Stage 2: Generate captions per platform ──────────────────────
         const captions = {};
         for (const platform of platforms) {
+          throwIfAborted(signal);
           emit({
             stage: "caption_gen",
             message: `Generating caption for ${platform}...`,
           });
-          const caption = await generateCaption(topic, platform, null);
+          const caption = await withRetry(
+            () => generateCaption(topic, platform, null),
+            {
+              signal,
+              label: `content:caption:${platform}`,
+              entityType: "pipeline",
+              entityId: jobId,
+              platform,
+              onRetry: (attempt, err) =>
+                emit({
+                  stage: "caption_gen",
+                  type: "retry",
+                  level: "retry",
+                  platform,
+                  message: `Caption retry ${attempt} for ${platform}: ${err.message}`,
+                }),
+            },
+          );
           captions[platform] = caption;
           emit({
             stage: "caption_gen",
@@ -221,6 +300,9 @@ async function runContentPipeline(config = {}) {
         });
 
         const publishResult = await publishPost(postId, emit, { trace: false });
+        if (selectedAsset && Array.isArray(publishResult.success) && publishResult.success.length > 0) {
+          markAssetUsed(selectedAsset.id, postId);
+        }
 
         const publishedPlatforms = Array.isArray(publishResult.success)
           ? publishResult.success
@@ -243,6 +325,15 @@ async function runContentPipeline(config = {}) {
             stage: "complete",
             message: `Run complete (post ${postId} published)`,
           });
+          logActivity({
+            activityType: "pipeline_run",
+            entityType: "pipeline",
+            entityId: jobId,
+            actor: trigger,
+            status: "success",
+            summary: `Content pipeline ${jobId} completed`,
+            details: { postId, platforms: publishedPlatforms },
+          });
         } else {
           emit({
             stage: "publish",
@@ -261,7 +352,18 @@ async function runContentPipeline(config = {}) {
       } catch (err) {
         logger.error("CONTENT-PIPELINE", `Run ${i + 1} failed`, err);
         emit({ stage: "error", message: err.message });
+        logActivity({
+          activityType: "pipeline_run",
+          entityType: "pipeline",
+          entityId: jobId,
+          actor: trigger,
+          status: "failure",
+          summary: `Content pipeline ${jobId} failed`,
+          details: { error: err.message },
+        });
         results.push({ success: false, error: err.message });
+      } finally {
+        jobRegistry.finishJob(jobId);
       }
     }
   } finally {

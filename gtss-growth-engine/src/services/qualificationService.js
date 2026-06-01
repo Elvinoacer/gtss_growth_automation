@@ -1,5 +1,5 @@
 const { getDb } = require("../db/database");
-const { callGeminiText } = require("./aiService");
+const { callGeminiText, unwrapGeminiText } = require("./aiService");
 const { getContext } = require("./contextService");
 const logger = require("../utils/logger");
 const {
@@ -122,7 +122,13 @@ async function scoreLead(lead) {
   const prompt = buildPrompt(lead);
 
   try {
-    const rawResult = await callGeminiText(prompt);
+    const generation = await callGeminiText(prompt);
+    const rawResult = unwrapGeminiText(generation);
+    logger.db("info", "outreach", "qualification", "Gemini qualification response received", {
+      leadId: lead.id,
+      source: generation.source || "unknown",
+      model: generation.model,
+    });
 
     let result;
     try {

@@ -137,6 +137,24 @@ function logToDb(level, jobType, stage, message, contextObj) {
       String(message),
       contextJson,
     );
+
+    try {
+      const { logActivity } = require("../services/auditService");
+      logActivity({
+        activityType: String(jobType),
+        entityType: jobId ? "job" : null,
+        entityId: jobId,
+        platform: context?.platform || null,
+        actor: context?.actor || "system",
+        status: dbLevel === "error" ? "failure" : dbLevel === "retry" ? "retried" : "success",
+        summary: String(message),
+        details: {
+          stage,
+          level: dbLevel,
+          ...(context || {}),
+        },
+      });
+    } catch (_) {}
   } catch (err) {
     console.error("[LOGGER-DB] Failed to write monitoring event:", err.message);
   }

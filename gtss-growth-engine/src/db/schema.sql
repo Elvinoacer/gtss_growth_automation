@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS messages (
   last_error TEXT,
   blocked_reason TEXT,
   fail_category TEXT,
+  ig_is_message_request INTEGER DEFAULT 0,
   generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -158,6 +159,52 @@ CREATE TABLE IF NOT EXISTS image_gen_jobs (
   completed_at DATETIME
 );
 
+CREATE TABLE IF NOT EXISTS ig_warmup_sequences (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  status TEXT DEFAULT 'pending',
+  current_step INTEGER DEFAULT 0,
+  story_views_count INTEGER DEFAULT 0,
+  post_likes_count INTEGER DEFAULT 0,
+  comments_count INTEGER DEFAULT 0,
+  last_action_at DATETIME,
+  next_action_at DATETIME,
+  next_step TEXT,
+  next_step_after DATETIME,
+  attempt_count INTEGER DEFAULT 0,
+  completed_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ig_warmup_sequences_lead ON ig_warmup_sequences(lead_id);
+
+CREATE TABLE IF NOT EXISTS ig_follow_tracker (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  username TEXT,
+  status TEXT DEFAULT 'following',
+  followed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  unfollowed_at DATETIME,
+  eligible_for_unfollow INTEGER DEFAULT 1,
+  follow_back_at DATETIME,
+  follow_source TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ig_follow_tracker_lead ON ig_follow_tracker(lead_id);
+CREATE INDEX IF NOT EXISTS idx_ig_follow_tracker_username ON ig_follow_tracker(username);
+
+CREATE TABLE IF NOT EXISTS ig_discovery_queue (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ig_username TEXT NOT NULL,
+  source TEXT NOT NULL,
+  added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  processed INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_ig_discovery_queue_username ON ig_discovery_queue(ig_username);
+
 CREATE TABLE IF NOT EXISTS pipeline_schedules (
   id          TEXT PRIMARY KEY,          -- 'outreach' | 'content'
   name        TEXT NOT NULL,
@@ -188,3 +235,58 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_events_job_id ON pipeline_events(job_id)
 CREATE INDEX IF NOT EXISTS idx_pipeline_events_level ON pipeline_events(level);
 CREATE INDEX IF NOT EXISTS idx_pipeline_events_created ON pipeline_events(created_at DESC);
 
+CREATE TABLE IF NOT EXISTS keyword_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  keywords TEXT NOT NULL,
+  platforms TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS asset_library (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  file_path TEXT NOT NULL UNIQUE,
+  file_url TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  mime_type TEXT,
+  size_bytes INTEGER,
+  tags TEXT,
+  times_used INTEGER DEFAULT 0,
+  last_used_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_asset_library_media_type ON asset_library(media_type);
+CREATE INDEX IF NOT EXISTS idx_asset_library_times_used ON asset_library(times_used ASC);
+
+CREATE TABLE IF NOT EXISTS asset_usage_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  asset_id INTEGER REFERENCES asset_library(id),
+  post_id INTEGER REFERENCES posts(id),
+  used_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  activity_type TEXT NOT NULL,
+  entity_type TEXT,
+  entity_id TEXT,
+  platform TEXT,
+  actor TEXT DEFAULT 'system',
+  status TEXT,
+  summary TEXT NOT NULL,
+  details_json TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_activity ON audit_log(activity_type);
+CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_platform ON audit_log(platform);
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  name TEXT PRIMARY KEY,
+  applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);

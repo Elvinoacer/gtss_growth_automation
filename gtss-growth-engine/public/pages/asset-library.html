@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Asset Library - GTSS Growth Engine</title>
+    <link rel="stylesheet" href="/css/style.css" />
+    <style>
+      .asset-page { padding: 24px; display: grid; gap: 18px; }
+      .asset-toolbar, .asset-card { border: 1px solid rgba(148,163,184,.2); border-radius: 8px; background: rgba(15,23,42,.78); padding: 16px; }
+      .asset-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+      .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
+      .asset-card { display: grid; gap: 10px; }
+      .asset-card img, .asset-card video { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 6px; background: #0f172a; }
+      .asset-card button, .asset-toolbar button { min-height: 38px; border-radius: 6px; border: 1px solid rgba(148,163,184,.24); background: #1e293b; color: #e2e8f0; padding: 0 12px; cursor: pointer; }
+      .asset-toolbar input, .asset-toolbar select { min-height: 38px; border-radius: 6px; border: 1px solid rgba(148,163,184,.24); background: #0f172a; color: #e2e8f0; padding: 0 10px; }
+      .asset-meta { color: #94a3b8; font-size: 13px; }
+    </style>
+  </head>
+  <body data-page-title="Asset Library">
+    <!-- SHELL -->
+    <main class="page-content">
+      <section class="asset-page">
+        <form id="asset-upload-form" class="asset-toolbar">
+          <label>Upload media <input id="asset-files" type="file" name="assets" multiple accept="image/*,video/*" /></label>
+          <label>Tags <input id="asset-tags" type="text" placeholder="tag1, tag2" /></label>
+          <button type="submit">Upload</button>
+          <label>Asset source
+            <select id="asset-source">
+              <option value="ai">AI Generated</option>
+              <option value="library">My Asset Library</option>
+            </select>
+          </label>
+          <label>Media type
+            <select id="asset-media-type">
+              <option value="image">Images</option>
+              <option value="video">Videos</option>
+              <option value="both">Both</option>
+            </select>
+          </label>
+          <button id="save-asset-settings" type="button">Save Settings</button>
+          <span id="asset-next" class="asset-meta"></span>
+        </form>
+        <div id="asset-grid" class="asset-grid"></div>
+      </section>
+    </main>
+    <script src="/js/app.js"></script>
+    <script src="/js/asset-library.js"></script>
+  </body>
+</html>

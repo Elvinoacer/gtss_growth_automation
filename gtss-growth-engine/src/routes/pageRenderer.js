@@ -14,6 +14,8 @@ const fileMap = {
   CampaignDetail: "campaign-detail.html",
   Pipelines: "pipelines.html",
   Monitoring: "monitoring.html",
+  AssetLibrary: "asset-library.html",
+  AuditLog: "audit-log.html",
 };
 
 function renderPage(res, page) {

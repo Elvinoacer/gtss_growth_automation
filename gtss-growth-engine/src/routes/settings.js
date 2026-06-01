@@ -179,6 +179,22 @@ apiRouter.patch("/notifications", (req, res) => {
   return res.json({ success: true });
 });
 
+apiRouter.patch("/", (req, res) => {
+  const allowed = new Set([
+    "content_asset_source",
+    "content_library_media_type",
+    "retry_max_attempts",
+    "retry_delay_preset",
+  ]);
+  const updates = req.body || {};
+  Object.entries(updates).forEach(([key, value]) => {
+    if (allowed.has(key)) {
+      upsertSetting(key, typeof value === "string" ? value : JSON.stringify(value));
+    }
+  });
+  res.json({ success: true });
+});
+
 apiRouter.post("/passphrase", async (req, res) => {
   const { currentPassphrase, newPassphrase, confirmPassphrase } = req.body;
   const hash = process.env.PASSPHRASE_HASH || "";

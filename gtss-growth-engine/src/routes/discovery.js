@@ -390,6 +390,70 @@ router.get("/keywords", (req, res) => {
   res.json(readKeywordsFile());
 });
 
+router.get("/keywords/available", (req, res) => {
+  const config = readKeywordsFile();
+  const keywords = (config.keywords || [])
+    .map((entry) => (entry && typeof entry === "object" ? entry.keyword : entry))
+    .map((keyword) => String(keyword || "").trim())
+    .filter(Boolean);
+  res.json({ keywords: [...new Set(keywords)] });
+});
+
+router.get("/keywords/groups", (_req, res) => {
+  const groups = getDb()
+    .prepare("SELECT * FROM keyword_groups ORDER BY name ASC")
+    .all()
+    .map((group) => ({
+      ...group,
+      keywords: parseJsonArray(group.keywords),
+      platforms: parseJsonArray(group.platforms),
+    }));
+  res.json({ groups });
+});
+
+router.post("/keywords/groups", (req, res) => {
+  const name = String(req.body.name || "").trim();
+  const keywords = Array.isArray(req.body.keywords)
+    ? req.body.keywords.map((keyword) => String(keyword).trim()).filter(Boolean)
+    : [];
+  const platforms = Array.isArray(req.body.platforms)
+    ? req.body.platforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean)
+    : [];
+
+  if (!name) return res.status(400).json({ error: "Group name is required" });
+  if (keywords.length === 0) return res.status(400).json({ error: "Select at least one keyword" });
+
+  const result = getDb()
+    .prepare("INSERT INTO keyword_groups (name, keywords, platforms) VALUES (?, ?, ?)")
+    .run(name, JSON.stringify(keywords), JSON.stringify(platforms));
+  res.status(201).json({ id: result.lastInsertRowid, name, keywords, platforms });
+});
+
+router.put("/keywords/groups/:id", (req, res) => {
+  const group = getDb().prepare("SELECT * FROM keyword_groups WHERE id = ?").get(req.params.id);
+  if (!group) return res.status(404).json({ error: "Keyword group not found" });
+  const name = req.body.name !== undefined ? String(req.body.name).trim() : group.name;
+  const keywords = Array.isArray(req.body.keywords)
+    ? req.body.keywords.map((keyword) => String(keyword).trim()).filter(Boolean)
+    : parseJsonArray(group.keywords);
+  const platforms = Array.isArray(req.body.platforms)
+    ? req.body.platforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean)
+    : parseJsonArray(group.platforms);
+  getDb()
+    .prepare(
+      `UPDATE keyword_groups
+       SET name = ?, keywords = ?, platforms = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+    .run(name || group.name, JSON.stringify(keywords), JSON.stringify(platforms), group.id);
+  res.json({ id: group.id, name: name || group.name, keywords, platforms });
+});
+
+router.delete("/keywords/groups/:id", (req, res) => {
+  const result = getDb().prepare("DELETE FROM keyword_groups WHERE id = ?").run(req.params.id);
+  res.json({ deleted: result.changes > 0 });
+});
+
 // POST /api/discovery/keywords — replaces full keywords config
 router.post("/keywords", (req, res) => {
   const { keywords, platforms, maxLeadsPerKeyword } = req.body;

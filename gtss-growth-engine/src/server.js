@@ -133,6 +133,8 @@ app.use("/api/discovery", require("./routes/discovery"));
 app.use("/api/campaigns", require("./routes/campaigns"));
 app.use("/api/pipelines", authMiddleware, require("./routes/pipelines"));
 app.use("/api/monitoring", authMiddleware, require("./routes/monitoring"));
+app.use("/api/assets", authMiddleware, require("./routes/assets"));
+app.use("/api/audit", authMiddleware, require("./routes/audit"));
 
 // Protected Page Routes (wrapped in auth)
 app.use(authMiddleware);
@@ -148,6 +150,8 @@ app.use("/", require("./routes/campaigns").pageRouter);
 app.use("/", require("./routes/instagram"));
 app.use("/", require("./routes/pipelinesPage"));
 app.use("/", require("./routes/monitoringPage"));
+app.use("/", require("./routes/assetsPage"));
+app.use("/", require("./routes/auditPage"));
 
 // Global Error Handlers
 app.use(notFoundHandler);

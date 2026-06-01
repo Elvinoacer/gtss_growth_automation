@@ -13,6 +13,98 @@ const RETRY_DELAYS_MS = [
   6 * 60 * 60 * 1000,   // 3rd retry (final): 6 hours
 ];
 
+const RETRY_DELAY_PRESETS = {
+  aggressive: [1000, 3000, 10000, 30000, 60000],
+  conservative: [5000, 15000, 60000, 120000, 300000],
+  patient: [30000, 120000, 300000, 600000, 900000],
+};
+
+function delay(ms, signal) {
+  if (!ms) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    if (signal) {
+      if (signal.aborted) {
+        clearTimeout(timer);
+        return reject(new Error("Operation aborted"));
+      }
+      signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new Error("Operation aborted"));
+        },
+        { once: true },
+      );
+    }
+  });
+}
+
+function getRetrySettings() {
+  try {
+    const { getDb } = require("../db/database");
+    const rows = getDb()
+      .prepare(
+        "SELECT key, value FROM settings WHERE key IN ('retry_max_attempts', 'retry_delay_preset')",
+      )
+      .all();
+    const settings = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+    const maxAttempts = Math.max(1, Number(settings.retry_max_attempts) || 5);
+    const delaysMs =
+      RETRY_DELAY_PRESETS[settings.retry_delay_preset] ||
+      RETRY_DELAY_PRESETS.conservative;
+    return { maxAttempts, delaysMs };
+  } catch (_) {
+    return { maxAttempts: 5, delaysMs: RETRY_DELAY_PRESETS.conservative };
+  }
+}
+
+async function withRetry(fn, opts = {}) {
+  const settings = getRetrySettings();
+  const maxAttempts = Math.max(1, Number(opts.maxAttempts || settings.maxAttempts));
+  const delaysMs = Array.isArray(opts.delaysMs) ? opts.delaysMs : settings.delaysMs;
+  const shouldRetry =
+    typeof opts.shouldRetry === "function" ? opts.shouldRetry : () => true;
+  const onRetry = typeof opts.onRetry === "function" ? opts.onRetry : null;
+  const signal = opts.signal;
+
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (signal?.aborted) throw new Error("Operation aborted");
+    try {
+      return await fn({ attempt, signal });
+    } catch (error) {
+      lastError = error;
+      if (signal?.aborted || attempt >= maxAttempts || !shouldRetry(error)) {
+        throw error;
+      }
+
+      const delayMs = delaysMs[Math.min(attempt - 1, delaysMs.length - 1)] || 0;
+      const nextRetryAt = new Date(Date.now() + delayMs).toISOString();
+      if (onRetry) {
+        await onRetry(attempt + 1, error, { delayMs, nextRetryAt });
+      }
+
+      try {
+        const { logActivity } = require("../services/auditService");
+        logActivity({
+          activityType: "retry_attempt",
+          entityType: opts.entityType || null,
+          entityId: opts.entityId || null,
+          platform: opts.platform || null,
+          status: "retried",
+          summary: `${opts.label || "Operation"} retry ${attempt + 1}/${maxAttempts}`,
+          details: { error: error.message, delayMs, nextRetryAt },
+        });
+      } catch (_) {}
+
+      await delay(delayMs, signal);
+    }
+  }
+
+  throw lastError || new Error("Retry failed");
+}
+
 /**
  * Calculate the snooze_until timestamp for a given retry count.
  *
@@ -37,6 +129,9 @@ function isRetriesExhausted(retryCount) {
 
 module.exports = {
   RETRY_DELAYS_MS,
+  RETRY_DELAY_PRESETS,
   getRetrySnoozeUntil,
   isRetriesExhausted,
+  withRetry,
+  getRetrySettings,
 };

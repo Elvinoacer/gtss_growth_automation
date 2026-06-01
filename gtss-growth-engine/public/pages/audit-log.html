@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Audit Log - GTSS Growth Engine</title>
+    <link rel="stylesheet" href="/css/style.css" />
+    <style>
+      .audit-page { padding: 24px; display: grid; gap: 16px; }
+      .audit-toolbar, .audit-entry { border: 1px solid rgba(148,163,184,.2); border-radius: 8px; background: rgba(15,23,42,.78); padding: 14px; }
+      .audit-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+      .audit-toolbar input, .audit-toolbar select, .audit-toolbar button { min-height: 38px; border-radius: 6px; border: 1px solid rgba(148,163,184,.24); background: #0f172a; color: #e2e8f0; padding: 0 10px; }
+      .audit-feed { display: grid; gap: 10px; }
+      .audit-entry { display: grid; gap: 6px; }
+      .audit-meta { color: #94a3b8; font-size: 13px; }
+    </style>
+  </head>
+  <body data-page-title="Audit Log">
+    <!-- SHELL -->
+    <main class="page-content">
+      <section class="audit-page">
+        <div class="audit-toolbar">
+          <select id="audit-type">
+            <option value="">All types</option>
+            <option value="pipeline_run">Pipeline runs</option>
+            <option value="post_attempt">Post attempts</option>
+            <option value="dm_check">DM checks</option>
+            <option value="lead_discovery">Lead discovery</option>
+            <option value="retry_attempt">Retries</option>
+            <option value="asset_used">Assets</option>
+            <option value="user_action">User actions</option>
+          </select>
+          <select id="audit-status">
+            <option value="">All statuses</option>
+            <option value="success">Success</option>
+            <option value="failure">Failure</option>
+            <option value="running">Running</option>
+            <option value="retried">Retried</option>
+          </select>
+          <input id="audit-platform" placeholder="Platform" />
+          <button id="audit-refresh" type="button">Refresh</button>
+          <a id="audit-export" href="/api/audit/export">Export CSV</a>
+        </div>
+        <div id="audit-feed" class="audit-feed"></div>
+      </section>
+    </main>
+    <script src="/js/app.js"></script>
+    <script src="/js/audit-log.js"></script>
+  </body>
+</html>

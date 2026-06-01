@@ -1,11 +1,12 @@
 const logger = require("../utils/logger");
+const { generateTextViaGeminiWeb } = require("../automation/geminiWeb");
 
 /**
  * Calls the Gemini API with fallback models.
  * @param {string} prompt The text prompt to send to Gemini.
- * @returns {Promise<string>} The cleaned response text.
+ * @returns {Promise<{text: string, source: string, model?: string}>}
  */
-async function callGeminiText(prompt) {
+async function callGeminiTextViaApi(prompt) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set in environment");
 
@@ -62,7 +63,7 @@ async function callGeminiText(prompt) {
       cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
       cleaned = cleaned.replace(/^["']|["']$/g, "");
 
-      return cleaned.trim();
+      return { text: cleaned.trim(), source: "api", model };
     } catch (err) {
       lastError = err;
       if (err.message.includes("429") || err.message.includes("404")) {
@@ -76,6 +77,33 @@ async function callGeminiText(prompt) {
   throw lastError;
 }
 
+async function callGeminiText(prompt) {
+  try {
+    return await callGeminiTextViaApi(prompt);
+  } catch (apiErr) {
+    logger.warn("GEMINI", "All API text models exhausted, falling back to Gemini Web", {
+      error: apiErr.message,
+    });
+    const text = await generateTextViaGeminiWeb(prompt, (event, message, data) => {
+      logger.db("info", "content", "gemini_web_text", message || event, {
+        event,
+        ...(data || {}),
+      });
+    });
+    logger.info("GEMINI", "Text generated via Gemini Web fallback");
+    return { text: String(text || "").trim(), source: "web" };
+  }
+}
+
+function unwrapGeminiText(result) {
+  if (result && typeof result === "object" && "text" in result) {
+    return String(result.text || "");
+  }
+  return String(result || "");
+}
+
 module.exports = {
   callGeminiText,
+  callGeminiTextViaApi,
+  unwrapGeminiText,
 };

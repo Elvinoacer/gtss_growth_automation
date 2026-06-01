@@ -17,6 +17,8 @@ const { runContentPipeline } = require('../pipeline/contentPipeline');
 const cronRegistry = require('../jobs/cronRegistry');
 const cron = require('node-cron');
 const logger = require('../utils/logger');
+const jobRegistry = require('../jobs/jobRegistry');
+const { logActivity } = require('../services/auditService');
 
 const router = express.Router();
 
@@ -80,6 +82,19 @@ function normalizeLimits(id, limits) {
       }
     }
   }
+  if (id === 'dm_check') {
+    for (const key of ['active_hours_start', 'active_hours_end']) {
+      if (next[key] !== undefined) next[key] = Number(next[key]);
+    }
+    if (next.platforms !== undefined && !Array.isArray(next.platforms)) {
+      throw new Error('platforms must be an array');
+    }
+    if (Array.isArray(next.platforms)) {
+      next.platforms = next.platforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean);
+    }
+    if (next.timezone !== undefined) next.timezone = String(next.timezone).trim() || 'UTC';
+    if (next.prompt !== undefined) next.prompt = String(next.prompt);
+  }
 
   return next;
 }
@@ -92,14 +107,22 @@ router.get('/', (req, res) => {
 
   const result = rows.map(row => {
     const limits = parseJsonObject(row.limits_json);
+    const paused = db
+      .prepare('SELECT value FROM settings WHERE key = ?')
+      .get(`pipeline_${row.id}_paused`);
     return {
       ...row,
       limits,
+      paused: String(paused?.value || 'false') === 'true',
       is_registered: activeCrons.some(c => c.id === `pipeline:${row.id}`),
     };
   });
 
   res.json({ pipelines: result });
+});
+
+router.get('/active', (_req, res) => {
+  res.json({ jobs: jobRegistry.listActiveJobs() });
 });
 
 // ── PATCH /api/pipelines/:id ── Update a pipeline schedule
@@ -166,7 +189,13 @@ router.post('/:id/run', async (req, res) => {
   if (!row) return res.status(404).json({ error: 'Pipeline not found' });
 
   let limits = {};
-  limits = parseJsonObject(row.limits_json);
+  limits = {
+    ...parseJsonObject(row.limits_json),
+    ...normalizeLimits(id, req.body?.limits || {}),
+  };
+  const keywords = Array.isArray(req.body?.keywords)
+    ? req.body.keywords.map((keyword) => String(keyword).trim()).filter(Boolean)
+    : [];
 
   if (id === 'content' && (!limits.topic || !String(limits.topic).trim())) {
     return res.status(400).json({
@@ -197,7 +226,7 @@ router.post('/:id/run', async (req, res) => {
 
     try {
       if (id === 'outreach') {
-        const runId = await runFullPipeline('manual', { limits });
+        const runId = await runFullPipeline('manual', { limits, keywords });
         logger.info('PIPELINES-API', `Manual outreach run #${runId} complete`);
       } else if (id === 'content') {
         const result = await runContentPipeline({ ...limits, trigger: 'manual' });
@@ -209,6 +238,15 @@ router.post('/:id/run', async (req, res) => {
           throw new Error(result.error || 'Content pipeline failed');
         }
         logger.info('PIPELINES-API', `Manual content run complete`, result);
+      } else if (id === 'dm_check') {
+        const { syncFromDb } = require('../jobs/pipelineScheduler');
+        const scheduler = require('../jobs/pipelineScheduler');
+        const runner = scheduler.__getRunner ? scheduler.__getRunner('dm_check') : null;
+        if (runner) await runner(limits);
+        else {
+          await syncFromDb();
+          throw new Error('DM checker can run on its next configured cron tick');
+        }
       }
 
       // Update DB status
@@ -251,6 +289,54 @@ router.post('/:id/run', async (req, res) => {
   });
 });
 
+function setPauseFlag(id, paused) {
+  getDb()
+    .prepare(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    )
+    .run(`pipeline_${id}_paused`, paused ? 'true' : 'false');
+  logActivity({
+    activityType: 'user_action',
+    entityType: 'pipeline',
+    entityId: id,
+    actor: 'manual',
+    status: paused ? 'paused' : 'resumed',
+    summary: `Pipeline ${id} ${paused ? 'paused' : 'resumed'}`,
+  });
+}
+
+router.post('/:id/pause', (req, res) => {
+  const { id } = req.params;
+  const row = getDb().prepare('SELECT id FROM pipeline_schedules WHERE id = ?').get(id);
+  if (!row) return res.status(404).json({ error: 'Pipeline not found' });
+  setPauseFlag(id, true);
+  res.json({ ok: true, paused: true });
+});
+
+router.post('/:id/resume', (req, res) => {
+  const { id } = req.params;
+  const row = getDb().prepare('SELECT id FROM pipeline_schedules WHERE id = ?').get(id);
+  if (!row) return res.status(404).json({ error: 'Pipeline not found' });
+  setPauseFlag(id, false);
+  res.json({ ok: true, paused: false });
+});
+
+router.post('/:id/stop', (req, res) => {
+  const { id } = req.params;
+  const stopped = jobRegistry.stopJobsByPipeline(id);
+  logActivity({
+    activityType: 'user_action',
+    entityType: 'pipeline',
+    entityId: id,
+    actor: 'manual',
+    status: stopped > 0 ? 'success' : 'skipped',
+    summary: `Stop requested for pipeline ${id}`,
+    details: { stopped },
+  });
+  res.json({ ok: true, stopped });
+});
+
 // ── GET /api/pipelines/:id/history ── Recent pipeline runs
 router.get('/:id/history', (req, res) => {
   const db = getDb();
@@ -280,6 +366,25 @@ router.get('/:id/history', (req, res) => {
       LIMIT ?
     `).all(limit);
     return res.json({ runs: posts });
+  }
+
+  if (id === 'dm_check') {
+    const rows = db.prepare(`
+      SELECT job_id AS id,
+             MIN(created_at) AS started_at,
+             MAX(created_at) AS finished_at,
+             MAX(CASE WHEN level = 'error' THEN message ELSE NULL END) AS last_error,
+             CASE
+               WHEN SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END) > 0 THEN 'failed'
+               ELSE 'completed'
+             END AS status
+      FROM pipeline_events
+      WHERE job_type = 'dm_check' AND job_id IS NOT NULL
+      GROUP BY job_id
+      ORDER BY finished_at DESC
+      LIMIT ?
+    `).all(limit);
+    return res.json({ runs: rows });
   }
 
   res.json({ runs: [] });

@@ -2,7 +2,7 @@ const path = require("path");
 const fs = require("fs");
 const { getDb } = require("../db/database");
 const { getPrimaryPlatform } = require("./platformCatalog");
-const { callGeminiText } = require("./aiService");
+const { callGeminiText, unwrapGeminiText } = require("./aiService");
 const logger = require("../utils/logger");
 const { stageMode, autoApproveVariant } = require("../config/pipelineConfig");
 const { getContext } = require("./contextService");
@@ -270,7 +270,13 @@ Original: "${originalMsg ? originalMsg.body.slice(0, 100) : ""}"
 Return ONLY the message body (max 300 chars).`;
 
   try {
-    const body = await callGeminiText(prompt);
+    const generation = await callGeminiText(prompt);
+    const body = unwrapGeminiText(generation);
+    logger.db("info", "outreach", "message_follow_up", "Gemini follow-up response received", {
+      leadId,
+      source: generation.source || "unknown",
+      model: generation.model,
+    });
     let cleanBody = stripCodeFences(body).replace(/^["']|["']$/g, "");
 
     // Strict character limit enforcement for follow-up DMs

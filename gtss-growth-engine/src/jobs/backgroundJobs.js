@@ -1,16 +1,12 @@
 require("dotenv").config();
 
 const crypto = require("crypto");
-const { initReplyChecker } = require("./replyChecker");
 const { initInstagramWarmupJobs } = require("./instagramWarmupJob");
 const {
   initScheduledPoster,
-  isScheduledPosterRunning,
 } = require("./scheduledPoster");
 const {
-  checkInbox,
   checkFollowBacks,
-  isCheckingInbox,
 } = require("../services/instagramReplyChecker");
 const { getDb } = require("../db/database");
 const { stopAllJobs } = require("../automation/executor");
@@ -506,7 +502,8 @@ async function startBackgroundJobs() {
     );
   }
 
-  initReplyChecker();
+  // DM/reply checking is registered through the DB-backed pipeline scheduler
+  // as pipeline_schedules.id = 'dm_check'.
   initScheduledPoster();
   initInstagramWarmupJobs();
 
@@ -550,40 +547,6 @@ async function startBackgroundJobs() {
       }
     });
   });
-
-  // Instagram Inbox Reply Checker cron (runs every 30 minutes)
-  cron.schedule("*/30 * * * *", async () => {
-    if (isScheduledPosterRunning()) {
-      logger.info(
-        "SERVER",
-        "Instagram checkInbox skipped: scheduled poster is currently publishing. Will run on next tick.",
-      );
-      return;
-    }
-
-    if (isCheckingInbox()) {
-      logger.info(
-        "SERVER",
-        "Instagram checkInbox skipped: previous inbox scan still running.",
-      );
-      return;
-    }
-
-    logger.info("SERVER", "Running scheduled Instagram checkInbox job...");
-    try {
-      await checkInbox();
-      logger.info(
-        "SERVER",
-        "Scheduled Instagram checkInbox job completed successfully.",
-      );
-    } catch (err) {
-      logger.error("SERVER", "Scheduled Instagram checkInbox job failed", err);
-    }
-  });
-  logger.info(
-    "SERVER",
-    "Instagram inbox checker cron registered: every 30 minutes",
-  );
 
   // Instagram Follow-Backs cron (runs at 4 AM daily)
   cron.schedule("0 4 * * *", async () => {

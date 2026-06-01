@@ -51,6 +51,8 @@ const SELECTORS = {
     'button:has-text("download")',
     '[role="button"]:has-text("download")',
   ],
+  responseText:
+    'message-turn .model-response-text, message-turn [data-test-id="response-text"], .model-response-text, .response-container',
 };
 
 async function typeGeminiPrompt(page, inputLocator, prompt) {
@@ -260,4 +262,71 @@ async function generateImageViaGeminiWeb(prompt, emit = () => {}) {
   }
 }
 
-module.exports = { generateImageViaGeminiWeb };
+async function generateTextViaGeminiWeb(prompt, emit = () => {}) {
+  const cdpEndpoint = getSharedCdpEndpoint();
+  emit(
+    "browser_launching",
+    cdpEndpoint
+      ? "Opening Gemini in the shared Chrome session..."
+      : "Launching browser for Gemini...",
+  );
+  const browserState = await createBrowser("gemini", {
+    mode: cdpEndpoint ? "cdp" : undefined,
+    cdpEndpoint,
+    headless: false,
+  });
+  const { page } = browserState;
+
+  try {
+    emit("browser_opened", "Navigating to gemini.google.com...");
+    await page.goto(GEMINI_URL, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
+    await humanDelay(2000, 4000);
+
+    if (page.url().includes("accounts.google.com")) {
+      emit(
+        "warn",
+        "Not logged in - manual Google login required in the browser window.",
+      );
+      await page.waitForURL(/gemini\.google\.com/, { timeout: 180_000 });
+      await humanDelay(2000, 3000);
+    }
+
+    const inputLocator = page.locator(SELECTORS.input).first();
+    await inputLocator.waitFor({ state: "visible", timeout: 15_000 });
+    await typeGeminiPrompt(page, inputLocator, prompt);
+    await humanDelay(800, 1500);
+
+    const responsesBefore = await page.locator(SELECTORS.responseText).count().catch(() => 0);
+    const sendBtn = page.locator(SELECTORS.sendBtn).first();
+    if (await sendBtn.isVisible().catch(() => false)) {
+      await sendBtn.click();
+    } else {
+      await page.keyboard.press("Enter");
+    }
+
+    emit("text_waiting", "Waiting for Gemini text response...");
+    const deadline = Date.now() + 90_000;
+    while (Date.now() < deadline) {
+      const responses = page.locator(SELECTORS.responseText);
+      const count = await responses.count().catch(() => 0);
+      if (count > responsesBefore) {
+        const text = await responses.nth(count - 1).innerText().catch(() => "");
+        const cleaned = String(text || "").trim();
+        if (cleaned) {
+          emit("done", "Text response captured.");
+          return cleaned;
+        }
+      }
+      await page.waitForTimeout(1000);
+    }
+
+    throw new Error("Timed out waiting for Gemini Web text response");
+  } finally {
+    await closeBrowserContext("gemini", browserState);
+  }
+}
+
+module.exports = { generateImageViaGeminiWeb, generateTextViaGeminiWeb };
