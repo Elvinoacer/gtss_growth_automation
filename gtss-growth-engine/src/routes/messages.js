@@ -282,6 +282,10 @@ router.patch("/api/messages/:id/approve", (req, res) => {
      WHERE id = ?`,
   ).run(body || msg.body, id);
 
+  db.prepare(
+    "UPDATE leads SET status = 'message_approved', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'qualified'",
+  ).run(msg.lead_id);
+
   // Skip the other variant for this lead
   db.prepare(
     `UPDATE messages

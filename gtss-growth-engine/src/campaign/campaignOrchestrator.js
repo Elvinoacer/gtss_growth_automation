@@ -183,6 +183,21 @@ function pauseCampaign(campaignId) {
 
   db.prepare("UPDATE campaigns SET status = 'paused', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(campaignId);
 
+  const hasMessagesTable = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages'")
+    .get();
+  if (hasMessagesTable) {
+    db.prepare(`
+      UPDATE messages
+      SET snooze_until = datetime('now', '+365 days')
+      WHERE lead_id IN (
+        SELECT lead_id FROM connection_jobs WHERE campaign_id = ?
+        UNION
+        SELECT lead_id FROM dm_jobs WHERE campaign_id = ?
+      ) AND status = 'approved'
+    `).run(campaignId, campaignId);
+  }
+
   recordCampaignEvent(db, campaignId, null, "campaign_paused", {
     previous_status: campaign.status
   });
@@ -208,6 +223,21 @@ function resumeCampaign(campaignId) {
   }
 
   db.prepare("UPDATE campaigns SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(campaignId);
+
+  const hasMessagesTable = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages'")
+    .get();
+  if (hasMessagesTable) {
+    db.prepare(`
+      UPDATE messages
+      SET snooze_until = NULL
+      WHERE lead_id IN (
+        SELECT lead_id FROM connection_jobs WHERE campaign_id = ?
+        UNION
+        SELECT lead_id FROM dm_jobs WHERE campaign_id = ?
+      ) AND status = 'approved' AND snooze_until IS NOT NULL
+    `).run(campaignId, campaignId);
+  }
 
   recordCampaignEvent(db, campaignId, null, "campaign_resumed", {
     previous_status: campaign.status

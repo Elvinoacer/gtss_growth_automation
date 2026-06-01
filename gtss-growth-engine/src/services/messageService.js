@@ -294,12 +294,20 @@ Return ONLY the message body (max 300 chars).`;
 
     return { id: result.lastInsertRowid, body: cleanBody };
   } catch (error) {
-    logger.error(
+    logger.warn(
       "MESSAGES",
-      `Failed to generate follow-up for lead ${leadId}`,
-      error,
+      `Gemini follow-up failed for lead ${leadId}, using template fallback`,
+      { error: error.message },
     );
-    throw error;
+    const fallbackBody = `Hi ${getFirstName(lead.name)}, just following up on my earlier message. Would love to connect and share how Restaurant Manager could help your business. Are you available for a quick chat?`.slice(0, 300);
+    const result = db
+      .prepare(
+        `INSERT INTO messages (lead_id, platform, body, variant, is_follow_up, status, generated_by, generated_at)
+       VALUES (?, ?, ?, 'A', 1, 'pending', 'template-fallback', CURRENT_TIMESTAMP)`,
+      )
+      .run(leadId, resolvedPlatform, fallbackBody);
+
+    return { id: result.lastInsertRowid, body: fallbackBody, generatedBy: "template-fallback" };
   }
 }
 
@@ -417,6 +425,12 @@ async function runMessageStage(jobId, emit) {
   });
 
   for (let i = 0; i < leads.length; i++) {
+    const { isPipelineAborted } = require("../pipeline/pipelineRunner");
+    if (isPipelineAborted(jobId)) {
+      emit({ type: "warn", message: "Message generation aborted by pipeline abort signal." });
+      return { generated, approved };
+    }
+
     const lead = leads[i];
     emit({
       type: "progress",
@@ -450,6 +464,9 @@ async function runMessageStage(jobId, emit) {
         .run(lead.id, variant);
 
       if (updated.changes > 0) {
+        db.prepare(
+          "UPDATE leads SET status = 'message_approved', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'qualified'",
+        ).run(lead.id);
         approved++;
         emit({
           type: "generated",

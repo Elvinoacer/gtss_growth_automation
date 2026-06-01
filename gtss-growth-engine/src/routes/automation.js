@@ -16,6 +16,9 @@ const {
 const { determineActionType } = require("../automation/executor");
 const {
   runFullPipeline,
+  abortPipelineRun,
+  pausePipelineRun,
+  resumePipelineRun,
   getPipelineRun,
   listPipelineRuns,
   registerPipelineStream,
@@ -23,6 +26,7 @@ const {
 
 const router = express.Router();
 const { broadcast } = require("../services/socketService");
+const logger = require("../utils/logger");
 
 // SSE response storage
 const activeStreams = new Map();
@@ -402,11 +406,36 @@ router.post("/api/pipeline/run", async (req, res) => {
   }
 
   try {
-    const runId = await runFullPipeline('manual', options);
+    let resolveRunId;
+    const runIdPromise = new Promise((resolve) => {
+      resolveRunId = resolve;
+    });
+    runFullPipeline("manual", {
+      ...options,
+      onRunId: resolveRunId,
+    }).catch((error) => {
+      logger.error("PIPELINE", "Manual pipeline run failed", { error: error.message });
+    });
+    const runId = await runIdPromise;
     res.json({ success: true, runId });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+router.post("/api/pipeline/abort/:runId", (req, res) => {
+  abortPipelineRun(Number(req.params.runId));
+  res.json({ success: true, message: "Pipeline abort signal sent." });
+});
+
+router.post("/api/pipeline/pause/:runId", (req, res) => {
+  pausePipelineRun(Number(req.params.runId));
+  res.json({ success: true, message: "Pipeline will pause after the current stage." });
+});
+
+router.post("/api/pipeline/resume/:runId", (req, res) => {
+  resumePipelineRun(Number(req.params.runId));
+  res.json({ success: true, message: "Pipeline resumed." });
 });
 
 // GET /api/pipeline/stream/:runId — SSE stream for pipeline events

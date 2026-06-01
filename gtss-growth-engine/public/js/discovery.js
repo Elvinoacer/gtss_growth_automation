@@ -402,6 +402,15 @@ function openDiscoveryStream(jobId) {
       loadHistory();
     }
 
+    if (event.type === "stopped") {
+      discoveryState.running = false;
+      document.getElementById("running-panel").classList.remove("visible");
+      document.getElementById("discovery-form").style.display = "";
+      window.gtss.showToast("Discovery stopped.", "warn");
+      cleanup();
+      loadHistory();
+    }
+
     if (event.type === "error") {
       window.gtss.showToast(event.message || "Discovery failed", "error");
       document.getElementById("running-panel").classList.remove("visible");
@@ -422,7 +431,10 @@ function openDiscoveryStream(jobId) {
 }
 
 async function stopDiscovery() {
-  if (!discoveryState.currentJobId) return;
+  if (!discoveryState.currentJobId) {
+    window.gtss.showToast("No active discovery to stop.", "warn");
+    return;
+  }
 
   try {
     await window.gtss.fetchJSON(

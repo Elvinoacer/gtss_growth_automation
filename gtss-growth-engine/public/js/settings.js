@@ -672,6 +672,8 @@ let pipelineState = {
   keywords: { keywords: [], platforms: [], maxLeadsPerKeyword: 10 },
   runs: [],
 };
+let activePipelineRunId = null;
+let pipelineSocketSubscribed = false;
 
 async function loadPipelineSettings() {
   try {
@@ -792,6 +794,9 @@ async function savePipelineSettings() {
 
 async function runPipeline() {
   const btn = document.getElementById("run-pipeline");
+  const abortBtn = document.getElementById("abort-pipeline");
+  const pauseBtn = document.getElementById("pause-pipeline");
+  const resumeBtn = document.getElementById("resume-pipeline");
   btn.disabled = true;
   btn.textContent = "⏳ Running...";
   setInline(
@@ -807,26 +812,86 @@ async function runPipeline() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode }),
     });
+    activePipelineRunId = result.runId;
+    if (abortBtn) abortBtn.style.display = "inline-flex";
+    if (pauseBtn) pauseBtn.style.display = "inline-flex";
+    if (resumeBtn) resumeBtn.style.display = "none";
     setInline(
       "pipeline-result",
-      `Pipeline run #${result.runId} started. Refresh to see results.`,
+      `Pipeline run #${result.runId} started. Watching for updates…`,
       "success",
     );
-    // Refresh runs after a short delay
-    setTimeout(async () => {
-      try {
-        pipelineState.runs = await window.gtss.fetchJSON(
-          "/api/pipeline/runs?limit=5",
-        );
-        renderPipelineRuns(pipelineState.runs);
-      } catch (_) {}
-    }, 3000);
+    subscribeToPipelineStream(result.runId);
   } catch (error) {
-    setInline("pipeline-result", `Pipeline failed: ${error.message}`, "error");
-  } finally {
     btn.disabled = false;
     btn.textContent = "▶ Run Pipeline Now";
+    setInline("pipeline-result", `Pipeline failed: ${error.message}`, "error");
   }
+}
+
+async function abortPipeline() {
+  if (!activePipelineRunId) return;
+  await window.gtss.fetchJSON(`/api/pipeline/abort/${activePipelineRunId}`, {
+    method: "POST",
+  });
+  setInline(
+    "pipeline-result",
+    "Abort signal sent — pipeline will stop after the current stage.",
+    "warn",
+  );
+}
+
+async function pausePipeline() {
+  if (!activePipelineRunId) return;
+  await window.gtss.fetchJSON(`/api/pipeline/pause/${activePipelineRunId}`, {
+    method: "POST",
+  });
+  document.getElementById("pause-pipeline").style.display = "none";
+  document.getElementById("resume-pipeline").style.display = "inline-flex";
+  setInline("pipeline-result", "Pause signal sent — pipeline will pause at the next boundary.", "warn");
+}
+
+async function resumePipeline() {
+  if (!activePipelineRunId) return;
+  await window.gtss.fetchJSON(`/api/pipeline/resume/${activePipelineRunId}`, {
+    method: "POST",
+  });
+  document.getElementById("pause-pipeline").style.display = "inline-flex";
+  document.getElementById("resume-pipeline").style.display = "none";
+  setInline("pipeline-result", "Pipeline resumed.", "success");
+}
+
+function finishPipelineControls(runId, message, tone = "success") {
+  setInline("pipeline-result", message, tone);
+  const runBtn = document.getElementById("run-pipeline");
+  runBtn.disabled = false;
+  runBtn.textContent = "▶ Run Pipeline Now";
+  ["abort-pipeline", "pause-pipeline", "resume-pipeline"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = "none";
+  });
+  activePipelineRunId = null;
+  loadPipelineSettings();
+}
+
+function subscribeToPipelineStream(runId) {
+  const socket = window.gtss.getSocket?.();
+  if (!socket || pipelineSocketSubscribed) return;
+  pipelineSocketSubscribed = true;
+
+  socket.on("pipeline:event", (event) => {
+    if (String(event.runId) !== String(activePipelineRunId || runId)) return;
+
+    if (event.type === "stage" || event.type === "stage_done" || event.type === "info") {
+      setInline("pipeline-result", event.message, "");
+    } else if (event.type === "complete") {
+      finishPipelineControls(event.runId, `✓ Pipeline #${event.runId} complete.`, "success");
+    } else if (event.type === "warn" && /aborted/i.test(event.message || "")) {
+      finishPipelineControls(event.runId, `Pipeline #${event.runId} aborted.`, "warn");
+    } else if (event.type === "error") {
+      setInline("pipeline-result", `Error: ${event.message}`, "error");
+    }
+  });
 }
 
 async function addKeyword() {
@@ -872,6 +937,15 @@ function bindPipelineEvents() {
   document
     .getElementById("run-pipeline")
     .addEventListener("click", runPipeline);
+  document
+    .getElementById("abort-pipeline")
+    ?.addEventListener("click", abortPipeline);
+  document
+    .getElementById("pause-pipeline")
+    ?.addEventListener("click", pausePipeline);
+  document
+    .getElementById("resume-pipeline")
+    ?.addEventListener("click", resumePipeline);
   document.getElementById("add-keyword").addEventListener("click", addKeyword);
   document.getElementById("new-keyword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") addKeyword();

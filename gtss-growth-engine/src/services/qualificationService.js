@@ -12,6 +12,15 @@ const jobStreams = new Map();
 const jobEventHistory = new Map();
 const BATCH_SIZE = 10;
 const BATCH_DELAY_MS = 2000;
+const activeQualJobs = new Set();
+
+function stopQualificationJob(jobId) {
+  activeQualJobs.add(String(jobId));
+}
+
+function isQualificationStopped(jobId) {
+  return activeQualJobs.has(String(jobId));
+}
 
 // ---------------------------------------------------------------------------
 // SSE helpers (same pattern as discoveryService)
@@ -117,12 +126,12 @@ Respond ONLY with valid JSON, no markdown, no preamble:
 // Core scoring
 // ---------------------------------------------------------------------------
 
-async function scoreLead(lead) {
+async function scoreLead(lead, options = {}) {
   const db = getDb();
   const prompt = buildPrompt(lead);
 
   try {
-    const generation = await callGeminiText(prompt);
+    const generation = await callGeminiText(prompt, { timeoutMs: options.timeoutMs });
     const rawResult = unwrapGeminiText(generation);
     logger.db("info", "outreach", "qualification", "Gemini qualification response received", {
       leadId: lead.id,
@@ -177,7 +186,7 @@ async function scoreLead(lead) {
 
     // In AI mode, fall back to manual score when Gemini is unavailable
     const mode = stageMode("qualification");
-    if (mode === "ai") {
+    if (mode === "ai" && error.status !== "timeout" && error.status !== "parse_failed") {
       const fallbackScore = manualQualificationScore();
       const threshold = qualificationThreshold();
       const fallbackStatus =
@@ -234,18 +243,37 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function scoreLeadsBatch(leadIds, jobId) {
+async function scoreLeadsBatch(leadIds, jobId, { pipelineRunId } = {}) {
   const db = getDb();
   const emit = (event) => emitJobEvent(jobId, { ...event, jobId });
   const total = leadIds.length;
   let processed = 0;
   let qualified = 0;
   let deprioritized = 0;
+  let failed = 0;
+  const timedOutLeadIds = [];
 
   emit({ type: "info", message: `Starting qualification of ${total} leads` });
 
   try {
     for (let i = 0; i < leadIds.length; i += BATCH_SIZE) {
+      if (isQualificationStopped(jobId)) {
+        emit({ type: "stopped", message: "Qualification stopped by user." });
+        const summary = { processed, qualified, deprioritized, failed };
+        emit({ type: "done", result: summary });
+        return summary;
+      }
+      if (pipelineRunId) {
+        const { isPipelineAborted } = require("../pipeline/pipelineRunner");
+        if (isPipelineAborted(pipelineRunId)) {
+          emit({
+            type: "warn",
+            message: "Qualification aborted by pipeline abort signal.",
+          });
+          return { processed, qualified, deprioritized, failed };
+        }
+      }
+
       const batch = leadIds.slice(i, i + BATCH_SIZE);
 
       for (const leadId of batch) {
@@ -270,8 +298,22 @@ async function scoreLeadsBatch(leadIds, jobId) {
             reason: result.reason,
           });
         } catch (error) {
-          // Error already logged and handled in scoreLead
-          emit({ type: "error", leadId, message: error.message });
+          failed++;
+          if (error.status === "timeout") timedOutLeadIds.push(leadId);
+          emit({
+            type: "error",
+            leadId,
+            name: lead.name,
+            message: `Scoring failed: ${error.message}`,
+            errorCode: error.status || "unknown",
+            isTimeout: error.status === "timeout",
+            hint:
+              error.status === "timeout"
+                ? "Gemini timed out — lead will be retried on next run"
+                : error.status === "parse_failed"
+                  ? "Gemini returned non-JSON — lead needs manual scoring"
+                  : "API error — check Gemini key in Settings",
+          });
         }
 
         processed++;
@@ -283,13 +325,47 @@ async function scoreLeadsBatch(leadIds, jobId) {
       }
     }
 
-    const summary = { processed, qualified, deprioritized };
+    if (timedOutLeadIds.length > 0) {
+      emit({
+        type: "info",
+        message: `Retrying ${timedOutLeadIds.length} timed-out leads with extended timeout…`,
+      });
+      for (const retryLeadId of timedOutLeadIds) {
+        if (isQualificationStopped(jobId)) break;
+        const retryLead = db.prepare("SELECT * FROM leads WHERE id = ?").get(retryLeadId);
+        if (!retryLead) continue;
+        try {
+          const result = await scoreLead(retryLead, { timeoutMs: 60_000 });
+          failed = Math.max(0, failed - 1);
+          if (result.score >= 50) qualified++;
+          else deprioritized++;
+          emit({
+            type: "scored",
+            leadId: retryLead.id,
+            name: retryLead.name,
+            score: result.score,
+            reason: result.reason,
+            retry: true,
+          });
+        } catch (err) {
+          emit({
+            type: "error",
+            leadId: retryLeadId,
+            message: `Retry also failed: ${err.message}`,
+            errorCode: err.status || "unknown",
+          });
+        }
+      }
+    }
+
+    const summary = { processed, qualified, deprioritized, failed };
     emit({ type: "done", result: summary });
     return summary;
   } catch (error) {
     emit({ type: "error", message: `Batch failed: ${error.message}` });
     throw error;
   } finally {
+    activeQualJobs.delete(String(jobId));
     closeJobStream(jobId);
   }
 }
@@ -324,7 +400,7 @@ async function runQualificationStage(jobId, emit) {
 
   if (pending.length === 0) {
     emit({ type: "info", message: "No pending leads to qualify" });
-    return { processed: 0, qualified: 0, deprioritized: 0 };
+    return { processed: 0, qualified: 0, deprioritized: 0, failed: 0 };
   }
 
   if (mode === "manual") {
@@ -375,6 +451,7 @@ async function runQualificationStage(jobId, emit) {
       processed: pending.length,
       qualified: pending.length,
       deprioritized: 0,
+      failed: 0,
     };
   }
 
@@ -383,12 +460,14 @@ async function runQualificationStage(jobId, emit) {
     type: "info",
     message: `AI mode: scoring ${pending.length} leads via Gemini`,
   });
-  return await scoreLeadsBatch(pending, jobId);
+  return await scoreLeadsBatch(pending, jobId, { pipelineRunId: jobId });
 }
 
 module.exports = {
   scoreLead,
   scoreLeadsBatch,
+  stopQualificationJob,
+  isQualificationStopped,
   runQualificationStage,
   registerJobStream,
   emitJobEvent,

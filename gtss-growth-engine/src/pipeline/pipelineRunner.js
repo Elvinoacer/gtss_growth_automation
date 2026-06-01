@@ -19,6 +19,7 @@ const { logActivity } = require("../services/auditService");
 const { withRetry } = require("../utils/retryHelper");
 const jobRegistry = require("../jobs/jobRegistry");
 const logger = require("../utils/logger");
+const { broadcast } = require("../services/socketService");
 
 // ---------------------------------------------------------------------------
 // Pipeline run tracking
@@ -79,8 +80,8 @@ function isPaused(pipelineId) {
   return String(row?.value || "false") === "true";
 }
 
-function throwIfAborted(signal) {
-  if (signal?.aborted) throw new Error("Pipeline run aborted");
+function throwIfAborted(signal, runId) {
+  if (signal?.aborted || isPipelineAborted(runId)) throw new Error("Pipeline run aborted");
 }
 
 async function runStageWithRetry(stage, jobType, runId, emit, fn, signal) {
@@ -108,6 +109,43 @@ async function runStageWithRetry(stage, jobType, runId, emit, fn, signal) {
 // ---------------------------------------------------------------------------
 // SSE event infrastructure for pipeline stream
 // ---------------------------------------------------------------------------
+
+const PIPELINE_ABORT_FLAGS = new Map();
+const PIPELINE_PAUSE_FLAGS = new Map();
+
+function abortPipelineRun(runId) {
+  PIPELINE_ABORT_FLAGS.set(String(runId), true);
+  PIPELINE_PAUSE_FLAGS.set(String(runId), "running");
+  logger.info("PIPELINE", `Abort requested for run #${runId}`);
+}
+
+function isPipelineAborted(runId) {
+  return PIPELINE_ABORT_FLAGS.get(String(runId)) === true;
+}
+
+function pausePipelineRun(runId) {
+  PIPELINE_PAUSE_FLAGS.set(String(runId), "paused");
+  logger.info("PIPELINE", `Pause requested for run #${runId}`);
+}
+
+function resumePipelineRun(runId) {
+  PIPELINE_PAUSE_FLAGS.set(String(runId), "running");
+  logger.info("PIPELINE", `Resume requested for run #${runId}`);
+}
+
+async function awaitResume(runId, emit) {
+  const key = String(runId);
+  let announced = false;
+  while (PIPELINE_PAUSE_FLAGS.get(key) === "paused") {
+    if (isPipelineAborted(runId)) return false;
+    if (!announced) {
+      emit({ type: "info", message: "Pipeline paused — waiting for resume…" });
+      announced = true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+  return !isPipelineAborted(runId);
+}
 
 const pipelineStreams = new Map();
 
@@ -140,7 +178,10 @@ function buildPipelineEmitter(runId) {
 
   return (event) => {
     const key = String(runId);
-    const payload = `data: ${JSON.stringify({ ...event, runId, timestamp: new Date().toISOString() })}\n\n`;
+    const enriched = { ...event, runId, timestamp: new Date().toISOString() };
+    const payload = `data: ${JSON.stringify(enriched)}\n\n`;
+
+    broadcast("pipeline:event", enriched);
 
     const streams = pipelineStreams.get(key);
     if (streams) {
@@ -259,6 +300,9 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
   const maxDmsPerRun = limits.max_dms_per_run;
 
   const pipelineRunId = createPipelineRun(triggerSource);
+  if (typeof options.onRunId === "function") options.onRunId(pipelineRunId);
+  PIPELINE_ABORT_FLAGS.delete(String(pipelineRunId));
+  PIPELINE_PAUSE_FLAGS.set(String(pipelineRunId), "running");
   const emit = buildPipelineEmitter(pipelineRunId);
   const controller =
     options.signal || options.abortController
@@ -296,7 +340,7 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
     }
     // ── Stage 1: Discovery ──────────────────────────────────────────────
     if (stagesToRun.includes("discovery")) {
-      throwIfAborted(signal);
+      throwIfAborted(signal, pipelineRunId);
       emit({ type: "stage", message: "Starting Stage 1: Lead Discovery" });
       try {
         const result = await runStageWithRetry(
@@ -327,9 +371,15 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
       }
     }
 
+    if (!(await awaitResume(pipelineRunId, emit))) {
+      emit({ type: "warn", message: "Pipeline aborted by user." });
+      finalisePipelineRun(pipelineRunId, "aborted");
+      return pipelineRunId;
+    }
+
     // ── Stage 2: Qualification ──────────────────────────────────────────
     if (stagesToRun.includes("qualification")) {
-      throwIfAborted(signal);
+      throwIfAborted(signal, pipelineRunId);
       emit({ type: "stage", message: "Starting Stage 2: Lead Qualification" });
       try {
         const result = await runStageWithRetry(
@@ -357,9 +407,15 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
       }
     }
 
+    if (!(await awaitResume(pipelineRunId, emit))) {
+      emit({ type: "warn", message: "Pipeline aborted by user." });
+      finalisePipelineRun(pipelineRunId, "aborted");
+      return pipelineRunId;
+    }
+
     // ── Stage 3: Message Generation ─────────────────────────────────────
     if (stagesToRun.includes("messages")) {
-      throwIfAborted(signal);
+      throwIfAborted(signal, pipelineRunId);
       emit({ type: "stage", message: "Starting Stage 3: Message Generation" });
       try {
         const result = await runStageWithRetry(
@@ -387,9 +443,15 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
       }
     }
 
+    if (!(await awaitResume(pipelineRunId, emit))) {
+      emit({ type: "warn", message: "Pipeline aborted by user." });
+      finalisePipelineRun(pipelineRunId, "aborted");
+      return pipelineRunId;
+    }
+
     // ── Stage 4: Send ───────────────────────────────────────────────────
     if (stagesToRun.includes("send")) {
-      throwIfAborted(signal);
+      throwIfAborted(signal, pipelineRunId);
       emit({ type: "stage", message: "Starting Stage 4: Send" });
       try {
         const result = await runStageWithRetry(
@@ -428,8 +490,8 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
       runId: pipelineRunId,
       error: err.message,
     });
-    finalisePipelineRun(pipelineRunId, "failed");
-    emit({ type: "error", message: `Pipeline failed: ${err.message}` });
+    finalisePipelineRun(pipelineRunId, isPipelineAborted(pipelineRunId) ? "aborted" : "failed");
+    emit({ type: isPipelineAborted(pipelineRunId) ? "warn" : "error", message: `Pipeline ${isPipelineAborted(pipelineRunId) ? "aborted" : "failed"}: ${err.message}` });
     logActivity({
       activityType: "pipeline_run",
       entityType: "pipeline",
@@ -484,6 +546,10 @@ function listPipelineRuns(limit = 20) {
 
 module.exports = {
   runFullPipeline,
+  abortPipelineRun,
+  isPipelineAborted,
+  pausePipelineRun,
+  resumePipelineRun,
   getPipelineRun,
   listPipelineRuns,
   registerPipelineStream,

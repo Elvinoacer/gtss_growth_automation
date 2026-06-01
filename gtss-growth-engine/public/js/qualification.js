@@ -16,6 +16,7 @@
   let selectedIds = new Set();
   let openDrawerLead = null;
   let activeSocketHandler = null;
+  let activeJobId = null;
   let cachedLeads = [];
 
   // ---- DOM refs ----
@@ -31,6 +32,7 @@
   const tabScoringFailed = document.getElementById("tab-scoring-failed");
 
   const runAllBtn = document.getElementById("run-all-btn");
+  const stopQualificationBtn = document.getElementById("stop-qualification-btn");
   const manualActionsMenu = document.getElementById("manual-actions-menu");
   const manualActionsTrigger = document.getElementById(
     "manual-actions-trigger",
@@ -292,6 +294,17 @@
         loadLeads();
       }
 
+      if (event.type === "stopped") {
+        progressLabelText.textContent = event.message || "Qualification stopped.";
+        showToast("Qualification stopped.", "warn");
+        cleanup();
+        runAllBtn.disabled = false;
+        stopQualificationBtn?.classList.add("hidden");
+        activeJobId = null;
+        loadStats();
+        loadLeads();
+      }
+
       if (event.type === "done") {
         progressFill.style.width = "100%";
         progressLabelText.textContent = doneLabel;
@@ -303,6 +316,8 @@
 
         cleanup();
         runAllBtn.disabled = false;
+        stopQualificationBtn?.classList.add("hidden");
+        activeJobId = null;
         loadStats();
         loadLeads();
 
@@ -351,6 +366,8 @@
         return;
       }
 
+      activeJobId = jobId;
+      stopQualificationBtn?.classList.remove("hidden");
       attachQualificationStream(jobId, "Qualification complete!");
     } catch (err) {
       showToast(err.message, "error");
@@ -358,6 +375,14 @@
       runAllBtn.disabled = false;
     }
   }
+
+  async function stopQualification() {
+    if (!activeJobId) return;
+    await fetchJSON(`/api/qualification/stop/${activeJobId}`, { method: "POST" });
+    showToast("Stop signal sent.", "warn");
+  }
+
+  stopQualificationBtn?.addEventListener("click", stopQualification);
 
   // ----------------------------------------------------------------
   // Actions: Approve / Reject / Override
