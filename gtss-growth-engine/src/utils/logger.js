@@ -138,7 +138,7 @@ function logToDb(level, jobType, stage, message, contextObj) {
       contextJson,
     );
   } catch (err) {
-    // Keep DB logging failures from impacting runtime logging.
+    console.error("[LOGGER-DB] Failed to write monitoring event:", err.message);
   }
 }
 

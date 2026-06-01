@@ -19,6 +19,36 @@ function logScheduledPost(level, stage, message, context = {}) {
   logger.db(level, "scheduled_post", stage, message, context);
 }
 
+function buildScheduledPostEmitter(jobId, post) {
+  return (event = {}) => {
+    const type = String(event.type || event.stage || "event").toLowerCase();
+    const stage = event.stage || event.type || "event";
+    let level = "info";
+    if (type === "error") level = "error";
+    if (type === "warning" || type === "warn") level = "warn";
+    if (type === "retry" || type === "retrying") level = "retry";
+
+    const message = event.message || String(stage);
+    const context = {
+      jobId,
+      postId: post?.id,
+    };
+    if (event.platform) context.platform = event.platform;
+    if (event.error) context.error = event.error;
+
+    logScheduledPost(level, stage, message, context);
+
+    const platformLabel = event.platform ? `${event.platform}: ` : "";
+    if (level === "error") {
+      logger.error(`[Cron Publish] ${platformLabel}${message}`);
+    } else if (level === "warn") {
+      logger.warn(`[Cron Publish] ${platformLabel}${message}`);
+    } else {
+      logger.info(`[Cron Publish] ${platformLabel}${message}`);
+    }
+  };
+}
+
 function backoffMinutes(retryCount) {
   const index = Math.max(retryCount - 1, 0);
   return BACKOFF_MINUTES[Math.min(index, BACKOFF_MINUTES.length - 1)];
@@ -118,14 +148,9 @@ function initScheduledPoster() {
             { jobId, postId: post.id, platforms: post.platforms },
           );
 
-          const noopEmit = (event) => {
-            logger.info(
-              `[Cron Publish] ${event.platform || ""}: ${event.message || event.type}`,
-            );
-          };
-
           try {
-            const result = await publishPost(post.id, noopEmit, {
+            const emit = buildScheduledPostEmitter(jobId, post);
+            const result = await publishPost(post.id, emit, {
               trace: false,
               skipPostStatusUpdate: true,
             });
@@ -254,6 +279,12 @@ function initScheduledPoster() {
                      last_error = ?
                  WHERE id = ?`,
               ).run(newRetryCount, nextRetryAt, err.message, post.id);
+              logScheduledPost(
+                "retry",
+                "retry",
+                `Scheduled post ${post.id} retry scheduled (attempt ${newRetryCount}/${MAX_RETRIES})`,
+                { jobId, postId: post.id, nextRetryAt },
+              );
             }
           }
         }

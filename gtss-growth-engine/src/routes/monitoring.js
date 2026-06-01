@@ -1,5 +1,12 @@
 /**
  * monitoring.js - Monitoring API endpoints
+ *
+ * Improvements:
+ * - Status derived from full event history
+ * - Explicit lifecycle event support
+ * - Accurate stats (not limited to 400 jobs)
+ * - Better error handling
+ * - Duration calculation
  */
 
 const express = require("express");
@@ -7,91 +14,139 @@ const { getDb } = require("../db/database");
 
 const router = express.Router();
 
+/* -------------------------------------------------------------------------- */
+/* Helpers                                                                    */
+/* -------------------------------------------------------------------------- */
+
 function parseContextJson(value) {
   if (!value) return null;
+
   try {
     return JSON.parse(value);
-  } catch (_) {
+  } catch {
     return null;
   }
 }
 
-function deriveStatus(row) {
-  const stage = String(row.stage || "").toLowerCase();
-  const level = String(row.level || "").toLowerCase();
-
-  if (level === "error" || stage === "error" || stage === "failed")
-    return "failed";
-  if (level === "retry" || stage === "retry") return "retrying";
-  if (
-    stage === "complete" ||
-    stage === "completed" ||
-    stage === "done" ||
-    stage === "finished"
-  ) {
-    return "completed";
-  }
-  if (stage === "start" || stage === "started" || stage === "running")
-    return "running";
-  return "running";
+function normalize(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
 }
 
-function loadJobSnapshots(limit) {
+/**
+ * Determines job status using ALL events for the job,
+ * not just the latest event.
+ */
+function deriveJobStatus(events) {
+  if (!events || !events.length) {
+    return "running";
+  }
+
+  let status = "running";
+
+  for (const event of events) {
+    const stage = normalize(event.stage);
+    const level = normalize(event.level);
+
+    const isCompleted =
+      stage === "completed" ||
+      stage === "complete" ||
+      stage === "done" ||
+      stage === "finished";
+    const isRetrying =
+      stage === "retry" || stage === "retrying" || level === "retry";
+    const isFailed =
+      stage === "failed" || stage === "error" || level === "error";
+
+    if (isCompleted) {
+      status = "completed";
+    } else if (isRetrying) {
+      status = "retrying";
+    } else if (isFailed) {
+      status = "failed";
+    }
+  }
+
+  return status;
+}
+
+function calculateDuration(startedAt, lastEventAt) {
+  const start = new Date(startedAt).getTime();
+  const end = new Date(lastEventAt).getTime();
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return null;
+  }
+
+  return Math.max(0, end - start);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Job Snapshot Loader                                                        */
+/* -------------------------------------------------------------------------- */
+
+function loadJobSnapshots(limit = 120) {
   const db = getDb();
-  const latestRows = db
+
+  const jobs = db
     .prepare(
       `
-    SELECT pe.*
-    FROM pipeline_events pe
-    JOIN (
-      SELECT job_id, job_type, MAX(id) AS max_id
+      SELECT
+        job_id,
+        job_type,
+        MIN(created_at) AS started_at,
+        MAX(created_at) AS last_event_at
       FROM pipeline_events
       WHERE job_id IS NOT NULL
       GROUP BY job_id, job_type
-    ) latest
-    ON pe.id = latest.max_id
-    ORDER BY pe.created_at DESC
-    LIMIT ?
-  `,
+      ORDER BY last_event_at DESC
+      LIMIT ?
+    `,
     )
     .all(limit);
 
-  const startRows = db
-    .prepare(
-      `
-    SELECT job_id, job_type, MIN(created_at) AS started_at
+  const eventStmt = db.prepare(`
+    SELECT *
     FROM pipeline_events
-    WHERE job_id IS NOT NULL
-    GROUP BY job_id, job_type
-  `,
-    )
-    .all();
+    WHERE job_id = ?
+      AND job_type = ?
+    ORDER BY id ASC
+  `);
 
-  const startMap = new Map();
-  startRows.forEach((row) => {
-    startMap.set(`${row.job_type}::${row.job_id}`, row.started_at);
-  });
+  return jobs.map((job) => {
+    const events = eventStmt.all(job.job_id, job.job_type);
 
-  return latestRows.map((row) => {
-    const key = `${row.job_type}::${row.job_id}`;
+    const lastEvent = events[events.length - 1];
+
     return {
-      job_id: row.job_id,
-      job_type: row.job_type,
-      stage: row.stage,
-      level: row.level,
-      message: row.message,
-      started_at: startMap.get(key) || row.created_at,
-      last_event_at: row.created_at,
-      status: deriveStatus(row),
-      context: parseContextJson(row.context_json),
+      job_id: job.job_id,
+      job_type: job.job_type,
+
+      started_at: job.started_at,
+      last_event_at: job.last_event_at,
+
+      duration_ms: calculateDuration(job.started_at, job.last_event_at),
+
+      status: deriveJobStatus(events),
+
+      stage: lastEvent?.stage || null,
+      level: lastEvent?.level || null,
+      message: lastEvent?.message || null,
+
+      context: parseContextJson(lastEvent?.context_json),
     };
   });
 }
 
-// GET /api/monitoring/jobs
+/* -------------------------------------------------------------------------- */
+/* GET /api/monitoring/jobs                                                   */
+/* -------------------------------------------------------------------------- */
+
 router.get("/jobs", (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 120, 300);
+    const limit = Math.min(Number(req.query.limit) || 120, 1000);
+
     const jobs = loadJobSnapshots(limit);
 
     const buckets = {
@@ -103,49 +158,66 @@ router.get("/jobs", (req, res) => {
 
     jobs.forEach((job) => {
       const bucket = buckets[job.status] || buckets.running;
+
       bucket.push(job);
     });
 
     res.json(buckets);
   } catch (err) {
-    res.json({ running: [], completed: [], failed: [], retrying: [] });
+    console.error("[MONITORING] Failed to load jobs:", err);
+
+    res.status(500).json({
+      running: [],
+      completed: [],
+      failed: [],
+      retrying: [],
+    });
   }
 });
 
-// GET /api/monitoring/jobs/:jobId
+/* -------------------------------------------------------------------------- */
+/* GET /api/monitoring/jobs/:jobId                                            */
+/* -------------------------------------------------------------------------- */
+
 router.get("/jobs/:jobId", (req, res) => {
-  const jobId = req.params.jobId;
+  const jobId = String(req.params.jobId);
   const jobType = req.query.jobType ? String(req.query.jobType) : null;
-  const limit = Math.min(Number(req.query.limit) || 200, 600);
+
+  const limit = Math.min(Number(req.query.limit) || 500, 2000);
 
   try {
     const db = getDb();
+
     let rows;
+
     if (jobType) {
       rows = db
         .prepare(
           `
-        SELECT * FROM pipeline_events
-        WHERE job_id = ? AND job_type = ?
-        ORDER BY id DESC
-        LIMIT ?
-      `,
+          SELECT *
+          FROM pipeline_events
+          WHERE job_id = ?
+            AND job_type = ?
+          ORDER BY id ASC
+          LIMIT ?
+        `,
         )
         .all(jobId, jobType, limit);
     } else {
       rows = db
         .prepare(
           `
-        SELECT * FROM pipeline_events
-        WHERE job_id = ?
-        ORDER BY id DESC
-        LIMIT ?
-      `,
+          SELECT *
+          FROM pipeline_events
+          WHERE job_id = ?
+          ORDER BY id ASC
+          LIMIT ?
+        `,
         )
         .all(jobId, limit);
     }
 
-    const events = rows.reverse().map((row) => ({
+    const events = rows.map((row) => ({
       id: row.id,
       job_id: row.job_id,
       job_type: row.job_type,
@@ -156,40 +228,63 @@ router.get("/jobs/:jobId", (req, res) => {
       created_at: row.created_at,
     }));
 
-    res.json({ jobId, jobType, events });
+    res.json({
+      jobId,
+      jobType,
+      status: deriveJobStatus(rows),
+      event_count: events.length,
+      events,
+    });
   } catch (err) {
-    res.json({ jobId, jobType, events: [] });
+    console.error("[MONITORING] Failed to load job timeline:", err);
+
+    res.status(500).json({
+      jobId,
+      jobType,
+      status: "unknown",
+      event_count: 0,
+      events: [],
+    });
   }
 });
 
-// GET /api/monitoring/errors
+/* -------------------------------------------------------------------------- */
+/* GET /api/monitoring/errors                                                 */
+/* -------------------------------------------------------------------------- */
+
 router.get("/errors", (req, res) => {
   const jobType = req.query.jobType ? String(req.query.jobType) : null;
-  const limit = Math.min(Number(req.query.limit) || 100, 300);
+
+  const limit = Math.min(Number(req.query.limit) || 100, 1000);
 
   try {
     const db = getDb();
+
     let rows;
+
     if (jobType) {
       rows = db
         .prepare(
           `
-        SELECT * FROM pipeline_events
-        WHERE level = 'error' AND job_type = ?
-        ORDER BY created_at DESC
-        LIMIT ?
-      `,
+          SELECT *
+          FROM pipeline_events
+          WHERE LOWER(level) = 'error'
+            AND job_type = ?
+          ORDER BY id DESC
+          LIMIT ?
+        `,
         )
         .all(jobType, limit);
     } else {
       rows = db
         .prepare(
           `
-        SELECT * FROM pipeline_events
-        WHERE level = 'error'
-        ORDER BY created_at DESC
-        LIMIT ?
-      `,
+          SELECT *
+          FROM pipeline_events
+          WHERE LOWER(level) = 'error'
+          ORDER BY id DESC
+          LIMIT ?
+        `,
         )
         .all(limit);
     }
@@ -204,17 +299,41 @@ router.get("/errors", (req, res) => {
       created_at: row.created_at,
     }));
 
-    res.json({ errors });
+    res.json({
+      count: errors.length,
+      errors,
+    });
   } catch (err) {
-    res.json({ errors: [] });
+    console.error("[MONITORING] Failed to load errors:", err);
+
+    res.status(500).json({
+      count: 0,
+      errors: [],
+    });
   }
 });
 
-// GET /api/monitoring/stats
+/* -------------------------------------------------------------------------- */
+/* GET /api/monitoring/stats                                                  */
+/* -------------------------------------------------------------------------- */
+
 router.get("/stats", (req, res) => {
   try {
-    const jobs = loadJobSnapshots(400);
-    const since = Date.now() - 24 * 60 * 60 * 1000;
+    const db = getDb();
+
+    const rows = db
+      .prepare(
+        `
+        SELECT
+          job_id,
+          job_type
+        FROM pipeline_events
+        WHERE job_id IS NOT NULL
+          AND created_at >= datetime('now', '-24 hours')
+        GROUP BY job_id, job_type
+      `,
+      )
+      .all();
 
     const stats = {
       running: 0,
@@ -223,17 +342,42 @@ router.get("/stats", (req, res) => {
       retrying: 0,
     };
 
-    jobs.forEach((job) => {
-      const startedAt = new Date(job.started_at).getTime();
-      if (!Number.isFinite(startedAt) || startedAt < since) return;
-      if (stats[job.status] !== undefined) {
-        stats[job.status] += 1;
-      }
-    });
+    const eventStmt = db.prepare(`
+      SELECT *
+      FROM pipeline_events
+      WHERE job_id = ?
+        AND job_type = ?
+      ORDER BY id ASC
+    `);
 
-    res.json({ stats });
+    for (const job of rows) {
+      const events = eventStmt.all(job.job_id, job.job_type);
+
+      const status = deriveJobStatus(events);
+
+      if (stats[status] !== undefined) {
+        stats[status]++;
+      }
+    }
+
+    res.json({
+      period: "24h",
+      total: stats.running + stats.completed + stats.failed + stats.retrying,
+      stats,
+    });
   } catch (err) {
-    res.json({ stats: { running: 0, completed: 0, failed: 0, retrying: 0 } });
+    console.error("[MONITORING] Failed to compute stats:", err);
+
+    res.status(500).json({
+      period: "24h",
+      total: 0,
+      stats: {
+        running: 0,
+        completed: 0,
+        failed: 0,
+        retrying: 0,
+      },
+    });
   }
 });
 
