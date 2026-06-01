@@ -42,6 +42,57 @@ function parseBoolean(value) {
   return Boolean(value);
 }
 
+function getPipelineActiveJobs(id) {
+  return jobRegistry
+    .listActiveJobs()
+    .filter((job) => job.pipelineId === id)
+    .map((job) => ({
+      jobId: job.jobId,
+      type: job.type,
+      stage: job.stage || null,
+      message: job.message || null,
+      startedAt: job.startedAt,
+      updatedAt: job.updatedAt || null,
+    }));
+}
+
+function buildRuntimeState(row, paused) {
+  const activeJobs = getPipelineActiveJobs(row.id);
+  const isRunning = activeJobs.length > 0;
+  const state = paused ? 'paused' : isRunning ? 'running' : row.enabled ? (row.last_status || 'idle') : 'disabled';
+  const currentJob = activeJobs[0] || null;
+  return {
+    state,
+    active_jobs: activeJobs,
+    active_job_count: activeJobs.length,
+    current_stage: currentJob?.stage || null,
+    current_message: currentJob?.message || null,
+    can_run: Boolean(row.enabled) && !paused && activeJobs.length === 0,
+    can_pause: Boolean(row.enabled) && !paused,
+    can_resume: Boolean(paused),
+    can_stop: activeJobs.length > 0,
+  };
+}
+
+function broadcastPipelineStatus(id, overrides = {}) {
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM pipeline_schedules WHERE id = ?').get(id);
+    if (!row) return;
+    const paused = String(
+      db.prepare('SELECT value FROM settings WHERE key = ?').get(`pipeline_${id}_paused`)?.value || 'false',
+    ) === 'true';
+    const { broadcast } = require('../services/socketService');
+    broadcast('pipeline:status', {
+      id,
+      status: row.last_status || 'idle',
+      last_run_at: row.last_run_at,
+      ...buildRuntimeState(row, paused),
+      ...overrides,
+    });
+  } catch (_) {}
+}
+
 function normalizeLimits(id, limits) {
   if (!limits || typeof limits !== 'object' || Array.isArray(limits)) {
     return {};
@@ -110,10 +161,12 @@ router.get('/', (req, res) => {
     const paused = db
       .prepare('SELECT value FROM settings WHERE key = ?')
       .get(`pipeline_${row.id}_paused`);
+    const isPaused = String(paused?.value || 'false') === 'true';
     return {
       ...row,
       limits,
-      paused: String(paused?.value || 'false') === 'true',
+      paused: isPaused,
+      ...buildRuntimeState(row, isPaused),
       is_registered: activeCrons.some(c => c.id === `pipeline:${row.id}`),
     };
   });
@@ -197,6 +250,16 @@ router.post('/:id/run', async (req, res) => {
     ? req.body.keywords.map((keyword) => String(keyword).trim()).filter(Boolean)
     : [];
 
+  const paused = String(
+    db.prepare('SELECT value FROM settings WHERE key = ?').get(`pipeline_${id}_paused`)?.value || 'false',
+  ) === 'true';
+  if (paused) {
+    return res.status(409).json({ error: 'Pipeline is paused. Resume it before running manually.' });
+  }
+  if (getPipelineActiveJobs(id).length > 0) {
+    return res.status(409).json({ error: 'Pipeline is already running. Wait for it to finish or stop it first.' });
+  }
+
   if (id === 'content' && (!limits.topic || !String(limits.topic).trim())) {
     return res.status(400).json({
       error: 'A content topic is required before running the Auto-Content Pipeline',
@@ -215,14 +278,11 @@ router.post('/:id/run', async (req, res) => {
     `).run(id);
 
     // Broadcast pipeline status: running
-    try {
-      const { broadcast } = require('../services/socketService');
-      broadcast('pipeline:status', {
-        id: row.id,
-        status: 'running',
-        last_run_at: new Date().toISOString(),
-      });
-    } catch (_) {}
+    broadcastPipelineStatus(row.id, {
+      status: 'running',
+      state: 'running',
+      last_run_at: new Date().toISOString(),
+    });
 
     try {
       if (id === 'outreach') {
@@ -258,14 +318,11 @@ router.post('/:id/run', async (req, res) => {
       `).run(id);
 
       // Broadcast pipeline status: completed
-      try {
-        const { broadcast } = require('../services/socketService');
-        broadcast('pipeline:status', {
-          id: row.id,
-          status: 'completed',
-          last_run_at: new Date().toISOString(),
-        });
-      } catch (_) {}
+      broadcastPipelineStatus(row.id, {
+        status: 'completed',
+        state: 'completed',
+        last_run_at: new Date().toISOString(),
+      });
     } catch (err) {
       logger.error('PIPELINES-API', `Manual run of "${id}" failed`, err);
 
@@ -276,15 +333,12 @@ router.post('/:id/run', async (req, res) => {
         WHERE id = ?
       `).run(id);
 
-      try {
-        const { broadcast } = require('../services/socketService');
-        broadcast('pipeline:status', {
-          id: row.id,
-          status: 'failed',
-          last_run_at: new Date().toISOString(),
-          error: err.message,
-        });
-      } catch (_) {}
+      broadcastPipelineStatus(row.id, {
+        status: 'failed',
+        state: 'failed',
+        last_run_at: new Date().toISOString(),
+        error: err.message,
+      });
     }
   });
 });
@@ -311,7 +365,9 @@ router.post('/:id/pause', (req, res) => {
   const row = getDb().prepare('SELECT id FROM pipeline_schedules WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: 'Pipeline not found' });
   setPauseFlag(id, true);
-  res.json({ ok: true, paused: true });
+  getDb().prepare(`UPDATE pipeline_schedules SET last_status = 'paused', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
+  broadcastPipelineStatus(id, { status: 'paused', state: 'paused' });
+  res.json({ ok: true, paused: true, state: 'paused' });
 });
 
 router.post('/:id/resume', (req, res) => {
@@ -319,12 +375,17 @@ router.post('/:id/resume', (req, res) => {
   const row = getDb().prepare('SELECT id FROM pipeline_schedules WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: 'Pipeline not found' });
   setPauseFlag(id, false);
-  res.json({ ok: true, paused: false });
+  getDb().prepare(`UPDATE pipeline_schedules SET last_status = COALESCE(NULLIF(last_status, 'paused'), 'idle'), updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
+  broadcastPipelineStatus(id, { status: 'resumed' });
+  res.json({ ok: true, paused: false, state: 'resumed' });
 });
 
 router.post('/:id/stop', (req, res) => {
   const { id } = req.params;
   const stopped = jobRegistry.stopJobsByPipeline(id);
+  if (stopped > 0) {
+    getDb().prepare(`UPDATE pipeline_schedules SET last_status = 'stopped', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
+  }
   logActivity({
     activityType: 'user_action',
     entityType: 'pipeline',
@@ -334,7 +395,8 @@ router.post('/:id/stop', (req, res) => {
     summary: `Stop requested for pipeline ${id}`,
     details: { stopped },
   });
-  res.json({ ok: true, stopped });
+  broadcastPipelineStatus(id, { status: stopped > 0 ? 'stopped' : 'idle', state: stopped > 0 ? 'stopped' : 'idle' });
+  res.json({ ok: true, stopped, message: stopped > 0 ? 'Stop requested for active run.' : 'No active run to stop.' });
 });
 
 // ── GET /api/pipelines/:id/history ── Recent pipeline runs

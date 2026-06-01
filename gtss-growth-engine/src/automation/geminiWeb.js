@@ -53,6 +53,7 @@ const SELECTORS = {
   ],
   responseText:
     'message-turn .model-response-text, message-turn [data-test-id="response-text"], .model-response-text, .response-container',
+  stopButton: 'button[aria-label*="Stop" i], button:has-text("Stop")',
 };
 
 async function typeGeminiPrompt(page, inputLocator, prompt) {
@@ -98,6 +99,42 @@ async function firstVisibleLocator(page, selectors, timeoutMs = 5000) {
   }
 
   return null;
+}
+
+async function waitForGeminiResponseText(page, responsesBefore, emit, timeoutMs = 180_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastText = "";
+  let stableSince = null;
+
+  while (Date.now() < deadline) {
+    const responses = page.locator(SELECTORS.responseText);
+    const count = await responses.count().catch(() => 0);
+    const newestIndex = count > responsesBefore ? count - 1 : count - 1;
+
+    if (newestIndex >= 0) {
+      const raw = await responses.nth(newestIndex).innerText().catch(() => "");
+      const cleaned = String(raw || "").trim();
+      if (cleaned && cleaned !== lastText) {
+        lastText = cleaned;
+        stableSince = Date.now();
+      } else if (cleaned && stableSince && Date.now() - stableSince >= 2500) {
+        const stopVisible = await firstVisibleLocator(page, [SELECTORS.stopButton], 250);
+        if (!stopVisible) {
+          emit("done", "Text response captured after Gemini finished writing.");
+          return cleaned;
+        }
+      }
+    }
+
+    await page.waitForTimeout(750);
+  }
+
+  if (lastText) {
+    emit("warn", "Gemini text response timed out, using the latest visible response text.");
+    return lastText;
+  }
+
+  throw new Error("Timed out waiting for Gemini Web text response");
 }
 
 function safeDownloadName(value) {
@@ -296,10 +333,15 @@ async function generateTextViaGeminiWeb(prompt, emit = () => {}) {
 
     const inputLocator = page.locator(SELECTORS.input).first();
     await inputLocator.waitFor({ state: "visible", timeout: 15_000 });
-    await typeGeminiPrompt(page, inputLocator, prompt);
-    await humanDelay(800, 1500);
+    await inputLocator.click();
+    await humanDelay(500, 900);
 
     const responsesBefore = await page.locator(SELECTORS.responseText).count().catch(() => 0);
+    emit("prompt_typing", "Typing prompt into Gemini Web...");
+    await typeGeminiPrompt(page, inputLocator, prompt);
+    await humanDelay(800, 1500);
+    emit("prompt_typed", "Prompt typed; submitting and waiting for Gemini to finish.");
+
     const sendBtn = page.locator(SELECTORS.sendBtn).first();
     if (await sendBtn.isVisible().catch(() => false)) {
       await sendBtn.click();
@@ -307,23 +349,8 @@ async function generateTextViaGeminiWeb(prompt, emit = () => {}) {
       await page.keyboard.press("Enter");
     }
 
-    emit("text_waiting", "Waiting for Gemini text response...");
-    const deadline = Date.now() + 90_000;
-    while (Date.now() < deadline) {
-      const responses = page.locator(SELECTORS.responseText);
-      const count = await responses.count().catch(() => 0);
-      if (count > responsesBefore) {
-        const text = await responses.nth(count - 1).innerText().catch(() => "");
-        const cleaned = String(text || "").trim();
-        if (cleaned) {
-          emit("done", "Text response captured.");
-          return cleaned;
-        }
-      }
-      await page.waitForTimeout(1000);
-    }
-
-    throw new Error("Timed out waiting for Gemini Web text response");
+    emit("text_waiting", "Waiting for Gemini text response to finish...");
+    return waitForGeminiResponseText(page, responsesBefore, emit);
   } finally {
     await closeBrowserContext("gemini", browserState);
   }

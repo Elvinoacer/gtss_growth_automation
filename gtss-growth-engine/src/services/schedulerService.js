@@ -73,6 +73,8 @@ function closeJobStream(jobId) {
 // Character limits per platform (for posts, not DMs)
 // ---------------------------------------------------------------------------
 
+const GTSS_RESTAURANT_MANAGER_URL = "https://www.gtss.software/products/restaurant-manager";
+
 const POST_CHAR_LIMITS = {
   x: 280,
   linkedin: 3000,
@@ -485,8 +487,16 @@ async function waitForFacebookPostCompletion(page, postButtonLocator, emit) {
           message: `Facebook is still processing: ${text.trim()}`,
         });
       } else if (isFacebookHardFailureText(text)) {
-        await captureFacebookDebugSnapshot(page, "post-submit-warning");
-        throw new Error(`Facebook showed a posting warning: ${text.trim()}`);
+        if (sawPostingProgress) {
+          emit({
+            type: "warning",
+            platform: "facebook",
+            message: `Facebook showed a transient warning while posting: ${text.trim()}. Waiting for completion instead of retrying immediately.`,
+          });
+        } else {
+          await captureFacebookDebugSnapshot(page, "post-submit-warning");
+          throw new Error(`Facebook showed a posting warning: ${text.trim()}`);
+        }
       }
     }
 
@@ -516,9 +526,9 @@ async function waitForFacebookPostCompletion(page, postButtonLocator, emit) {
     type: "warning",
     platform: "facebook",
     message:
-      "Facebook post button was still visible after submit; post may still be processing.",
+      "Facebook did not show a final confirmation before timeout. Treating the click as submitted to avoid duplicate retries while Facebook finishes after the tab closes.",
   });
-  return false;
+  return true;
 }
 
 function decodeHtmlEntities(text) {
@@ -1422,8 +1432,15 @@ async function postToFacebook(page, body, mediaPath, emit) {
     await postBtn.locator.scrollIntoViewIfNeeded().catch(() => {});
     await humanDelay(500, 900);
     await postBtn.locator.click({ timeout: 10000 });
-    await waitForFacebookPostCompletion(page, postBtn.locator, emit);
-    await humanDelay(1000, 2000);
+    const completed = await waitForFacebookPostCompletion(page, postBtn.locator, emit);
+    if (!completed) {
+      emit({
+        type: "warning",
+        platform: "facebook",
+        message: "Facebook post completion was not confirmed; marking submitted to prevent duplicate posts.",
+      });
+    }
+    await humanDelay(3000, 5000);
 
     emit({
       type: "info",
@@ -1892,6 +1909,7 @@ Platform character limit: ${limit}
 Target audience: ${ctx.ctx_audience_ideal_profile}
 Location context: ${Array.isArray(ctx.ctx_audience_geographies) ? ctx.ctx_audience_geographies[0] : "Kenya"}
 End with this call to action: ${ctx.ctx_content_cta}
+Product link to include naturally when it fits: ${GTSS_RESTAURANT_MANAGER_URL}
 ${platformHashtags ? `Append these hashtags only if the final text still fits inside the character limit: ${platformHashtags}` : ""}
 Use plain text only. Do not use markdown formatting, HTML entities, bullets, or special styling characters.
 For X, the final caption must be ${POST_CHAR_LIMITS.x} characters or fewer including spaces and hashtags.
