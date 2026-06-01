@@ -4,6 +4,7 @@ const { getDb } = require("../db/database");
 const { isValidStatusTransition } = require("../utils/validation");
 const {
   scoreLeadsBatch,
+  stopQualificationJob,
   registerJobStream,
   emitJobEvent,
   closeJobStream,
@@ -69,6 +70,11 @@ router.post("/api/qualification/run", (req, res) => {
   });
 
   return res.status(202).json({ jobId });
+});
+
+router.post("/api/qualification/stop/:jobId", (req, res) => {
+  stopQualificationJob(req.params.jobId);
+  res.json({ success: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -217,7 +223,7 @@ router.patch("/api/qualification/leads/:id/score", (req, res) => {
 router.patch("/api/qualification/leads/:id/status", (req, res) => {
   const db = getDb();
   const id = Number(req.params.id);
-  const validStatuses = ["qualified", "deprioritized", "dismissed"];
+  const validStatuses = ["qualified", "deprioritized", "dismissed", "pending_qualification"];
   const newStatus = req.body.status;
 
   if (!validStatuses.includes(newStatus)) {
@@ -378,7 +384,7 @@ router.patch("/api/leads/:id/notes", (req, res) => {
 router.patch("/api/qualification/leads/bulk/status", (req, res) => {
   const db = getDb();
   const { leadIds, status } = req.body;
-  const validStatuses = ["qualified", "deprioritized", "dismissed"];
+  const validStatuses = ["qualified", "deprioritized", "dismissed", "pending_qualification"];
 
   if (!validStatuses.includes(status)) {
     return res.status(400).json({ error: "Invalid status" });

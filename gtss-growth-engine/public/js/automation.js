@@ -544,7 +544,17 @@
       });
       appendLog("warn", "Stop signal sent.");
       stopBtn.disabled = true;
-      stopBtn.innerHTML = `<span class="material-symbols-outlined animate-spin">refresh</span> Stopping...`;
+      stopBtn.innerHTML = `<span class="material-symbols-outlined animate-spin">refresh</span> Stopping…`;
+      setTimeout(() => {
+        if (stopBtn.disabled) {
+          stopBtn.disabled = false;
+          stopBtn.innerHTML = `<span class="material-symbols-outlined">stop_circle</span> Stop`;
+          showToast(
+            "Stop signal sent — automation will halt after the current action.",
+            "warn",
+          );
+        }
+      }, 10_000);
     } catch (err) {
       showToast(err.message, "error");
     }

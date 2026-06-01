@@ -10,6 +10,7 @@ const {
 const { isCampaignQueueInProgress, __private } = require("../jobs/backgroundJobs");
 const { registerCampaignStream } = require("../campaign/utils/campaignUtils");
 const logger = require("../utils/logger");
+const { broadcast } = require("../services/socketService");
 
 const router = express.Router();
 
@@ -204,6 +205,7 @@ router.post(
 
     try {
       pauseCampaign(id);
+      broadcast("campaign:status", { campaignId: id, status: "paused" });
     } catch (err) {
       logger.error("CAMPAIGNS-API", `Failed to pause campaign #${id}: ${err.message}`, err);
       return res.status(500).json({ error: err.message });
@@ -239,6 +241,7 @@ router.post(
 
     try {
       resumeCampaign(id);
+      broadcast("campaign:status", { campaignId: id, status: "active" });
     } catch (err) {
       logger.error("CAMPAIGNS-API", `Failed to resume campaign #${id}: ${err.message}`, err);
       return res.status(500).json({ error: err.message });

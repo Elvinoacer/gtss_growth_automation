@@ -1915,14 +1915,22 @@ Use plain text only. Do not use markdown formatting, HTML entities, bullets, or 
 For X, the final caption must be ${POST_CHAR_LIMITS.x} characters or fewer including spaces and hashtags.
 Return ONLY the caption text, no explanations.`;
 
-  const generation = await callGeminiText(prompt);
-  const caption = unwrapGeminiText(generation);
-  logger.db("info", "content", "caption_gen", "Gemini caption generated", {
-    platform,
-    source: generation.source || "unknown",
-    model: generation.model,
-  });
-  return preparePlatformPostBody(platform, caption);
+  try {
+    const generation = await callGeminiText(prompt, { timeoutMs: 25_000 });
+    const caption = unwrapGeminiText(generation);
+    logger.db("info", "content", "caption_gen", "Gemini caption generated", {
+      platform,
+      source: generation.source || "unknown",
+      model: generation.model,
+    });
+    return preparePlatformPostBody(platform, caption);
+  } catch (err) {
+    logger.warn("SCHEDULER", "Caption generation failed, using topic as draft", {
+      error: err.message,
+    });
+    const stub = `${topic} — [Edit this caption before posting]`.slice(0, limit);
+    return preparePlatformPostBody(platform, stub);
+  }
 }
 
 module.exports = {

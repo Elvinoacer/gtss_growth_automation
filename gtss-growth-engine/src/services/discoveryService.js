@@ -836,6 +836,12 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
       throw platformErrors[platformErrors.length - 1];
     }
 
+    if (isJobStopped(jobId)) {
+      emit({ type: "stopped", jobId, message: "Discovery stopped by user." });
+      closeJobStream(jobId);
+      return { total: 0, new: 0, duplicates: 0, stopped: true };
+    }
+
     const result = insertLeads(rawProfiles);
     if (prePersistedNew > 0) {
       result.total += prePersistedNew;

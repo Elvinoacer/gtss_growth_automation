@@ -946,7 +946,14 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         postBody.value = data.caption;
         updateCharCounters();
-        showToast("Caption generated!", "success");
+        if (data.generatedBy === "fallback") {
+          showToast(
+            "Gemini unavailable — a draft has been pre-filled. Please edit before posting.",
+            "warn",
+          );
+        } else {
+          showToast("Caption generated!", "success");
+        }
       } catch (err) {
         showToast(err.message, "error");
       } finally {
@@ -1044,6 +1051,8 @@ document.addEventListener("DOMContentLoaded", () => {
           }),
         });
         startPublishStream(data.jobId);
+        await loadCalendar();
+        await loadQueue();
         postBody.value = "";
         uploadedMediaPath = null;
         uploadedMediaFilePath = null;
@@ -1243,7 +1252,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     $("edit-delete-btn").addEventListener("click", async () => {
-      if (!editingPostId || !confirm("Delete this post?")) return;
+      if (!editingPostId) return;
+      const confirmed = window.gtss?.confirm
+        ? await window.gtss.confirm("Delete this post? This cannot be undone.")
+        : confirm("Delete this post? This cannot be undone.");
+      if (!confirmed) return;
       try {
         await fetchJSON(`/api/scheduler/posts/${editingPostId}`, {
           method: "DELETE",

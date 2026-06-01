@@ -119,6 +119,14 @@
       tabConnectionsContent.classList.add("hidden");
     });
 
+    const socket = getSocket?.() || initSocket?.();
+    if (socket) {
+      socket.on("campaign:status", ({ campaignId: changedCampaignId }) => {
+        if (String(changedCampaignId) !== String(campaignId)) return;
+        loadCampaign();
+      });
+    }
+
     // Pause / Resume outreach click handler
     pauseResumeBtn.addEventListener("click", handleTogglePause);
 

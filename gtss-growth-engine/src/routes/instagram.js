@@ -86,7 +86,7 @@ router.get("/api/instagram/warmup-pipeline", (req, res) => {
     const pipeline = rows.map(row => {
       const diffTime = Math.abs(Date.now() - new Date(row.enteredStepAt).getTime());
       const daysInStep = Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
-      const canSkipToDm = row.currentStatus !== "warmup_complete";
+      const canSkipToDm = row.currentStatus !== "warmup_complete" && row.currentStatus !== "skipped";
 
       return {
         sequenceId: row.sequenceId,
@@ -155,6 +155,33 @@ router.post("/api/instagram/warmup/:sequenceId/skip", (req, res) => {
   } catch (err) {
     logger.error("WARMUP_API_ERROR", `Failed skipping sequence ${sequenceId}: ${err.message}`);
     return res.status(500).json({ error: "Failed to skip warmup step" });
+  }
+});
+
+router.post("/api/instagram/warmup/:sequenceId/requeue", (req, res) => {
+  const sequenceId = Number(req.params.sequenceId);
+  try {
+    const db = getDb();
+    const seq = db.prepare("SELECT lead_id FROM ig_warmup_sequences WHERE id = ?").get(sequenceId);
+    if (!seq) return res.status(404).json({ error: "Warmup sequence not found" });
+
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE ig_warmup_sequences
+        SET status = 'pending',
+            next_step = 'follow',
+            next_step_after = CURRENT_TIMESTAMP,
+            completed_at = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'skipped'
+      `).run(sequenceId);
+      db.prepare("UPDATE leads SET ig_warmup_status = 'pending' WHERE id = ?").run(seq.lead_id);
+    })();
+
+    res.json({ success: true });
+  } catch (err) {
+    logger.error("WARMUP_API_ERROR", `Failed re-queueing sequence ${sequenceId}: ${err.message}`);
+    res.status(500).json({ error: err.message });
   }
 });
 

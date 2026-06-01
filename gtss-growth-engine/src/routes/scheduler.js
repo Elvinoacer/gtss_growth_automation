@@ -686,19 +686,37 @@ router.get("/api/scheduler/stream/:jobId", (req, res) => {
 // ---------------------------------------------------------------------------
 
 router.post("/api/scheduler/generate-caption", async (req, res) => {
-  const { topic, platform, tone } = req.body;
-  if (!topic) return res.status(400).json({ error: "Topic is required" });
+  const routeTimer = setTimeout(() => {
+    if (!res.headersSent) {
+      res.status(504).json({
+        error: "Caption generation timed out — try again or write manually.",
+      });
+    }
+  }, 30_000);
 
   try {
+    const { topic, platform, tone } = req.body;
+    if (!topic?.trim()) {
+      clearTimeout(routeTimer);
+      return res.status(400).json({ error: "Topic is required" });
+    }
+
     const caption = await generateCaption(
-      topic,
+      topic.trim(),
       platform || getPrimaryPlatform(),
       tone || "engaging",
     );
-    res.json({ caption });
+    clearTimeout(routeTimer);
+    if (!res.headersSent) {
+      res.json({
+        caption,
+        generatedBy: caption.includes("[Edit this caption") ? "fallback" : "gemini",
+      });
+    }
   } catch (error) {
-    logger.error("Caption generation failed", { error: error.message });
-    res.status(500).json({ error: error.message });
+    clearTimeout(routeTimer);
+    logger.error("SCHEDULER", "generate-caption route error", { error: error.message });
+    if (!res.headersSent) res.status(500).json({ error: error.message });
   }
 });
 

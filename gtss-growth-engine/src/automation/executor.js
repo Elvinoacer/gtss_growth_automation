@@ -24,6 +24,18 @@ let ACTIVE_JOB_ID = null;
 let RUN_QUEUE = Promise.resolve();
 const MAX_AUTO_RETRIES = 3;
 
+async function interruptibleDelay(minMs, maxMs, jobId) {
+  const targetMs = Math.floor(Math.random() * (maxMs - minMs) + minMs);
+  const stepMs = 500;
+  let elapsed = 0;
+  while (elapsed < targetMs) {
+    if (STOP_FLAGS.get(jobId)) return;
+    const waitMs = Math.min(stepMs, targetMs - elapsed);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    elapsed += waitMs;
+  }
+}
+
 function createEmitter(sseRes) {
   return (type, message, data = {}) => {
     const payload = {
@@ -1069,7 +1081,7 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           "info",
           `Cooling down before next action (${Math.round(delay.min / 1000)}-${Math.round(delay.max / 1000)}s).`,
         );
-        await humanDelay(delay.min, delay.max);
+        await interruptibleDelay(delay.min, delay.max, jobId);
       }
     }
 
