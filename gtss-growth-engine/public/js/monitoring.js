@@ -81,6 +81,8 @@ function renderJobCard(job) {
   const jobType = gtss.escapeHtml(String(job.job_type || ""));
   const message = gtss.escapeHtml(job.message || "");
   const stage = gtss.escapeHtml(formatStage(job.stage));
+  const humanSummary = gtss.escapeHtml(job.human_summary || `${formatJobType(job.job_type)} is ${formatStage(job.stage)}`);
+  const context = summarizeContext(job.context);
   const duration = formatDuration(job.started_at, job.last_event_at);
   const lastEvent = formatDate(job.last_event_at);
   const startedAt = formatDate(job.started_at);
@@ -90,6 +92,7 @@ function renderJobCard(job) {
       <div class="job-header">
         <div>
           <div class="job-type">${gtss.escapeHtml(formatJobType(job.job_type))}</div>
+          <div class="job-meta">Now: <strong>${humanSummary}</strong></div>
           <div class="job-meta">Stage: <strong>${stage}</strong></div>
         </div>
         <span class="job-status ${statusClass}">${job.status || "running"}</span>
@@ -101,6 +104,7 @@ function renderJobCard(job) {
         <div>Job ID: <code>${jobId}</code></div>
       </div>
       <div class="job-meta">${message}</div>
+      ${context ? `<div class="job-meta">Context: ${gtss.escapeHtml(context)}</div>` : ""}
       <button class="job-toggle" data-job-toggle="${jobId}" data-job-type="${jobType}">
         View timeline
       </button>
@@ -114,7 +118,10 @@ function renderJobColumn(containerId, jobs) {
   if (!container) return;
 
   if (!jobs || jobs.length === 0) {
-    container.innerHTML = `<div class="job-meta">No jobs yet.</div>`;
+    const empty = containerId === "monitoring-running"
+      ? "Nothing is currently running. When a pipeline starts, this column will show the exact stage in real time."
+      : "No jobs yet.";
+    container.innerHTML = `<div class="job-meta">${empty}</div>`;
     return;
   }
 

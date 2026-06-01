@@ -186,9 +186,23 @@ function statusBadge(status) {
     running: { bg: 'rgba(59,130,246,0.15)', color: '#60a5fa', icon: '⟳' },
     failed: { bg: 'rgba(248,113,113,0.15)', color: '#f87171', icon: '✗' },
     paused: { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b', icon: 'Ⅱ' },
+    stopped: { bg: 'rgba(148,163,184,0.14)', color: '#cbd5e1', icon: '■' },
+    disabled: { bg: 'rgba(100,116,139,0.14)', color: '#94a3b8', icon: '○' },
+    idle: { bg: 'rgba(148,163,184,0.12)', color: '#94a3b8', icon: '—' },
   };
-  const s = map[status] || { bg: 'rgba(148,163,184,0.12)', color: '#94a3b8', icon: '—' };
+  const s = map[status] || map.idle;
   return `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;background:${s.bg};color:${s.color}">${s.icon} ${status || 'idle'}</span>`;
+}
+
+function actionStyle(color, enabled = true) {
+  const disabled = !enabled;
+  return `padding:8px 16px;border-radius:10px;border:1px solid ${disabled ? 'rgba(100,116,139,0.2)' : color.border};
+    background:${disabled ? 'rgba(100,116,139,0.08)' : color.bg};color:${disabled ? '#64748b' : color.text};font-size:13px;font-weight:600;
+    cursor:${disabled ? 'not-allowed' : 'pointer'};opacity:${disabled ? '0.55' : '1'};transition:all 150ms`;
+}
+
+function disabledAttr(enabled) {
+  return enabled ? '' : ' disabled aria-disabled="true"';
 }
 
 function renderCronPicker(currentCron, pipelineId) {
@@ -277,8 +291,16 @@ function renderPipelineCard(pipeline) {
   const meta = PIPELINE_META[pipeline.id] || {};
   const limits = pipeline.limits || {};
   const enabled = Boolean(pipeline.enabled);
-  const displayStatus = pipeline.paused ? 'paused' : pipeline.last_status;
+  const displayStatus = pipeline.state || (pipeline.paused ? 'paused' : pipeline.last_status) || (enabled ? 'idle' : 'disabled');
+  const activeJobs = Array.isArray(pipeline.active_jobs) ? pipeline.active_jobs : [];
+  const currentText = pipeline.current_message || pipeline.current_stage || (displayStatus === 'running' ? 'Starting...' : 'No active run right now.');
   const needsTopic = pipeline.id === 'content' && (!limits.topic || !limits.topic.trim());
+  const canRun = pipeline.can_run !== undefined ? pipeline.can_run : displayStatus !== 'running' && !pipeline.paused;
+  const canPause = pipeline.can_pause !== undefined ? pipeline.can_pause : enabled && !pipeline.paused;
+  const canResume = pipeline.can_resume !== undefined ? pipeline.can_resume : Boolean(pipeline.paused);
+  const canStop = pipeline.can_stop !== undefined ? pipeline.can_stop : displayStatus === 'running';
+  const pauseAction = pipeline.paused ? 'resume' : 'pause';
+  const pauseEnabled = pipeline.paused ? canResume : canPause;
 
   return `
   <article class="pipeline-card glass-panel animate-card" data-pipeline-id="${pipeline.id}"
@@ -320,6 +342,12 @@ function renderPipelineCard(pipeline) {
       </div>
     ` : ''}
 
+    <div style="padding:12px 14px;border-radius:12px;background:rgba(15,23,42,0.45);border:1px solid rgba(148,163,184,0.12);
+      margin-bottom:16px;color:#cbd5e1;font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <span><strong style="color:#f8fafc">Current:</strong> ${gtss.escapeHtml(currentText)}</span>
+      <span style="color:#94a3b8">${activeJobs.length ? `${activeJobs.length} active job(s)` : 'controls update in real time'}</span>
+    </div>
+
     <div style="display:grid;gap:4px;margin-bottom:20px">
       <div style="display:flex;align-items:center;gap:24px;font-size:13px;color:#94a3b8">
         <span>Schedule</span>
@@ -344,10 +372,8 @@ function renderPipelineCard(pipeline) {
       </div>
       <div style="display:flex;gap:8px">
         <button type="button" class="pipeline-action-btn" data-action="run" data-pipeline="${pipeline.id}"
-          style="padding:8px 16px;border-radius:10px;border:1px solid rgba(34,197,94,0.3);
-          background:rgba(34,197,94,0.1);color:#22c55e;font-size:13px;font-weight:600;cursor:pointer;
-          transition:all 150ms" title="Run this pipeline now">
-          ▶ Run Now
+          style="${actionStyle({ border: 'rgba(34,197,94,0.3)', bg: 'rgba(34,197,94,0.1)', text: '#22c55e' }, canRun)}" title="${canRun ? 'Run this pipeline now' : 'Cannot run while paused or already running'}"${disabledAttr(canRun)}>
+          ▶ ${displayStatus === 'running' ? 'Running' : 'Run Now'}
         </button>
         <button type="button" class="pipeline-action-btn" data-action="history" data-pipeline="${pipeline.id}"
           style="padding:8px 16px;border-radius:10px;border:1px solid rgba(148,163,184,0.2);
@@ -355,17 +381,13 @@ function renderPipelineCard(pipeline) {
           transition:all 150ms" title="View run history">
           📋 History
         </button>
-        <button type="button" class="pipeline-action-btn" data-action="${pipeline.paused ? 'resume' : 'pause'}" data-pipeline="${pipeline.id}"
-          style="padding:8px 16px;border-radius:10px;border:1px solid rgba(245,158,11,0.3);
-          background:rgba(245,158,11,0.1);color:#fbbf24;font-size:13px;font-weight:600;cursor:pointer;
-          transition:all 150ms" title="${pipeline.paused ? 'Resume' : 'Pause'} this pipeline">
+        <button type="button" class="pipeline-action-btn" data-action="${pauseAction}" data-pipeline="${pipeline.id}"
+          style="${actionStyle({ border: 'rgba(245,158,11,0.3)', bg: 'rgba(245,158,11,0.1)', text: '#fbbf24' }, pauseEnabled)}" title="${pauseEnabled ? (pipeline.paused ? 'Resume this pipeline' : 'Pause this pipeline') : 'Pause is only available for enabled pipelines'}"${disabledAttr(pauseEnabled)}>
           ${pipeline.paused ? '▶ Resume' : 'Ⅱ Pause'}
         </button>
         <button type="button" class="pipeline-action-btn" data-action="stop" data-pipeline="${pipeline.id}"
-          style="padding:8px 16px;border-radius:10px;border:1px solid rgba(248,113,113,0.3);
-          background:rgba(248,113,113,0.1);color:#f87171;font-size:13px;font-weight:600;cursor:pointer;
-          transition:all 150ms" title="Stop any active run">
-          ■ Stop
+          style="${actionStyle({ border: 'rgba(248,113,113,0.3)', bg: 'rgba(248,113,113,0.1)', text: '#f87171' }, canStop)}" title="${canStop ? 'Stop the active run' : 'No active run to stop'}"${disabledAttr(canStop)}>
+          ■ ${canStop ? 'Stop' : 'Stopped'}
         </button>
         <button type="button" class="pipeline-action-btn" data-action="save" data-pipeline="${pipeline.id}"
           style="padding:8px 16px;border-radius:10px;border:1px solid rgba(14,165,233,0.3);
@@ -402,6 +424,7 @@ function attachCardListeners() {
   // Action buttons
   document.querySelectorAll('.pipeline-action-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
+      if (btn.disabled) return;
       const action = btn.dataset.action;
       const id = btn.dataset.pipeline;
       if (action === 'run') runNow(id);

@@ -20,6 +20,18 @@ function registerJob(jobId, controller, metadata = {}) {
   });
 }
 
+function updateJob(jobId, updates = {}) {
+  const key = String(jobId);
+  const job = activeJobs.get(key);
+  if (!job) return false;
+  job.metadata = {
+    ...job.metadata,
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+  return true;
+}
+
 function finishJob(jobId) {
   activeJobs.delete(String(jobId));
 }
@@ -56,6 +68,7 @@ function listActiveJobs() {
 module.exports = {
   startJob,
   registerJob,
+  updateJob,
   finishJob,
   stopJob,
   stopJobsByPipeline,

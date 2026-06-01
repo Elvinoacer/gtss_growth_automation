@@ -11,6 +11,7 @@
 
 const express = require("express");
 const { getDb } = require("../db/database");
+const jobRegistry = require("../jobs/jobRegistry");
 
 const router = express.Router();
 
@@ -71,6 +72,35 @@ function deriveJobStatus(events) {
   return status;
 }
 
+function humanizeStage(stage) {
+  const label = String(stage || "waiting").replace(/_/g, " ");
+  const stageMap = {
+    image_gen: "Generating or saving the AI image",
+    caption_gen: "Writing platform captions",
+    publish: "Publishing to social platforms",
+    prompt_generating: "Asking Gemini to refine the image prompt",
+    prompt_ready: "Prompt is ready for Gemini Web",
+    gemini_web_text: "Waiting for Gemini Web text",
+    discovery: "Finding leads",
+    qualification: "Scoring leads",
+    messages: "Generating outreach messages",
+    send: "Sending outreach",
+  };
+  return stageMap[stage] || label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function buildHumanSummary(job) {
+  const type = String(job.job_type || job.type || "job").replace(/_/g, " ");
+  const stage = humanizeStage(job.stage);
+  const platform = job.context?.platform || job.platform;
+  const base = `${type}: ${stage}`;
+  const bits = [];
+  if (platform) bits.push(`platform ${platform}`);
+  if (job.context?.postId || job.context?.post_id) bits.push(`post #${job.context.postId || job.context.post_id}`);
+  if (job.context?.leadId || job.context?.lead_id) bits.push(`lead #${job.context.leadId || job.context.lead_id}`);
+  return bits.length ? `${base} (${bits.join(", ")})` : base;
+}
+
 function calculateDuration(startedAt, lastEventAt) {
   const start = new Date(startedAt).getTime();
   const end = new Date(lastEventAt).getTime();
@@ -119,7 +149,7 @@ function loadJobSnapshots(limit = 120) {
 
     const lastEvent = events[events.length - 1];
 
-    return {
+    const snapshot = {
       job_id: job.job_id,
       job_type: job.job_type,
 
@@ -136,6 +166,8 @@ function loadJobSnapshots(limit = 120) {
 
       context: parseContextJson(lastEvent?.context_json),
     };
+    snapshot.human_summary = buildHumanSummary(snapshot);
+    return snapshot;
   });
 }
 
@@ -148,6 +180,26 @@ router.get("/jobs", (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 120, 1000);
 
     const jobs = loadJobSnapshots(limit);
+    const seen = new Set(jobs.map((job) => `${job.job_type}:${job.job_id}`));
+    for (const active of jobRegistry.listActiveJobs()) {
+      const jobType = active.type || active.pipelineId || 'active';
+      const key = `${jobType}:${active.jobId}`;
+      if (seen.has(key)) continue;
+      const activeSnapshot = {
+        job_id: active.jobId,
+        job_type: jobType,
+        started_at: active.startedAt,
+        last_event_at: active.updatedAt || active.startedAt,
+        duration_ms: calculateDuration(active.startedAt, active.updatedAt || new Date().toISOString()),
+        status: active.aborted ? 'failed' : 'running',
+        stage: active.stage || 'running',
+        level: 'info',
+        message: active.message || 'Active job is currently running.',
+        context: { pipelineId: active.pipelineId, platform: active.platform },
+      };
+      activeSnapshot.human_summary = buildHumanSummary(activeSnapshot);
+      jobs.unshift(activeSnapshot);
+    }
 
     const buckets = {
       running: [],

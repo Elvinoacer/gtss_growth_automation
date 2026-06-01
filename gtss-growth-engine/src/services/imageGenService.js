@@ -6,6 +6,8 @@ const { generateImageViaGeminiWeb } = require("../automation/geminiWeb");
 const { emitJobEvent } = require("./schedulerService"); // reuse SSE helpers
 const logger = require("../utils/logger");
 
+const GTSS_RESTAURANT_MANAGER_URL = "https://www.gtss.software/products/restaurant-manager";
+
 /**
  * Build a meta-prompt that tells Gemini to produce a detailed image-generation prompt.
  * The richer the context the user gives (topic, style, platform), the better the result.
@@ -34,6 +36,7 @@ The image should suit a ${resolvedPlatform} post for a ${ctx.ctx_biz_industry} b
 Topic: ${topic}
 Product: ${ctx.ctx_product_name} - ${ctx.ctx_product_tagline}
 Product value proposition: ${ctx.ctx_product_value_prop}
+Product page for grounding/context: ${GTSS_RESTAURANT_MANAGER_URL}
 Key product features: ${features}
 Customer pain points to reflect visually: ${painPoints}
 Brand themes: ${themes}
@@ -44,7 +47,7 @@ Brand tone: ${ctx.ctx_content_tone}
 
 Rules:
 - Keep imagery consistent with ${ctx.ctx_biz_name}'s brand and target audience.
-- Make the concept reinforce ${ctx.ctx_product_name}'s positioning without adding visible words, logos, or UI text.
+- Make the concept reinforce ${ctx.ctx_product_name}'s positioning and the restaurant-manager product page context without adding visible words, logos, URLs, or UI text.
 - Be specific about lighting, composition, colour palette, and mood.
 - Describe the scene as if briefing a professional photographer.
 - Do NOT include any text, watermarks, or logos in the description.

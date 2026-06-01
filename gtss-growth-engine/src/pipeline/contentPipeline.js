@@ -37,6 +37,11 @@ function buildContentEmitter(jobId) {
       (String(stageLabel).toLowerCase() === "error" ? "error" : "info");
 
     logger.info("CONTENT-PIPELINE", `[${jobId}] ${stageLabel}: ${message}`);
+    jobRegistry.updateJob(jobId, {
+      stage: stageLabel,
+      message,
+      platform: event.platform,
+    });
     logger.db(level, "content", stageLabel, message, {
       jobId,
       stage: stageLabel,
