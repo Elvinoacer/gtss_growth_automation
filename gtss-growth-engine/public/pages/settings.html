@@ -6,10 +6,7 @@
     <title>Settings - Growth Engine</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/css/style.css" />
     <style>
       :root {
@@ -35,7 +32,7 @@
           ),
           linear-gradient(180deg, #0a0f1d 0%, #0b1220 100%);
         color: var(--gtss-text);
-        font-family: "Space Grotesk", sans-serif;
+        font-family: "Geist", sans-serif;
       }
       .page-content {
         padding-bottom: 40px;
@@ -95,7 +92,7 @@
       }
       .settings-page h2,
       .settings-page h3 {
-        font-family: "Fraunces", serif;
+        font-family: "Geist", serif;
         letter-spacing: 0.01em;
       }
       .section-head h2,
@@ -417,6 +414,18 @@
     <!-- SHELL -->
     <main class="page-content">
       <div class="settings-page">
+        <nav class="settings-nav" aria-label="Settings sections">
+          <a href="#context-section">Brand Context</a>
+          <a href="#platform-sessions">Platform Sessions</a>
+          <a href="#api-configuration">AI / Gemini</a>
+          <a href="#daily-action-limits">Rate Limits</a>
+          <a href="#pipeline-configuration">Pipelines</a>
+          <a href="#notification-settings">Notifications</a>
+          <a href="#instagram-settings">Instagram</a>
+          <a href="#pipeline-reliability">Reliability</a>
+          <a href="#prompt-templates">Prompts</a>
+          <a href="#system-settings">Security</a>
+        </nav>
         <!-- ═══════════════════════════════════════════════════════════ BRAND CONTEXT -->
         <section class="settings-section gtss-card" id="context-section">
           <div class="section-head">
@@ -794,12 +803,12 @@
           </div>
         </div>
 
-        <section class="settings-section gtss-card">
+        <section class="settings-section gtss-card" id="platform-sessions">
           <div class="section-head"><h2>Platform Sessions</h2></div>
           <div id="session-grid" class="settings-grid"></div>
         </section>
 
-        <section class="settings-section gtss-card">
+        <section class="settings-section gtss-card" id="api-configuration">
           <div class="section-head">
             <h2>API Configuration</h2>
             <span id="gemini-result" class="inline-result"></span>
@@ -814,7 +823,7 @@
           </div>
         </section>
 
-        <section class="settings-section gtss-card">
+        <section class="settings-section gtss-card" id="daily-action-limits">
           <div class="section-head">
             <h2>Daily Action Limits</h2>
             <div>
@@ -838,7 +847,7 @@
           </div>
         </section>
 
-        <section class="settings-section gtss-card">
+        <section class="settings-section gtss-card" id="pipeline-configuration">
           <div class="section-head">
             <h2>Pipeline Configuration</h2>
             <div>
@@ -970,7 +979,7 @@
           ></span>
         </section>
 
-        <section class="settings-section gtss-card">
+        <section class="settings-section gtss-card" id="notification-settings">
           <div class="section-head">
             <h2>Notification Settings</h2>
             <span id="email-result" class="inline-result"></span>
@@ -996,7 +1005,7 @@
           </div>
         </section>
 
-        <section class="settings-section gtss-card">
+        <section class="settings-section gtss-card" id="instagram-settings">
           <div class="section-head">
             <h2>Instagram Automation Settings</h2>
             <div>
@@ -1222,7 +1231,7 @@
           </div>
         </section>
 
-        <section class="settings-section gtss-card">
+        <section class="settings-section gtss-card" id="pipeline-reliability">
           <div class="section-head">
             <h2>Pipeline Reliability</h2>
             <span class="muted">Retries and content media source</span>
@@ -1270,7 +1279,7 @@
           <span id="pipeline-reliability-result" class="inline-result"></span>
         </section>
 
-        <section class="settings-section gtss-card">
+        <section class="settings-section gtss-card" id="prompt-templates">
           <div class="section-head">
             <h2>Prompt Templates</h2>
             <span id="char-count" class="muted">0 chars</span>
@@ -1304,7 +1313,7 @@
           <span id="template-apply-result" class="inline-result"></span>
         </section>
 
-        <section class="settings-section gtss-card">
+        <section class="settings-section gtss-card" id="system-settings">
           <div class="section-head">
             <h2>System</h2>
             <span id="app-version" class="muted"></span>

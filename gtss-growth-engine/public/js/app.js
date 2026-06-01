@@ -36,7 +36,7 @@ async function fetchJSON(url, options = {}) {
 function showToast(message, type = "info") {
   const toast = document.createElement("div");
   toast.className = `gtss-toast ${type}`;
-  toast.textContent = message;
+  toast.innerHTML = `<span>${escapeHtml(message)}</span><span class="toast-progress" aria-hidden="true"></span>`;
   document.body.appendChild(toast);
 
   requestAnimationFrame(() => toast.classList.add("visible"));
@@ -162,8 +162,16 @@ async function updateSessionDots() {
     const statuses = await fetchJSON("/api/sessions/status");
     Object.entries(statuses).forEach(([platform, isActive]) => {
       const dot = document.querySelector(`[data-platform-dot="${platform}"]`);
+      const row = document.querySelector(`[data-platform-row="${platform}"]`);
       if (dot) {
         dot.classList.toggle("active", Boolean(isActive));
+      }
+      if (row) {
+        row.classList.toggle("active", Boolean(isActive));
+        const pill = row.querySelector(".gtss-session-pill");
+        if (pill) {
+          pill.textContent = isActive ? "Connected" : "Offline";
+        }
       }
     });
   } catch (error) {
@@ -184,10 +192,17 @@ async function updateActionBadge() {
     const ratio = limit > 0 ? used / limit : 0;
 
     badge.textContent = `Actions today: ${used} / ${limit} limit`;
+    badge.style.setProperty("--action-ratio", `${Math.min(Math.round(ratio * 100), 100)}%`);
     badge.classList.toggle("warning", ratio >= 0.7 && ratio < 0.9);
     badge.classList.toggle("danger", ratio >= 0.9);
+
+    const dashboardBadge = document.getElementById("nav-badge-dashboard");
+    if (dashboardBadge) {
+      dashboardBadge.textContent = limit ? `${Math.min(Math.round(ratio * 100), 100)}%` : "";
+    }
   } catch (error) {
     badge.textContent = "Actions today: unavailable";
+    badge.style.setProperty("--action-ratio", "100%");
     badge.classList.add("danger");
   }
 }
@@ -240,6 +255,28 @@ function initShell() {
     pageTitle.textContent = document.body.dataset.pageTitle;
   }
 
+  const pageSubtitle = document.getElementById("gtss-page-subtitle");
+  if (pageSubtitle) {
+    const subtitles = {
+      Dashboard: "Live command center for growth operations",
+      "Lead Discovery": "Find, filter, and route new prospects",
+      Qualification: "Score leads and prioritize outreach",
+      "Lead Qualification": "Score leads and prioritize outreach",
+      "Message Generator": "Generate and review campaign-ready messaging",
+      Automation: "Control sessions, queues, and safety limits",
+      Campaigns: "Manage active outreach sequences",
+      "CRM Pipeline": "Track opportunities from reply to close",
+      "Content Scheduler": "Plan posts and campaign assets",
+      Pipelines: "Schedule repeatable growth workflows",
+      Monitoring: "Observe throughput, health, and failures",
+      Settings: "Configure channels, AI, limits, and security",
+      "Asset Library": "Organize reusable creative and copy",
+      "Audit Log": "Review operator and automation activity",
+      "Instagram Warmup": "Safely warm Instagram leads before outreach",
+    };
+    pageSubtitle.textContent = subtitles[document.body.dataset.pageTitle] || "Operator console ready";
+  }
+
   document.querySelectorAll(".gtss-nav__link").forEach((link) => {
     const route = link.dataset.route;
     const active =
@@ -265,7 +302,17 @@ function initShell() {
 
   if (notificationButton && notificationDropdown) {
     notificationButton.addEventListener("click", () => {
-      notificationDropdown.classList.toggle("open");
+      const isOpen = notificationDropdown.classList.toggle("open");
+      notificationButton.setAttribute("aria-expanded", String(isOpen));
+    });
+    document.addEventListener("click", (event) => {
+      if (
+        !notificationDropdown.contains(event.target) &&
+        !notificationButton.contains(event.target)
+      ) {
+        notificationDropdown.classList.remove("open");
+        notificationButton.setAttribute("aria-expanded", "false");
+      }
     });
   }
 
