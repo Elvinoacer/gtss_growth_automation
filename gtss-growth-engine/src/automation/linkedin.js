@@ -887,7 +887,7 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     await humanDelay(150, 300);
 
     // Find the Send button in the active overlay first, then fall back to page-level search.
-    const freshOverlayMatch = (await findBestDmOverlay(page, 900)) || dmOverlayMatch;
+    const freshOverlayMatch = (await firstVisible(page, SELECTORS.dmOverlay, 900)) || dmOverlayMatch;
     const sendMatch = freshOverlayMatch
       ? (await firstVisibleIn(freshOverlayMatch.locator, SELECTORS.dmSend, 900)) || (await firstVisible(page, SELECTORS.dmSend, 700))
       : await firstVisible(page, SELECTORS.dmSend, 900);
