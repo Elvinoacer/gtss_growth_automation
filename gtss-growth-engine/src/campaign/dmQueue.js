@@ -688,6 +688,53 @@ async function processDmQueue(page, options = {}) {
             `Automation limit or captcha active (Error: ${res.error}). Snoozed.`,
           );
           report.blocked++;
+        } else if (res.outcome === "premium_required") {
+          // This lead requires LinkedIn Premium to message — skip permanently.
+          // Previously this fell through to the generic retry handler, causing
+          // up to 5 wasteful re-visits (each ~5 s) before hitting maxRetries.
+          db.transaction(() => {
+            db.prepare(
+              `
+              UPDATE dm_jobs
+              SET status = 'skipped', error_message = ?, updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `,
+            ).run(
+              res.error || "LinkedIn Premium required to message this profile",
+              job.id,
+            );
+
+            db.prepare(
+              `
+              INSERT INTO touchpoints (lead_id, type, platform, message_id, outcome, sent_at, notes)
+              VALUES (?, 'dm', ?, ?, 'skipped', CURRENT_TIMESTAMP, ?)
+            `,
+            ).run(
+              job.lead_id,
+              normPlatform,
+              messageId,
+              res.error || "LinkedIn Premium required",
+            );
+
+            recordCampaignEvent(
+              db,
+              job.campaign_id,
+              job.lead_id,
+              "dm_skipped",
+              {
+                reason: "premium_required",
+                error: res.error,
+              },
+            );
+          })();
+
+          queueLog(
+            "warn",
+            "dm_queue",
+            job.id,
+            `Lead ${job.lead_id} requires LinkedIn Premium — skipping permanently.`,
+          );
+          report.skipped++;
         } else {
           // General interaction failures - handled independently from connection queue
           const newRetryCount = (job.retry_count || 0) + 1;

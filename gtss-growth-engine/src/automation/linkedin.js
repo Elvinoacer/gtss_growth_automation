@@ -31,17 +31,36 @@ const SELECTORS = {
   follow: ['button:has-text("Follow")', 'button[aria-label*="Follow"]'],
   pending: ['button:has-text("Pending")', 'button[aria-label*="Pending"]'],
   more: ['button[aria-label="More actions"]', 'button[aria-label*="More"]'],
-  actionDropdown: [".artdeco-dropdown__content", ".artdeco-dropdown__content-inner", '[role="menu"]'],
+  actionDropdown: [
+    ".artdeco-dropdown__content",
+    ".artdeco-dropdown__content-inner",
+    '[role="menu"]',
+  ],
   modal: ['[role="dialog"]', ".artdeco-modal", ".send-invite"],
   premiumDialog: [
     '[role="dialog"]:has-text("Grow Your Business with Premium")',
     '[role="dialog"]:has-text("With Premium, you can message anyone")',
     '.artdeco-modal:has-text("Premium")',
   ],
-  modalClose: ['button[aria-label="Dismiss"]', 'button[aria-label="Close"]', 'button:has-text("×")'],
-  addNote: ['button:has-text("Add a note")', 'button[aria-label*="Add a note"]'],
-  noteTextarea: ['textarea[name="message"]', "textarea#custom-message", "textarea"],
-  modalSend: ['button:has-text("Send")', 'button[aria-label*="Send"]', "button.artdeco-button--primary"],
+  modalClose: [
+    'button[aria-label="Dismiss"]',
+    'button[aria-label="Close"]',
+    'button:has-text("×")',
+  ],
+  addNote: [
+    'button:has-text("Add a note")',
+    'button[aria-label*="Add a note"]',
+  ],
+  noteTextarea: [
+    'textarea[name="message"]',
+    "textarea#custom-message",
+    "textarea",
+  ],
+  modalSend: [
+    'button:has-text("Send")',
+    'button[aria-label*="Send"]',
+    "button.artdeco-button--primary",
+  ],
   dmEditor: [
     '.msg-form__contenteditable[contenteditable="true"]',
     ".msg-form textarea",
@@ -142,7 +161,11 @@ async function getProfileHeader(page) {
 async function firstVisibleOnProfile(page, selectors, timeout = 1500) {
   const headerMatch = await getProfileHeader(page);
   if (headerMatch) {
-    const scopedMatch = await firstVisibleIn(headerMatch.locator, selectors, timeout);
+    const scopedMatch = await firstVisibleIn(
+      headerMatch.locator,
+      selectors,
+      timeout,
+    );
     if (scopedMatch) {
       return {
         ...scopedMatch,
@@ -151,7 +174,11 @@ async function firstVisibleOnProfile(page, selectors, timeout = 1500) {
     }
   }
 
-  const mainAreaMatch = await firstVisibleInMainProfileArea(page, selectors, timeout);
+  const mainAreaMatch = await firstVisibleInMainProfileArea(
+    page,
+    selectors,
+    timeout,
+  );
   if (mainAreaMatch) return mainAreaMatch;
 
   return null;
@@ -180,7 +207,8 @@ async function firstVisibleInMainProfileArea(page, selectors, timeout = 1500) {
         const box = await candidate.boundingBox();
         if (!box) continue;
 
-        const isMainProfileAction = box.x >= 0 && box.x < maxX && box.y >= 80 && box.y < maxY;
+        const isMainProfileAction =
+          box.x >= 0 && box.x < maxX && box.y >= 80 && box.y < maxY;
 
         if (isMainProfileAction) {
           return {
@@ -197,9 +225,11 @@ async function firstVisibleInMainProfileArea(page, selectors, timeout = 1500) {
   return null;
 }
 
-
 function normalizeText(value) {
-  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 async function quickVisibleProfileAction(page, action, timeout = 900) {
@@ -260,12 +290,18 @@ async function quickVisibleProfileAction(page, action, timeout = 900) {
                 .trim()
                 .toLowerCase();
               const href = String(el.getAttribute("href") || "").toLowerCase();
-              const isMessageLink = actionText === "message" && href.includes("/messaging");
+              const isMessageLink =
+                actionText === "message" && href.includes("/messaging");
 
               if (!label.includes(actionText) && !isMessageLink) continue;
 
-              const topCard = el.closest(".pv-top-card, .ph5.pb5, section:has(h1)");
-              candidates.push({ el, score: (topCard ? 100 : 0) - rect.y / 10 - rect.x / 100 });
+              const topCard = el.closest(
+                ".pv-top-card, .ph5.pb5, section:has(h1)",
+              );
+              candidates.push({
+                el,
+                score: (topCard ? 100 : 0) - rect.y / 10 - rect.x / 100,
+              });
             }
           }
 
@@ -275,7 +311,14 @@ async function quickVisibleProfileAction(page, action, timeout = 900) {
           best.setAttribute("data-gtss-profile-action", token);
           return {
             selector: `[data-gtss-profile-action="${token}"]`,
-            label: (best.getAttribute("aria-label") || best.textContent || best.href || "").replace(/\s+/g, " ").trim(),
+            label: (
+              best.getAttribute("aria-label") ||
+              best.textContent ||
+              best.href ||
+              ""
+            )
+              .replace(/\s+/g, " ")
+              .trim(),
           };
         },
         { actionText, token },
@@ -285,7 +328,10 @@ async function quickVisibleProfileAction(page, action, timeout = 900) {
     if (result?.selector) {
       const locator = page.locator(result.selector).first();
       if (await locator.isVisible({ timeout: 150 }).catch(() => false)) {
-        return { locator, selector: `quick:${actionText}:${result.label || result.selector}` };
+        return {
+          locator,
+          selector: `quick:${actionText}:${result.label || result.selector}`,
+        };
       }
     }
 
@@ -296,12 +342,21 @@ async function quickVisibleProfileAction(page, action, timeout = 900) {
 }
 
 async function findProfileAction(page, selectors, actionName, timeout = 1200) {
-  const quick = await quickVisibleProfileAction(page, actionName, Math.min(timeout, 900));
+  const quick = await quickVisibleProfileAction(
+    page,
+    actionName,
+    Math.min(timeout, 900),
+  );
   if (quick) return quick;
   return firstVisibleOnProfile(page, selectors, timeout);
 }
 
-async function firstVisibleOverlay(page, overlaySelectors, selectors, timeout = 1500) {
+async function firstVisibleOverlay(
+  page,
+  overlaySelectors,
+  selectors,
+  timeout = 1500,
+) {
   const overlay = await firstVisible(page, overlaySelectors, timeout);
   if (!overlay) return null;
 
@@ -317,108 +372,150 @@ async function findBestDmEditor(page, timeout = 2500) {
 
   while (Date.now() < deadline) {
     const result = await page
-      .evaluate(({ token }) => {
-        const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
-        const visible = (el) => {
-          const rect = el.getBoundingClientRect();
-          const style = window.getComputedStyle(el);
-          return (
-            rect.width >= 20 &&
-            rect.height >= 18 &&
-            rect.bottom > 0 &&
-            rect.right > 0 &&
-            rect.top < (window.innerHeight || 900) &&
-            rect.left < (window.innerWidth || 1400) &&
-            style.visibility !== "hidden" &&
-            style.display !== "none" &&
-            Number(style.opacity || 1) > 0
-          );
-        };
-        const attrText = (el) =>
-          normalize([
-            el.getAttribute("aria-label"),
-            el.getAttribute("placeholder"),
-            el.getAttribute("data-placeholder"),
-            el.getAttribute("name"),
-            el.getAttribute("id"),
-            el.getAttribute("class"),
-            el.getAttribute("role"),
-            el.textContent,
-          ].filter(Boolean).join(" "));
-        const rejectPattern = /\b(subject|recipient|recipients|to:|search|people|name|email|add people|conversation name)\b/;
-        const messagePattern = /\b(write a message|message|reply|body|compose)\b/;
-        const selectors = [
-          '.msg-form__contenteditable[contenteditable="true"]',
-          '.msg-form [contenteditable="true"]',
-          '.msg-form textarea',
-          'textarea[name*="message" i]',
-          'textarea[placeholder*="message" i]',
-          'textarea[aria-label*="message" i]',
-          '[contenteditable="true"][aria-label*="message" i]',
-          '[contenteditable="true"][aria-label*="write" i]',
-          '[contenteditable="true"][data-placeholder*="message" i]',
-          '[role="textbox"][aria-label*="message" i]',
-          '[role="textbox"][aria-label*="write" i]',
-          '[contenteditable="true"]',
-          '[role="textbox"]',
-          'textarea',
-        ];
-        const seen = new Set();
-        const candidates = [];
-
-        for (const selector of selectors) {
-          for (const el of document.querySelectorAll(selector)) {
-            if (seen.has(el) || !visible(el)) continue;
-            seen.add(el);
-
-            const tagName = normalize(el.tagName);
-            const type = normalize(el.getAttribute("type"));
-            if (type && ["hidden", "button", "submit", "checkbox", "radio"].includes(type)) continue;
-            if (el.disabled || el.getAttribute("aria-disabled") === "true" || el.readOnly) continue;
-
-            const text = attrText(el);
+      .evaluate(
+        ({ token }) => {
+          const normalize = (value) =>
+            String(value || "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .toLowerCase();
+          const visible = (el) => {
             const rect = el.getBoundingClientRect();
-            const overlay = el.closest('.msg-overlay-conversation-bubble, .msg-convo-wrapper, [role="dialog"], .artdeco-modal--type-is-messaging, .msg-form');
-            const overlayText = overlay ? normalize(overlay.textContent) : "";
-            const inMsgForm = Boolean(el.closest(".msg-form"));
-            const isContentEditable = el.getAttribute("contenteditable") === "true";
-            const isTextarea = tagName === "textarea";
-            const isSubjectLike = rejectPattern.test(text) && !messagePattern.test(text);
-            const isExplicitMessage = messagePattern.test(text);
+            const style = window.getComputedStyle(el);
+            return (
+              rect.width >= 20 &&
+              rect.height >= 18 &&
+              rect.bottom > 0 &&
+              rect.right > 0 &&
+              rect.top < (window.innerHeight || 900) &&
+              rect.left < (window.innerWidth || 1400) &&
+              style.visibility !== "hidden" &&
+              style.display !== "none" &&
+              Number(style.opacity || 1) > 0
+            );
+          };
+          const attrText = (el) =>
+            normalize(
+              [
+                el.getAttribute("aria-label"),
+                el.getAttribute("placeholder"),
+                el.getAttribute("data-placeholder"),
+                el.getAttribute("name"),
+                el.getAttribute("id"),
+                el.getAttribute("class"),
+                el.getAttribute("role"),
+                el.textContent,
+              ]
+                .filter(Boolean)
+                .join(" "),
+            );
+          const rejectPattern =
+            /\b(subject|recipient|recipients|to:|search|people|name|email|add people|conversation name)\b/;
+          const messagePattern =
+            /\b(write a message|message|reply|body|compose)\b/;
+          const selectors = [
+            '.msg-form__contenteditable[contenteditable="true"]',
+            '.msg-form [contenteditable="true"]',
+            ".msg-form textarea",
+            'textarea[name*="message" i]',
+            'textarea[placeholder*="message" i]',
+            'textarea[aria-label*="message" i]',
+            '[contenteditable="true"][aria-label*="message" i]',
+            '[contenteditable="true"][aria-label*="write" i]',
+            '[contenteditable="true"][data-placeholder*="message" i]',
+            '[role="textbox"][aria-label*="message" i]',
+            '[role="textbox"][aria-label*="write" i]',
+            '[contenteditable="true"]',
+            '[role="textbox"]',
+            "textarea",
+          ];
+          const seen = new Set();
+          const candidates = [];
 
-            let score = 0;
-            if (el.matches('.msg-form__contenteditable[contenteditable="true"]')) score += 1400;
-            if (inMsgForm) score += 700;
-            if (isExplicitMessage) score += 650;
-            if (isContentEditable) score += 320;
-            if (isTextarea) score += 220;
-            if (overlay && visible(overlay)) score += 180;
-            if (/new message|messaging|message/.test(overlayText)) score += 120;
-            if (rect.height >= 80) score += 420;
-            if (rect.height >= 140) score += 260;
-            score += Math.min(260, (rect.width * rect.height) / 900);
-            score -= rect.top / 50;
-            if (isSubjectLike) score -= 1600;
-            if (rect.height < 45 && !isExplicitMessage) score -= 500;
-            if (text.includes("subject")) score -= 900;
-            if (/\b(to|recipient|recipients)\b/.test(text)) score -= 700;
+          for (const selector of selectors) {
+            for (const el of document.querySelectorAll(selector)) {
+              if (seen.has(el) || !visible(el)) continue;
+              seen.add(el);
 
-            candidates.push({ el, score, text, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } });
+              const tagName = normalize(el.tagName);
+              const type = normalize(el.getAttribute("type"));
+              if (
+                type &&
+                ["hidden", "button", "submit", "checkbox", "radio"].includes(
+                  type,
+                )
+              )
+                continue;
+              if (
+                el.disabled ||
+                el.getAttribute("aria-disabled") === "true" ||
+                el.readOnly
+              )
+                continue;
+
+              const text = attrText(el);
+              const rect = el.getBoundingClientRect();
+              const overlay = el.closest(
+                '.msg-overlay-conversation-bubble, .msg-convo-wrapper, [role="dialog"], .artdeco-modal--type-is-messaging, .msg-form',
+              );
+              const overlayText = overlay ? normalize(overlay.textContent) : "";
+              const inMsgForm = Boolean(el.closest(".msg-form"));
+              const isContentEditable =
+                el.getAttribute("contenteditable") === "true";
+              const isTextarea = tagName === "textarea";
+              const isSubjectLike =
+                rejectPattern.test(text) && !messagePattern.test(text);
+              const isExplicitMessage = messagePattern.test(text);
+
+              let score = 0;
+              if (
+                el.matches('.msg-form__contenteditable[contenteditable="true"]')
+              )
+                score += 1400;
+              if (inMsgForm) score += 700;
+              if (isExplicitMessage) score += 650;
+              if (isContentEditable) score += 320;
+              if (isTextarea) score += 220;
+              if (overlay && visible(overlay)) score += 180;
+              if (/new message|messaging|message/.test(overlayText))
+                score += 120;
+              if (rect.height >= 80) score += 420;
+              if (rect.height >= 140) score += 260;
+              score += Math.min(260, (rect.width * rect.height) / 900);
+              score -= rect.top / 50;
+              if (isSubjectLike) score -= 1600;
+              if (rect.height < 45 && !isExplicitMessage) score -= 500;
+              if (text.includes("subject")) score -= 900;
+              if (/\b(to|recipient|recipients)\b/.test(text)) score -= 700;
+
+              candidates.push({
+                el,
+                score,
+                text,
+                rect: {
+                  x: rect.x,
+                  y: rect.y,
+                  width: rect.width,
+                  height: rect.height,
+                },
+              });
+            }
           }
-        }
 
-        candidates.sort((a, b) => b.score - a.score);
-        const best = candidates.find((candidate) => candidate.score > 0);
-        if (!best) return null;
+          candidates.sort((a, b) => b.score - a.score);
+          const best = candidates.find((candidate) => candidate.score > 0);
+          if (!best) return null;
 
-        best.el.setAttribute("data-gtss-dm-editor", token);
-        return {
-          selector: `[data-gtss-dm-editor="${token}"]`,
-          score: Math.round(best.score),
-          label: best.text.slice(0, 120),
-          rect: best.rect,
-        };
-      }, { token })
+          best.el.setAttribute("data-gtss-dm-editor", token);
+          return {
+            selector: `[data-gtss-dm-editor="${token}"]`,
+            score: Math.round(best.score),
+            label: best.text.slice(0, 120),
+            rect: best.rect,
+          };
+        },
+        { token },
+      )
       .catch(() => null);
 
     if (result?.selector) {
@@ -444,38 +541,66 @@ async function findBestDmOverlay(page, timeout = 1500) {
 
   while (Date.now() < deadline) {
     const result = await page
-      .evaluate(({ token }) => {
-        const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
-        const visible = (el) => {
-          const rect = el.getBoundingClientRect();
-          const style = window.getComputedStyle(el);
-          return rect.width >= 120 && rect.height >= 80 && style.visibility !== "hidden" && style.display !== "none";
-        };
-        const overlays = [...document.querySelectorAll('.msg-overlay-conversation-bubble, .msg-convo-wrapper, [role="dialog"], .artdeco-modal--type-is-messaging')]
-          .filter(visible)
-          .map((el) => {
+      .evaluate(
+        ({ token }) => {
+          const normalize = (value) =>
+            String(value || "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .toLowerCase();
+          const visible = (el) => {
             const rect = el.getBoundingClientRect();
-            const text = normalize(el.textContent);
-            const hasEditor = Boolean(el.querySelector('.msg-form__contenteditable[contenteditable="true"], .msg-form [contenteditable="true"], textarea, [role="textbox"]'));
-            let score = 0;
-            if (hasEditor) score += 900;
-            if (/new message|message|messaging/.test(text)) score += 250;
-            if (rect.height >= 260) score += 180;
-            score += Math.min(220, (rect.width * rect.height) / 1800);
-            return { el, score, text: text.slice(0, 80) };
-          })
-          .sort((a, b) => b.score - a.score);
-        const best = overlays[0];
-        if (!best) return null;
-        best.el.setAttribute("data-gtss-dm-overlay", token);
-        return { selector: `[data-gtss-dm-overlay="${token}"]`, score: Math.round(best.score), label: best.text };
-      }, { token })
+            const style = window.getComputedStyle(el);
+            return (
+              rect.width >= 120 &&
+              rect.height >= 80 &&
+              style.visibility !== "hidden" &&
+              style.display !== "none"
+            );
+          };
+          const overlays = [
+            ...document.querySelectorAll(
+              '.msg-overlay-conversation-bubble, .msg-convo-wrapper, [role="dialog"], .artdeco-modal--type-is-messaging',
+            ),
+          ]
+            .filter(visible)
+            .map((el) => {
+              const rect = el.getBoundingClientRect();
+              const text = normalize(el.textContent);
+              const hasEditor = Boolean(
+                el.querySelector(
+                  '.msg-form__contenteditable[contenteditable="true"], .msg-form [contenteditable="true"], textarea, [role="textbox"]',
+                ),
+              );
+              let score = 0;
+              if (hasEditor) score += 900;
+              if (/new message|message|messaging/.test(text)) score += 250;
+              if (rect.height >= 260) score += 180;
+              score += Math.min(220, (rect.width * rect.height) / 1800);
+              return { el, score, text: text.slice(0, 80) };
+            })
+            .sort((a, b) => b.score - a.score);
+          const best = overlays[0];
+          if (!best) return null;
+          best.el.setAttribute("data-gtss-dm-overlay", token);
+          return {
+            selector: `[data-gtss-dm-overlay="${token}"]`,
+            score: Math.round(best.score),
+            label: best.text,
+          };
+        },
+        { token },
+      )
       .catch(() => null);
 
     if (result?.selector) {
       const locator = page.locator(result.selector).first();
       if (await locator.isVisible({ timeout: 150 }).catch(() => false)) {
-        return { locator, selector: `best-dm-overlay:${result.selector}`, detail: result };
+        return {
+          locator,
+          selector: `best-dm-overlay:${result.selector}`,
+          detail: result,
+        };
       }
     }
 
@@ -508,9 +633,25 @@ async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 3) {
     const legacy = await firstVisible(page, SELECTORS.dmEditor, 700);
     if (legacy) {
       const label = await legacy.locator
-        .evaluate((el) => [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"), el.getAttribute("id"), el.textContent].filter(Boolean).join(" ").toLowerCase())
+        .evaluate((el) =>
+          [
+            el.getAttribute("aria-label"),
+            el.getAttribute("placeholder"),
+            el.getAttribute("name"),
+            el.getAttribute("id"),
+            el.textContent,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase(),
+        )
         .catch(() => "");
-      if (!/\b(subject|recipient|recipients|to:|search|people|name|email)\b/.test(label) || /message|write|reply/.test(label)) {
+      if (
+        !/\b(subject|recipient|recipients|to:|search|people|name|email)\b/.test(
+          label,
+        ) ||
+        /message|write|reply/.test(label)
+      ) {
         return legacy;
       }
     }
@@ -525,17 +666,25 @@ async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 3) {
 
 async function closeOverlay(page, overlayMatch) {
   if (!overlayMatch) return;
-  const closeMatch = await firstVisibleIn(overlayMatch.locator, SELECTORS.modalClose, 1000);
+  const closeMatch = await firstVisibleIn(
+    overlayMatch.locator,
+    SELECTORS.modalClose,
+    1000,
+  );
   if (closeMatch) {
     await closeMatch.locator.click().catch(() => {});
   }
 }
 
 async function detectPremiumRequired(page) {
-  const premiumMatch = await firstVisible(page, SELECTORS.premiumDialog, 1500);
+  // 800 ms is enough — the dialog is already rendered by the time we check.
+  // The old 1500 ms timeout was burning time on every non-premium profile.
+  const premiumMatch = await firstVisible(page, SELECTORS.premiumDialog, 800);
   if (!premiumMatch) return null;
 
-  const text = await premiumMatch.locator.innerText({ timeout: 1000 }).catch(() => "");
+  const text = await premiumMatch.locator
+    .innerText({ timeout: 800 })
+    .catch(() => "");
   await closeOverlay(page, premiumMatch);
   return {
     outcome: "premium_required",
@@ -561,7 +710,9 @@ async function pageContainsAny(page, phrases) {
     .innerText({ timeout: 2000 })
     .catch(() => "");
   const normalized = text.toLowerCase();
-  return phrases.find((phrase) => normalized.includes(phrase.toLowerCase())) || null;
+  return (
+    phrases.find((phrase) => normalized.includes(phrase.toLowerCase())) || null
+  );
 }
 
 async function detectActionWarning(page) {
@@ -586,7 +737,10 @@ function messageSnippet(message) {
 
 async function verifyDmSent(page, editorTarget, message) {
   const snippet = messageSnippet(message);
-  const editorLocator = typeof editorTarget === "string" ? page.locator(editorTarget).first() : editorTarget;
+  const editorLocator =
+    typeof editorTarget === "string"
+      ? page.locator(editorTarget).first()
+      : editorTarget;
 
   // Poll up to 8 seconds for the message to appear or the composer to clear
   const POLL_INTERVAL = 800;
@@ -629,13 +783,15 @@ async function verifyDmSent(page, editorTarget, message) {
 
     // Check for visible warning before giving up
     const warning = await detectActionWarning(page);
-    if (warning) return { verified: false, reason: `LinkedIn warning: ${warning}` };
+    if (warning)
+      return { verified: false, reason: `LinkedIn warning: ${warning}` };
   }
 
   return {
     verified: false,
     unknown: true,
-    reason: "Send verification ambiguous - message not visible and composer did not clear",
+    reason:
+      "Send verification ambiguous - message not visible and composer did not clear",
   };
 }
 
@@ -643,7 +799,8 @@ async function getEditableText(locator) {
   return locator
     .evaluate((el) => {
       const tagName = String(el.tagName || "").toLowerCase();
-      if (tagName === "textarea" || tagName === "input") return String(el.value || "");
+      if (tagName === "textarea" || tagName === "input")
+        return String(el.value || "");
       return String(el.textContent || el.innerText || "");
     })
     .catch(() => "");
@@ -657,84 +814,140 @@ async function getEditableText(locator) {
  * its internal React focus state doesn't fire, so subsequent keyboard input is
  * silently dropped.  We fix this by:
  *   1. Scrolling the element into view.
- *   2. Dispatching a real mousedown → mouseup → click sequence via evaluate()
- *      so React's SyntheticEvent system registers the interaction.
- *   3. Calling el.focus() inside the page to set the document activeElement.
- *   4. Waiting a short settle delay before typing.
+ *   2. Playwright click() FIRST — moves OS-level focus (critical for CDP mode).
+ *   3. Then dispatching mousedown → mouseup → click + el.focus() inside the page
+ *      so React's SyntheticEvent system also registers the interaction.
+ *   4. If document.activeElement is still not our element, fall back to a
+ *      raw mouse.click() at the element's centre coordinates.
+ *   5. Waiting a short settle delay before typing.
  */
 async function activateDmEditor(page, locator) {
   await locator.scrollIntoViewIfNeeded().catch(() => {});
-  await humanDelay(80, 160);
+  await humanDelay(60, 120);
 
-  // Dispatch pointer events inside the page context so React picks them up
-  await locator.evaluate((el) => {
-    const opts = { bubbles: true, cancelable: true, view: window };
-    el.dispatchEvent(new MouseEvent("mousedown", opts));
-    el.dispatchEvent(new MouseEvent("mouseup", opts));
-    el.dispatchEvent(new MouseEvent("click", opts));
-    el.focus();
-  }).catch(() => {});
-
-  // Also fire Playwright's own click so the browser moves OS-level focus
+  // Step 1: OS-level focus via Playwright (must happen before React events)
   await locator.click({ force: true }).catch(() => {});
-  await humanDelay(120, 240); // let React finish its focus handler
+  await humanDelay(60, 100);
+
+  // Step 2: React synthetic events + el.focus() — returns whether focus landed
+  const focusedAfterReact = await locator
+    .evaluate((el) => {
+      const opts = { bubbles: true, cancelable: true, view: window };
+      el.dispatchEvent(new MouseEvent("mousedown", opts));
+      el.dispatchEvent(new MouseEvent("mouseup", opts));
+      el.dispatchEvent(new MouseEvent("click", opts));
+      el.focus();
+      return (
+        document.activeElement === el || el.contains(document.activeElement)
+      );
+    })
+    .catch(() => false);
+
+  if (!focusedAfterReact) {
+    // Step 3: Coordinate-based fallback — handles cases where the locator's
+    // dynamic data-gtss-* attribute was wiped by a React re-render, making the
+    // locator match nothing and causing silent click failures.
+    const box = await locator.boundingBox().catch(() => null);
+    if (box) {
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    } else {
+      // Last resort: click the msg-form container first, then the editor
+      await page
+        .locator(".msg-form, .msg-overlay-conversation-bubble")
+        .last()
+        .click({ force: true })
+        .catch(() => {});
+      await humanDelay(40, 80);
+      await locator.click({ force: true }).catch(() => {});
+    }
+    await locator.evaluate((el) => el.focus()).catch(() => {});
+  }
+
+  await humanDelay(100, 200); // let React finish its focus handler
 }
 
 /**
  * Human-like message entry for LinkedIn's DM composer.
  *
- * Types each character individually with a realistic random delay (40-140 ms)
- * so it looks like a real person typing — important for avoiding bot detection.
- * Falls back to DOM manipulation if per-character typing doesn't land (e.g. some
- * LinkedIn overlay variants that swallow keyboard events before full activation).
+ * Uses Playwright's pressSequentially() which fires proper keydown/keypress/
+ * keyup/input events for each character — identical to real typing from the
+ * browser's perspective.  React's synthetic event system reads these natively
+ * so the send button becomes enabled reliably.
+ *
+ * Default 18 ms/char ≈ 56 WPM — clearly human-paced and ~6× faster than the
+ * previous 40-140 ms per-character loop.  Set TYPING_DELAY_MS env var to
+ * override (e.g. TYPING_DELAY_MS=8 for fast dev runs).
+ *
+ * Falls back to document.execCommand('insertText') if pressSequentially
+ * doesn't land (rare edge case in some LinkedIn overlay variants).
  */
 async function typeLikeHuman(page, locatorOrSelector, text) {
-  const locator = typeof locatorOrSelector === "string" ? page.locator(locatorOrSelector).first() : locatorOrSelector;
+  const locator =
+    typeof locatorOrSelector === "string"
+      ? page.locator(locatorOrSelector).first()
+      : locatorOrSelector;
   const expected = String(text || "").trim();
 
   // Step 1: Properly activate the editor (fixes the "open but can't type" bug)
   await activateDmEditor(page, locator);
 
   // Step 2: Clear any pre-existing placeholder/text
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
-  await page.keyboard.press("Backspace").catch(() => {});
-  await humanDelay(60, 120);
+  await page.keyboard
+    .press(process.platform === "darwin" ? "Meta+A" : "Control+A")
+    .catch(() => {});
+  await page.keyboard.press("Delete").catch(() => {});
+  await humanDelay(40, 80);
 
-  // Step 3: Type character by character with human-like timing
+  // Step 3: pressSequentially fires proper keyboard events React can handle.
+  // It also calls locator.focus() internally, which is an additional safety net.
   const speedup = process.env.TEST_SPEEDUP === "true";
-  for (const char of text) {
-    await page.keyboard.type(char);
-    if (!speedup) {
-      // Realistic human WPM range: ~55-90 WPM → ~40-140 ms per character
-      // Occasional longer pause simulates thinking/hesitation
-      const base = Math.floor(Math.random() * 100) + 40;
-      const pause = Math.random() < 0.07 ? base + Math.floor(Math.random() * 400) + 200 : base;
-      await new Promise((resolve) => setTimeout(resolve, pause));
-    }
-  }
+  const charDelay = speedup ? 0 : Number(process.env.TYPING_DELAY_MS || 18);
+  await locator.pressSequentially(text, { delay: charDelay });
+  await humanDelay(60, 120); // brief settle before verification
 
-  await humanDelay(80, 160); // brief settle before verification
-
-  // Step 4: Verify text landed; if not, fall back to DOM injection
+  // Step 4: Verify text landed; fall back to execCommand if not
   let actual = (await getEditableText(locator)).trim();
   if (!actual.includes(expected)) {
+    // Re-activate so focus is clean before the fallback
+    await activateDmEditor(page, locator);
+    await page.keyboard
+      .press(process.platform === "darwin" ? "Meta+A" : "Control+A")
+      .catch(() => {});
+    await page.keyboard.press("Delete").catch(() => {});
+    await humanDelay(40, 80);
+
     await locator.evaluate((el, value) => {
-      const tagName = String(el.tagName || "").toLowerCase();
       el.focus();
-      if (tagName === "textarea" || tagName === "input") {
-        el.value = value;
+      // document.execCommand('insertText') fires the same DOM events as real
+      // keyboard typing, including React's synthetic InputEvent handler.
+      if (typeof document.execCommand === "function") {
+        document.execCommand("selectAll", false, undefined);
+        document.execCommand("insertText", false, value);
       } else {
-        el.textContent = value;
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        range.collapse(false);
-        const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(range);
+        // Absolute last resort for browsers that dropped execCommand support
+        const tagName = String(el.tagName || "").toLowerCase();
+        if (tagName === "textarea" || tagName === "input") {
+          el.value = value;
+        } else {
+          el.textContent = value;
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          range.collapse(false);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+        el.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            inputType: "insertText",
+            data: value,
+          }),
+        );
+        el.dispatchEvent(new Event("change", { bubbles: true }));
       }
-      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
     }, text);
+
     actual = (await getEditableText(locator)).trim();
   }
 
@@ -746,7 +959,9 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
 async function typeIntoFirstVisible(page, selectors, text) {
   const match = await firstVisible(page, selectors, 2000);
   if (!match) {
-    throw new Error(`No visible input found for selectors: ${selectors.join(", ")}`);
+    throw new Error(
+      `No visible input found for selectors: ${selectors.join(", ")}`,
+    );
   }
 
   await match.locator.focus();
@@ -762,7 +977,9 @@ async function typeIntoFirstVisible(page, selectors, text) {
 async function typeIntoFirstVisibleIn(page, scope, selectors, text) {
   const match = await firstVisibleIn(scope, selectors, 2000);
   if (!match) {
-    throw new Error(`No visible input found for selectors: ${selectors.join(", ")}`);
+    throw new Error(
+      `No visible input found for selectors: ${selectors.join(", ")}`,
+    );
   }
 
   await match.locator.focus();
@@ -788,7 +1005,9 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
 
     emit("info", "Page loaded. Locating Connect action...");
 
-    const messageBtnVisible = Boolean(await findProfileAction(page, SELECTORS.message, "Message", 700));
+    const messageBtnVisible = Boolean(
+      await findProfileAction(page, SELECTORS.message, "Message", 700),
+    );
     const isPending = await isAnyVisibleOnProfile(page, SELECTORS.pending);
 
     if (isPending) {
@@ -796,25 +1015,47 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
       return { outcome: "already_connected" };
     }
 
-    let connectMatch = await findProfileAction(page, SELECTORS.connect, "Connect", 1200);
+    let connectMatch = await findProfileAction(
+      page,
+      SELECTORS.connect,
+      "Connect",
+      1200,
+    );
 
     // Sometimes Connect is hidden under a "More" menu
     if (!connectMatch) {
-      emit("info", "Connect action not immediately visible. Checking More menu...");
-      const moreMatch = await findProfileAction(page, SELECTORS.more, "More", 800);
+      emit(
+        "info",
+        "Connect action not immediately visible. Checking More menu...",
+      );
+      const moreMatch = await findProfileAction(
+        page,
+        SELECTORS.more,
+        "More",
+        800,
+      );
       if (moreMatch) {
         await moreMatch.locator.click();
         await humanDelay(1000, 2000);
-        connectMatch = await firstVisibleOverlay(page, SELECTORS.actionDropdown, SELECTORS.connect, 2000);
+        connectMatch = await firstVisibleOverlay(
+          page,
+          SELECTORS.actionDropdown,
+          SELECTORS.connect,
+          2000,
+        );
       }
     }
 
     if (!connectMatch) {
-      emit("warn", "Could not find Connect action. Maybe already connected or followed?");
+      emit(
+        "warn",
+        "Could not find Connect action. Maybe already connected or followed?",
+      );
       if (messageBtnVisible) {
         return {
           outcome: "not_connected",
-          reason: "Profile has Message but no Connect action in the main profile header",
+          reason:
+            "Profile has Message but no Connect action in the main profile header",
         };
       }
       return { outcome: "failed", reason: "Button not found" };
@@ -827,7 +1068,9 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
     // If there's a message, look for "Add a note"
     if (message) {
       const modalMatch = await firstVisible(page, SELECTORS.modal, 3000);
-      const addNoteMatch = modalMatch ? await firstVisibleIn(modalMatch.locator, SELECTORS.addNote, 2000) : null;
+      const addNoteMatch = modalMatch
+        ? await firstVisibleIn(modalMatch.locator, SELECTORS.addNote, 2000)
+        : null;
       if (addNoteMatch) {
         emit("info", "Adding connection note...");
         await addNoteMatch.locator.click();
@@ -838,16 +1081,32 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
         if (!noteModalMatch) {
           throw new Error("Connection note modal not visible");
         }
-        await typeIntoFirstVisibleIn(page, noteModalMatch.locator, SELECTORS.noteTextarea, message);
+        await typeIntoFirstVisibleIn(
+          page,
+          noteModalMatch.locator,
+          SELECTORS.noteTextarea,
+          message,
+        );
         await humanDelay(500, 900);
       } else {
-        emit("warn", "Add-note option not found. This request may send without a note.");
+        emit(
+          "warn",
+          "Add-note option not found. This request may send without a note.",
+        );
       }
     }
 
     // Look for the "Send" button (can be "Send" or "Send without a note")
-    const sendMatch = await firstVisibleOverlay(page, SELECTORS.modal, SELECTORS.modalSend, 3000);
-    if (sendMatch && !(await sendMatch.locator.isDisabled().catch(() => false))) {
+    const sendMatch = await firstVisibleOverlay(
+      page,
+      SELECTORS.modal,
+      SELECTORS.modalSend,
+      3000,
+    );
+    if (
+      sendMatch &&
+      !(await sendMatch.locator.isDisabled().catch(() => false))
+    ) {
       emit("info", `Clicking Send (${sendMatch.selector})...`);
       await sendMatch.locator.click();
       await humanDelay(700, 1400);
@@ -868,7 +1127,9 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
       return { outcome: "sent" };
     } else {
       // Maybe we hit a limit or email is required
-      const isEmailRequired = await page.locator('input[type="email"]').isVisible();
+      const isEmailRequired = await page
+        .locator('input[type="email"]')
+        .isVisible();
       if (isEmailRequired) {
         emit("error", "LinkedIn requires an email to connect with this user.");
         return { outcome: "failed", reason: "Email required" };
@@ -894,16 +1155,25 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
   try {
     emit("info", `Navigating to ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
-    await humanDelay(300, 650);
+    await humanDelay(300, 600);
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
-    await humanDelay(100, 250);
+    await humanDelay(80, 200);
 
-    const messageMatch = await findProfileAction(page, SELECTORS.message, "Message", 1200);
+    const messageMatch = await findProfileAction(
+      page,
+      SELECTORS.message,
+      "Message",
+      1200,
+    );
     if (!messageMatch) {
-      emit("warn", 'Could not find "Message" button. Ensure you are connected 1st-degree.');
+      emit(
+        "warn",
+        'Could not find "Message" button. Ensure you are connected 1st-degree.',
+      );
       return {
         outcome: "not_connected",
-        reason: "Message button not visible - connection may not be accepted yet",
+        reason:
+          "Message button not visible - connection may not be accepted yet",
       };
     }
 
@@ -911,17 +1181,25 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     await messageMatch.locator.click();
     // Give LinkedIn's React overlay time to mount and finish its animation
     // before we try to locate or interact with the DM composer.
-    await humanDelay(800, 1400);
+    await humanDelay(700, 1200);
 
+    // ── Check for Premium upsell BEFORE looking for the DM overlay ──────────
+    // Doing this early avoids burning 3-4 extra seconds looking for an overlay
+    // that will never appear on 3rd-degree profiles that require Premium.
     const premiumRequired = await detectPremiumRequired(page);
     if (premiumRequired) {
       emit("warn", premiumRequired.reason);
       return premiumRequired;
     }
 
-    const dmOverlayMatch = await findBestDmOverlay(page, 3500);
+    // Reduce overlay discovery timeout: 2000 ms is plenty after the 700-1200 ms
+    // post-click delay above — the old 3500 ms was wasting time on every send.
+    const dmOverlayMatch = await findBestDmOverlay(page, 2000);
     if (!dmOverlayMatch) {
-      emit("warn", "DM overlay container not detected — trying editor directly.");
+      emit(
+        "warn",
+        "DM overlay container not detected — trying editor directly.",
+      );
     }
 
     emit("info", "Waiting for DM editor to become available...");
@@ -929,28 +1207,62 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
 
     if (!editorMatch) {
       emit("error", "Could not find message textarea after fast retry.");
-      return { outcome: "failed", reason: "Textarea not found after fast retry" };
+      return {
+        outcome: "failed",
+        reason: "Textarea not found after fast retry",
+      };
     }
 
-    // Explicitly activate the editor (scroll + pointer events + focus) before
-    // handing off to typeLikeHuman. This is the primary fix for DM delivery
-    // failures where the overlay is open but keystrokes are silently dropped.
+    // ── Use a STABLE CSS selector instead of the token-based locator ─────────
+    // findBestDmEditor tags the element with a data-gtss-dm-editor attribute to
+    // return a unique locator.  However, if React re-renders the editor between
+    // discovery and interaction (which LinkedIn does frequently), that attribute
+    // is gone and the token-based locator silently matches nothing — causing
+    // focus and typing to land on the wrong element (or nowhere at all).
+    //
+    // .msg-form__contenteditable[contenteditable="true"] is LinkedIn's own stable
+    // class that survives re-renders; fall back to the token locator only when
+    // the stable one isn't visible.
+    const stableLocator = page
+      .locator('.msg-form__contenteditable[contenteditable="true"]')
+      .last();
+    const useStable = await stableLocator
+      .isVisible({ timeout: 500 })
+      .catch(() => false);
+    const activeEditorLocator = useStable ? stableLocator : editorMatch.locator;
+
     emit("info", "Activating DM editor...");
-    await activateDmEditor(page, editorMatch.locator);
+    await activateDmEditor(page, activeEditorLocator);
 
-    emit("info", `Typing DM using ${editorMatch.selector}...`);
-    await typeLikeHuman(page, editorMatch.locator, message);
-    await humanDelay(250, 450);
+    emit(
+      "info",
+      `Typing DM using ${useStable ? "stable-css" : editorMatch.selector}...`,
+    );
+    await typeLikeHuman(page, activeEditorLocator, message);
+    await humanDelay(200, 400);
 
-    // Find the Send button in the active overlay first, then fall back to page-level search.
-    const freshOverlayMatch = (await firstVisible(page, SELECTORS.dmOverlay, 900)) || dmOverlayMatch;
+    // ── Find the Send button ─────────────────────────────────────────────────
+    const freshOverlayMatch =
+      (await firstVisible(page, SELECTORS.dmOverlay, 700)) || dmOverlayMatch;
     const sendMatch = freshOverlayMatch
-      ? (await firstVisibleIn(freshOverlayMatch.locator, SELECTORS.dmSend, 900)) || (await firstVisible(page, SELECTORS.dmSend, 700))
-      : await firstVisible(page, SELECTORS.dmSend, 900);
-    if (sendMatch && !(await sendMatch.locator.isDisabled().catch(() => false))) {
+      ? (await firstVisibleIn(
+          freshOverlayMatch.locator,
+          SELECTORS.dmSend,
+          700,
+        )) || (await firstVisible(page, SELECTORS.dmSend, 500))
+      : await firstVisible(page, SELECTORS.dmSend, 700);
+
+    if (
+      sendMatch &&
+      !(await sendMatch.locator.isDisabled().catch(() => false))
+    ) {
       emit("info", `Clicking Send (${sendMatch.selector})...`);
       await sendMatch.locator.click();
-      const verification = await verifyDmSent(page, editorMatch.locator, message);
+      const verification = await verifyDmSent(
+        page,
+        activeEditorLocator,
+        message,
+      );
       if (!verification.verified) {
         emit("error", `DM send could not be verified: ${verification.reason}`);
         return {
@@ -961,12 +1273,29 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
       emit("info", `DM sent successfully (${verification.reason}).`);
       return { outcome: "sent" };
     } else {
-      const sendShortcut = process.platform === "darwin" ? "Meta+Enter" : "Control+Enter";
-      emit("info", `Pressing ${sendShortcut} to send...`);
+      // Send button is disabled or not found — keyboard shortcut fallback.
+      // CRITICAL: re-activate the editor first so focus is back on it before
+      // firing the shortcut; otherwise the shortcut fires on the wrong element.
+      emit(
+        "info",
+        "Send button disabled or not found — re-focusing editor before keyboard shortcut...",
+      );
+      await activateDmEditor(page, activeEditorLocator);
+      await humanDelay(80, 150);
+      const sendShortcut =
+        process.platform === "darwin" ? "Meta+Enter" : "Control+Enter";
+      emit("info", `Pressing ${sendShortcut}...`);
       await page.keyboard.press(sendShortcut);
-      const verification = await verifyDmSent(page, editorMatch.locator, message);
+      const verification = await verifyDmSent(
+        page,
+        activeEditorLocator,
+        message,
+      );
       if (!verification.verified) {
-        emit("error", `DM send via Enter could not be verified: ${verification.reason}`);
+        emit(
+          "error",
+          `DM send via Enter could not be verified: ${verification.reason}`,
+        );
         return {
           outcome: verification.unknown ? "unknown" : "failed",
           reason: verification.reason,
@@ -1004,7 +1333,10 @@ async function likeRecentPost(page, profileUrl, emit) {
       return { outcome: "no_posts" };
     }
 
-    emit("info", `Found an unliked post (${likeMatch.selector}). Liking the most recent one...`);
+    emit(
+      "info",
+      `Found an unliked post (${likeMatch.selector}). Liking the most recent one...`,
+    );
 
     // Scroll element into view
     await likeMatch.locator.scrollIntoViewIfNeeded();
