@@ -4,6 +4,15 @@ const { generateTextViaGeminiWeb } = require("../automation/geminiWeb");
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_RETRIES_PER_MODEL = 2;
 
+function cleanGeminiText(text) {
+  return String(text || "")
+    .trim()
+    .replace(/^```(?:json|text)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .replace(/^["']|["']$/g, "")
+    .trim();
+}
+
 /**
  * Calls the Gemini API with fallback models.
  * @param {string} prompt The text prompt to send to Gemini.
@@ -79,11 +88,7 @@ async function callGeminiTextViaApi(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS } =
         const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!rawText) throw new Error("Empty response from Gemini API");
 
-        let cleaned = rawText.trim();
-        cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-        cleaned = cleaned.replace(/^["']|["']$/g, "");
-
-        return { text: cleaned.trim(), source: "api", model };
+        return { text: cleanGeminiText(rawText), source: "api", model };
       } catch (err) {
         clearTimeout(timer);
 
@@ -140,7 +145,7 @@ async function callGeminiText(prompt, options = {}) {
       });
     });
     logger.info("GEMINI", "Text generated via Gemini Web fallback");
-    return { text: String(text || "").trim(), source: "web" };
+    return { text: cleanGeminiText(text), source: "web" };
   }
 }
 
@@ -154,5 +159,6 @@ function unwrapGeminiText(result) {
 module.exports = {
   callGeminiText,
   callGeminiTextViaApi,
+  cleanGeminiText,
   unwrapGeminiText,
 };

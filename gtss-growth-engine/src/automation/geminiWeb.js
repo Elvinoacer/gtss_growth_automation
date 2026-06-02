@@ -53,8 +53,138 @@ const SELECTORS = {
   ],
   responseText:
     'message-turn .model-response-text, message-turn [data-test-id="response-text"], .model-response-text, .response-container',
+  modelTurns: "message-turn, model-response",
+  copyButtons: [
+    'button[aria-label*="Copy" i]',
+    '[role="button"][aria-label*="Copy" i]',
+    'button:has-text("Copy")',
+    '[role="button"]:has-text("Copy")',
+  ],
   stopButton: 'button[aria-label*="Stop" i], button:has-text("Stop")',
 };
+
+function cleanGeminiResponseText(value) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function readModelTurnTexts(page) {
+  return page
+    .locator(SELECTORS.modelTurns)
+    .evaluateAll((elements) => {
+      const copySelector =
+        'button[aria-label*="Copy" i], [role="button"][aria-label*="Copy" i], button';
+
+      return elements
+        .map((element) => {
+          const modelText =
+            element.querySelector?.(
+              '.model-response-text, [data-test-id="response-text"], message-content, markdown',
+            ) || element;
+          const text = (modelText.innerText || modelText.textContent || "").trim();
+          const hasCopyAction = Array.from(
+            element.querySelectorAll?.(copySelector) || [],
+          ).some((button) =>
+            /copy/i.test(
+              `${button.getAttribute("aria-label") || ""} ${button.textContent || ""}`,
+            ),
+          );
+          const hasModelSignal =
+            element.matches?.("model-response, .model-response-text") ||
+            Boolean(
+              element.querySelector?.(
+                '.model-response-text, [data-test-id="response-text"]',
+              ),
+            ) ||
+            hasCopyAction;
+
+          return hasModelSignal && text ? text : "";
+        })
+        .filter(Boolean);
+    })
+    .catch(() => []);
+}
+
+async function readResponseTexts(page) {
+  const modelTurnTexts = await readModelTurnTexts(page);
+  if (modelTurnTexts.length > 0) {
+    return modelTurnTexts.map(cleanGeminiResponseText).filter(Boolean);
+  }
+
+  return page
+    .locator(SELECTORS.responseText)
+    .evaluateAll((elements) =>
+      elements
+        .map((element) => (element.innerText || element.textContent || "").trim())
+        .filter(Boolean),
+    )
+    .catch(() => []);
+}
+
+function pickCurrentResponseText(texts, beforeTexts) {
+  if (!texts.length) return "";
+
+  if (texts.length > beforeTexts.length) {
+    return texts.slice(beforeTexts.length).join("\n\n").trim();
+  }
+
+  const latest = texts[texts.length - 1] || "";
+  const previousLatest = beforeTexts[beforeTexts.length - 1] || "";
+  if (latest && latest !== previousLatest) return latest;
+
+  return "";
+}
+
+async function tryCopyLatestGeminiResponse(page, emit) {
+  await page
+    .context()
+    .grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: "https://gemini.google.com",
+    })
+    .catch(() => {});
+
+  const turns = page.locator(SELECTORS.modelTurns);
+  const count = await turns.count().catch(() => 0);
+
+  for (let index = count - 1; index >= 0; index -= 1) {
+    const turn = turns.nth(index);
+    const turnText = cleanGeminiResponseText(
+      await turn.innerText().catch(() => ""),
+    );
+    if (!turnText) continue;
+
+    for (const selector of SELECTORS.copyButtons) {
+      const buttons = turn.locator(selector);
+      const buttonCount = await buttons.count().catch(() => 0);
+      for (let buttonIndex = buttonCount - 1; buttonIndex >= 0; buttonIndex -= 1) {
+        const button = buttons.nth(buttonIndex);
+        if (!(await button.isVisible().catch(() => false))) continue;
+
+        try {
+          await button.click({ timeout: 5000 });
+          await page.waitForTimeout(500);
+          const copied = cleanGeminiResponseText(
+            await page.evaluate(() => navigator.clipboard.readText()),
+          );
+          if (copied) {
+            emit("done", "Copied Gemini response from the response toolbar.");
+            return copied;
+          }
+        } catch (error) {
+          emit(
+            "warn",
+            `Gemini copy button was visible but clipboard read failed; falling back to page text. ${error.message}`,
+          );
+        }
+      }
+    }
+  }
+
+  return "";
+}
 
 async function typeGeminiPrompt(page, inputLocator, prompt) {
   await inputLocator.click();
@@ -105,24 +235,27 @@ async function waitForGeminiResponseText(page, responsesBefore, emit, timeoutMs 
   const deadline = Date.now() + timeoutMs;
   let lastText = "";
   let stableSince = null;
+  const configuredStableMs = Number(process.env.GEMINI_TEXT_STABLE_MS);
+  const stableMs =
+    Number.isFinite(configuredStableMs) && configuredStableMs > 0
+      ? configuredStableMs
+      : 8_000;
 
   while (Date.now() < deadline) {
-    const responses = page.locator(SELECTORS.responseText);
-    const count = await responses.count().catch(() => 0);
-    const newestIndex = count > responsesBefore ? count - 1 : count - 1;
+    const texts = await readResponseTexts(page);
+    const cleaned = pickCurrentResponseText(texts, responsesBefore);
 
-    if (newestIndex >= 0) {
-      const raw = await responses.nth(newestIndex).innerText().catch(() => "");
-      const cleaned = String(raw || "").trim();
-      if (cleaned && cleaned !== lastText) {
-        lastText = cleaned;
-        stableSince = Date.now();
-      } else if (cleaned && stableSince && Date.now() - stableSince >= 2500) {
-        const stopVisible = await firstVisibleLocator(page, [SELECTORS.stopButton], 250);
-        if (!stopVisible) {
-          emit("done", "Text response captured after Gemini finished writing.");
-          return cleaned;
-        }
+    if (cleaned && cleaned !== lastText) {
+      lastText = cleaned;
+      stableSince = Date.now();
+    } else if (cleaned && stableSince && Date.now() - stableSince >= stableMs) {
+      const stopVisible = await firstVisibleLocator(page, [SELECTORS.stopButton], 250);
+      if (!stopVisible) {
+        const copied = await tryCopyLatestGeminiResponse(page, emit);
+        if (copied) return copied;
+
+        emit("done", "Text response captured after Gemini finished writing.");
+        return cleaned;
       }
     }
 
@@ -135,6 +268,25 @@ async function waitForGeminiResponseText(page, responsesBefore, emit, timeoutMs 
   }
 
   throw new Error("Timed out waiting for Gemini Web text response");
+}
+
+async function waitForNewGeminiImage(page, imgLocator, imagesBefore, emit, timeoutMs = 180_000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const count = await imgLocator.count().catch(() => 0);
+    for (let index = imagesBefore; index < count; index += 1) {
+      const candidate = imgLocator.nth(index);
+      if (await candidate.isVisible().catch(() => false)) {
+        emit("image_detected", "New Gemini image detected.");
+        return candidate;
+      }
+    }
+
+    await page.waitForTimeout(1000);
+  }
+
+  throw new Error("Timed out waiting for new Gemini Web image response");
 }
 
 function safeDownloadName(value) {
@@ -262,6 +414,11 @@ async function generateImageViaGeminiWeb(prompt, emit = () => {}) {
     await humanDelay(800, 1500);
     emit("prompt_typed", "Prompt typed.");
 
+    const imgLocator = page
+      .locator(SELECTORS.responseImage)
+      .or(page.locator(SELECTORS.fallbackImage));
+    const imagesBefore = await imgLocator.count().catch(() => 0);
+
     // 6. Submit
     emit("prompt_submitted", "Submitting prompt...");
     const sendBtn = page.locator(SELECTORS.sendBtn).first();
@@ -273,18 +430,17 @@ async function generateImageViaGeminiWeb(prompt, emit = () => {}) {
 
     // 7. Wait for the image to appear in the response (up to 90 s)
     emit("image_waiting", "Waiting for image generation...");
-    const imgLocator = page
-      .locator(SELECTORS.responseImage)
-      .or(page.locator(SELECTORS.fallbackImage));
-
-    await imgLocator.first().waitFor({ state: "visible", timeout: 90_000 });
+    const image = await waitForNewGeminiImage(
+      page,
+      imgLocator,
+      imagesBefore,
+      emit,
+    );
     await humanDelay(1000, 2000); // let any lazy-loading finish
 
     // 8. Download the image through Gemini's own UI controls.
     // Blob URLs in Gemini are guarded by the app runtime, so fetch(src) is not
     // reliable. The visible Download control gives us the original file.
-    emit("image_detected", "Image detected.");
-    const image = imgLocator.first();
     const { filePath, fileName } = await downloadImageFromGeminiUi(
       page,
       image,
@@ -336,7 +492,7 @@ async function generateTextViaGeminiWeb(prompt, emit = () => {}) {
     await inputLocator.click();
     await humanDelay(500, 900);
 
-    const responsesBefore = await page.locator(SELECTORS.responseText).count().catch(() => 0);
+    const responsesBefore = await readResponseTexts(page);
     emit("prompt_typing", "Typing prompt into Gemini Web...");
     await typeGeminiPrompt(page, inputLocator, prompt);
     await humanDelay(800, 1500);
@@ -350,7 +506,7 @@ async function generateTextViaGeminiWeb(prompt, emit = () => {}) {
     }
 
     emit("text_waiting", "Waiting for Gemini text response to finish...");
-    return waitForGeminiResponseText(page, responsesBefore, emit);
+    return await waitForGeminiResponseText(page, responsesBefore, emit);
   } finally {
     await closeBrowserContext("gemini", browserState);
   }

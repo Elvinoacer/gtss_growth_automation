@@ -14,6 +14,20 @@ const BATCH_SIZE = 10;
 const BATCH_DELAY_MS = 2000;
 const activeQualJobs = new Set();
 
+function parseGeminiJsonObject(rawText) {
+  const raw = String(rawText || "").trim();
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    const firstBrace = raw.indexOf("{");
+    const lastBrace = raw.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      return JSON.parse(raw.slice(firstBrace, lastBrace + 1));
+    }
+    throw _;
+  }
+}
+
 function stopQualificationJob(jobId) {
   activeQualJobs.add(String(jobId));
 }
@@ -141,7 +155,7 @@ async function scoreLead(lead, options = {}) {
 
     let result;
     try {
-      result = JSON.parse(rawResult);
+      result = parseGeminiJsonObject(rawResult);
     } catch (err) {
       logger.error("GEMINI", "Failed to parse Gemini message content as JSON", {
         raw: rawResult,
