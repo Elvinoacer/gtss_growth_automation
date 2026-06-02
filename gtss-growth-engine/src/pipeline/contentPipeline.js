@@ -25,6 +25,7 @@ const { logActivity } = require("../services/auditService");
 const { withRetry } = require("../utils/retryHelper");
 const jobRegistry = require("../jobs/jobRegistry");
 const logger = require("../utils/logger");
+const { enqueuePipelineRun } = require("./pipelineQueue");
 
 const UPLOADS_DIR = path.resolve(__dirname, "../../public/uploads");
 
@@ -106,7 +107,7 @@ function throwIfAborted(signal) {
  * @param {number}   [config.max_posts_per_run] - How many to generate (default 1)
  * @returns {Promise<{ success: boolean, postId?: number, error?: string }>}
  */
-async function runContentPipeline(config = {}) {
+async function runContentPipelineNow(config = {}) {
   const {
     platforms: rawPlatforms = ["instagram", "linkedin"],
     topic,
@@ -376,6 +377,23 @@ async function runContentPipeline(config = {}) {
   }
 
   return results.length === 1 ? results[0] : { runs: results };
+}
+
+async function runContentPipeline(config = {}) {
+  return enqueuePipelineRun(
+    "content",
+    `content:${config.trigger || "manual"}:${Date.now()}`,
+    () => runContentPipelineNow(config),
+    {
+      onQueued: ({ position, activeRun }) => {
+        logger.info(
+          "CONTENT-PIPELINE",
+          `Content pipeline queued at position ${position}; waiting for active run to finish`,
+          { activeRun },
+        );
+      },
+    },
+  );
 }
 
 module.exports = { runContentPipeline };

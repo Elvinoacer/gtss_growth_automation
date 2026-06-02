@@ -197,6 +197,110 @@ async function firstVisibleInMainProfileArea(page, selectors, timeout = 1500) {
   return null;
 }
 
+
+function normalizeText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+async function quickVisibleProfileAction(page, action, timeout = 900) {
+  const actionText = normalizeText(action);
+  const token = `gtss-${actionText}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const result = await page
+      .evaluate(
+        ({ actionText, token }) => {
+          const viewportWidth = window.innerWidth || 1366;
+          const viewportHeight = window.innerHeight || 768;
+          const maxX = Math.max(760, viewportWidth * 0.72);
+          const maxY = Math.max(620, viewportHeight * 0.82);
+          const actionSelectors = [
+            "main .pv-top-card button",
+            "main .pv-top-card a",
+            "main section button",
+            "main section a",
+            "main button",
+            "main a",
+          ];
+          const seen = new Set();
+          const candidates = [];
+
+          for (const selector of actionSelectors) {
+            for (const el of document.querySelectorAll(selector)) {
+              if (seen.has(el)) continue;
+              seen.add(el);
+
+              const rect = el.getBoundingClientRect();
+              const style = window.getComputedStyle(el);
+              if (
+                rect.width < 8 ||
+                rect.height < 8 ||
+                rect.x < 0 ||
+                rect.x > maxX ||
+                rect.y < 55 ||
+                rect.y > maxY ||
+                style.visibility === "hidden" ||
+                style.display === "none" ||
+                el.disabled ||
+                el.getAttribute("aria-disabled") === "true"
+              ) {
+                continue;
+              }
+
+              const label = [
+                el.getAttribute("aria-label"),
+                el.getAttribute("title"),
+                el.getAttribute("data-control-name"),
+                el.textContent,
+              ]
+                .filter(Boolean)
+                .join(" ")
+                .replace(/\s+/g, " ")
+                .trim()
+                .toLowerCase();
+              const href = String(el.getAttribute("href") || "").toLowerCase();
+              const isMessageLink = actionText === "message" && href.includes("/messaging");
+
+              if (!label.includes(actionText) && !isMessageLink) continue;
+
+              const topCard = el.closest(".pv-top-card, .ph5.pb5, section:has(h1)");
+              candidates.push({ el, score: (topCard ? 100 : 0) - rect.y / 10 - rect.x / 100 });
+            }
+          }
+
+          candidates.sort((a, b) => b.score - a.score);
+          const best = candidates[0]?.el;
+          if (!best) return null;
+          best.setAttribute("data-gtss-profile-action", token);
+          return {
+            selector: `[data-gtss-profile-action="${token}"]`,
+            label: (best.getAttribute("aria-label") || best.textContent || best.href || "").replace(/\s+/g, " ").trim(),
+          };
+        },
+        { actionText, token },
+      )
+      .catch(() => null);
+
+    if (result?.selector) {
+      const locator = page.locator(result.selector).first();
+      if (await locator.isVisible({ timeout: 150 }).catch(() => false)) {
+        return { locator, selector: `quick:${actionText}:${result.label || result.selector}` };
+      }
+    }
+
+    await humanDelay(80, 140);
+  }
+
+  return null;
+}
+
+async function findProfileAction(page, selectors, actionName, timeout = 1200) {
+  const quick = await quickVisibleProfileAction(page, actionName, Math.min(timeout, 900));
+  if (quick) return quick;
+  return firstVisibleOnProfile(page, selectors, timeout);
+}
+
 async function firstVisibleOverlay(page, overlaySelectors, selectors, timeout = 1500) {
   const overlay = await firstVisible(page, overlaySelectors, timeout);
   if (!overlay) return null;
@@ -354,21 +458,59 @@ async function verifyDmSent(page, editorTarget, message) {
   };
 }
 
+async function getEditableText(locator) {
+  return locator
+    .evaluate((el) => {
+      const tagName = String(el.tagName || "").toLowerCase();
+      if (tagName === "textarea" || tagName === "input") return String(el.value || "");
+      return String(el.textContent || el.innerText || "");
+    })
+    .catch(() => "");
+}
+
 /**
- * Type a string character by character with human-like delays
+ * Fast, reliable message entry for LinkedIn's composer.
+ * Playwright fill() handles most textarea/contenteditable cases; keyboard.insertText
+ * is the fallback that still fires real input events without slow per-character delays.
  */
 async function typeLikeHuman(page, locatorOrSelector, text) {
-  // Accept both a locator object and a CSS selector string
   const locator = typeof locatorOrSelector === "string" ? page.locator(locatorOrSelector).first() : locatorOrSelector;
+  const expected = String(text || "").trim();
 
-  await locator.scrollIntoViewIfNeeded();
-  await locator.click(); // Places cursor in contenteditable
-  await humanDelay(300, 600);
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  await locator.click({ force: true }).catch(() => {});
+  await locator.focus().catch(() => {});
 
-  for (let i = 0; i < text.length; i++) {
-    await page.keyboard.type(text[i]);
-    const delay = Math.floor(Math.random() * 100) + 50;
-    await humanDelay(delay, delay + 20);
+  await locator.fill(text, { timeout: 1200 }).catch(async () => {
+    await locator.click({ force: true }).catch(() => {});
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+    await page.keyboard.insertText(text).catch(async () => page.keyboard.type(text, { delay: 5 }));
+  });
+
+  let actual = (await getEditableText(locator)).trim();
+  if (!actual.includes(expected)) {
+    await locator.evaluate((el, value) => {
+      const tagName = String(el.tagName || "").toLowerCase();
+      el.focus();
+      if (tagName === "textarea" || tagName === "input") {
+        el.value = value;
+      } else {
+        el.textContent = value;
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }, text);
+    actual = (await getEditableText(locator)).trim();
+  }
+
+  if (!actual.includes(expected)) {
+    throw new Error("LinkedIn message editor did not accept typed text");
   }
 }
 
@@ -417,7 +559,7 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
 
     emit("info", "Page loaded. Locating Connect action...");
 
-    const messageBtnVisible = await isAnyVisibleOnProfile(page, SELECTORS.message);
+    const messageBtnVisible = Boolean(await findProfileAction(page, SELECTORS.message, "Message", 700));
     const isPending = await isAnyVisibleOnProfile(page, SELECTORS.pending);
 
     if (isPending) {
@@ -425,12 +567,12 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
       return { outcome: "already_connected" };
     }
 
-    let connectMatch = await firstVisibleOnProfile(page, SELECTORS.connect);
+    let connectMatch = await findProfileAction(page, SELECTORS.connect, "Connect", 1200);
 
     // Sometimes Connect is hidden under a "More" menu
     if (!connectMatch) {
       emit("info", "Connect action not immediately visible. Checking More menu...");
-      const moreMatch = await firstVisibleOnProfile(page, SELECTORS.more, 1000);
+      const moreMatch = await findProfileAction(page, SELECTORS.more, "More", 800);
       if (moreMatch) {
         await moreMatch.locator.click();
         await humanDelay(1000, 2000);
@@ -527,7 +669,7 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
     await humanDelay(100, 250);
 
-    const messageMatch = await firstVisibleOnProfile(page, SELECTORS.message, 1800);
+    const messageMatch = await findProfileAction(page, SELECTORS.message, "Message", 1200);
     if (!messageMatch) {
       emit("warn", 'Could not find "Message" button. Ensure you are connected 1st-degree.');
       return {
@@ -563,8 +705,11 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     await typeLikeHuman(page, editorMatch.locator, message);
     await humanDelay(150, 300);
 
-    // Find the Send button
-    const sendMatch = dmOverlayMatch ? await firstVisibleIn(dmOverlayMatch.locator, SELECTORS.dmSend, 1200) : null;
+    // Find the Send button in the active overlay first, then fall back to page-level search.
+    const freshOverlayMatch = (await firstVisible(page, SELECTORS.dmOverlay, 900)) || dmOverlayMatch;
+    const sendMatch = freshOverlayMatch
+      ? (await firstVisibleIn(freshOverlayMatch.locator, SELECTORS.dmSend, 900)) || (await firstVisible(page, SELECTORS.dmSend, 700))
+      : await firstVisible(page, SELECTORS.dmSend, 900);
     if (sendMatch && !(await sendMatch.locator.isDisabled().catch(() => false))) {
       emit("info", `Clicking Send (${sendMatch.selector})...`);
       await sendMatch.locator.click();
