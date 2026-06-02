@@ -23,6 +23,7 @@ const { logActivity } = require('../services/auditService');
 const router = express.Router();
 
 const ALLOWED_CONTENT_PLATFORMS = new Set(['instagram', 'linkedin', 'x', 'facebook']);
+const ALLOWED_OUTREACH_PLATFORMS = new Set(['instagram', 'linkedin', 'x', 'facebook']);
 
 function parseJsonObject(value, fallback = {}) {
   try {
@@ -130,6 +131,19 @@ function normalizeLimits(id, limits) {
         .filter((platform) => ALLOWED_CONTENT_PLATFORMS.has(platform));
       if (next.platforms.length === 0) {
         throw new Error('Select at least one content platform');
+      }
+    }
+  }
+  if (id === 'outreach') {
+    if (next.platforms !== undefined) {
+      if (!Array.isArray(next.platforms)) {
+        throw new Error('platforms must be an array');
+      }
+      next.platforms = next.platforms
+        .map((platform) => String(platform).trim().toLowerCase())
+        .filter((platform) => ALLOWED_OUTREACH_PLATFORMS.has(platform));
+      if (next.platforms.length === 0) {
+        throw new Error('Select at least one outreach platform');
       }
     }
   }

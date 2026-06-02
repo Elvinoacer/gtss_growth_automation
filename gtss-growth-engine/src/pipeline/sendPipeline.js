@@ -7,7 +7,6 @@
  */
 
 const crypto = require('crypto');
-const { getDb } = require('../db/database');
 const {
   enqueueActionQueue,
   getQueuedActions,
@@ -29,11 +28,18 @@ const logger = require('../utils/logger');
  * @param {Function} emit - Event emitter for pipeline SSE stream
  * @returns {Promise<{sent: number, failed: number, skipped: number, limitReached: boolean}>}
  */
-async function runSendStage(pipelineRunId, emit, maxDmsPerRun) {
-  const db = getDb();
-
+async function runSendStage(
+  pipelineRunId,
+  emit,
+  maxDmsPerRun,
+  platforms = [],
+  maxConnectionsPerRun,
+) {
+  const selectedPlatforms = Array.isArray(platforms)
+    ? platforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean)
+    : [];
   // ── 1. Check the queue ──────────────────────────────────────────────────
-  const queue = getQueuedActions();
+  const queue = getQueuedActions({ platforms: selectedPlatforms });
 
   if (queue.length === 0) {
     emit({ type: 'info', message: 'No approved messages ready to send.' });
@@ -98,34 +104,27 @@ async function runSendStage(pipelineRunId, emit, maxDmsPerRun) {
   const jobId = crypto.randomUUID();
 
   try {
-    await enqueueActionQueue(jobId, null, { maxDmsPerRun });
+    const summary = await enqueueActionQueue(jobId, null, {
+      maxDmsPerRun,
+      maxConnectionsPerRun,
+      platforms: selectedPlatforms,
+    });
+    const sent = summary?.successes || 0;
+    const failed = summary?.failures || 0;
+    const skipped = summary?.skipped || 0;
+
+    emit({
+      type: 'complete',
+      message: `Send stage complete: ${sent} sent, ${failed} failed, ${skipped} skipped`,
+    });
+
+    return { sent, failed, skipped, limitReached };
   } catch (err) {
     logger.error('PIPELINE', 'Executor error during send stage', { error: err.message });
     emit({ type: 'error', message: `Executor error: ${err.message}` });
   }
 
-  // ── 4. Collect results from the DB ──────────────────────────────────────
-  // The executor has already recorded all outcomes. We query the results
-  // from daily_actions to build our summary.
-  const todayActions = db.prepare(`
-    SELECT outcome, COUNT(*) as count
-    FROM daily_actions
-    WHERE DATE(performed_at) = DATE('now', 'localtime')
-    GROUP BY outcome
-  `).all();
-
-  const sent = todayActions.find(a => a.outcome === 'sent')?.count || 0;
-  const failed = todayActions
-    .filter(a => a.outcome !== 'sent' && a.outcome !== 'skipped')
-    .reduce((sum, a) => sum + a.count, 0);
-  const skipped = todayActions.find(a => a.outcome === 'skipped')?.count || 0;
-
-  emit({
-    type: 'complete',
-    message: `Send stage complete: ${sent} sent, ${failed} failed, ${skipped} skipped`,
-  });
-
-  return { sent, failed, skipped, limitReached };
+  return { sent: 0, failed: 1, skipped: 0, limitReached };
 }
 
 module.exports = {

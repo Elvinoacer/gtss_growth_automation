@@ -145,7 +145,7 @@ router.get("/api/automation/history", (req, res) => {
     const history = db
       .prepare(
         `
-      SELECT d.id, d.platform, d.action_type, d.performed_at, d.outcome,
+      SELECT d.id, d.platform, d.action_type, d.performed_at, d.outcome, d.reason,
              l.name AS lead_name
       FROM daily_actions d
       LEFT JOIN leads l ON d.lead_id = l.id
@@ -395,6 +395,15 @@ router.post("/api/automation/open-browser/:platform", async (req, res) => {
 router.post("/api/pipeline/run", async (req, res) => {
   const { mode, stages } = req.body || {};
   const options = {};
+  const db = getDb();
+  const row = db
+    .prepare("SELECT limits_json FROM pipeline_schedules WHERE id = 'outreach'")
+    .get();
+  try {
+    options.limits = JSON.parse(row?.limits_json || "{}");
+  } catch (_) {
+    options.limits = {};
+  }
 
   if (mode === 'ai' || mode === 'manual') {
     options.mode = mode;

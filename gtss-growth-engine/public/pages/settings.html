@@ -909,6 +909,12 @@
               <label class="field">Manual Qualification Score
                 <input id="qualification-manual-score" type="number" min="0" max="100" placeholder="75" />
               </label>
+              <label class="field">Max DMs per Run
+                <input id="pipeline-max-dms-per-run" type="number" min="1" max="500" placeholder="20" />
+              </label>
+              <label class="field">Max Connections per Run
+                <input id="pipeline-max-connections-per-run" type="number" min="1" max="500" placeholder="15" />
+              </label>
             </div>
 
             <div class="form-row">
@@ -925,6 +931,11 @@
                   <option value="dm_first">Direct Message First (DM first, follow if failed/needed)</option>
                 </select>
               </label>
+            </div>
+
+            <div>
+              <h3 style="margin: 0 0 12px">Outreach Platforms</h3>
+              <div id="outreach-platforms-list" class="checkbox-list"></div>
             </div>
           </div>
 

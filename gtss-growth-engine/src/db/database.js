@@ -475,6 +475,9 @@ function initializeSchema(database) {
         "ALTER TABLE daily_actions ADD COLUMN campaign_id INTEGER REFERENCES campaigns(id)",
       );
     }
+    if (!cols.includes("reason")) {
+      database.exec("ALTER TABLE daily_actions ADD COLUMN reason TEXT");
+    }
   } catch (_) {}
 
   try {
@@ -684,7 +687,7 @@ function seedDefaultPipelineSchedules(database) {
       'Discovery → Qualification → Message Generation → DM Send',
       0,
       '0 8 * * *',
-      '{"max_leads_per_keyword": 10, "max_dms_per_run": 20, "max_connections_per_run": 15}'
+      '{"platforms": ["linkedin", "x"], "max_leads_per_keyword": 10, "max_dms_per_run": 20, "max_connections_per_run": 15}'
     )
   `).run();
 
@@ -735,18 +738,16 @@ function getDailyActionCount(platform, actionType) {
 
 function isWithinLimit(platform, actionType) {
   const normalizedActionType = normalizeActionType(actionType);
+  const platformLimits = getDailyLimits()[platform] || {};
 
   let limit;
-  // First, check limits.js config (especially for Instagram as requested)
-  if (
+  if (typeof platformLimits[normalizedActionType] === "number") {
+    limit = platformLimits[normalizedActionType];
+  } else if (
     limits[platform] &&
     typeof limits[platform][normalizedActionType] === "number"
   ) {
     limit = limits[platform][normalizedActionType];
-  } else {
-    // Fall back to database settings limits
-    const platformLimits = getDailyLimits()[platform] || {};
-    limit = platformLimits[normalizedActionType];
   }
 
   if (typeof limit !== "number") {
@@ -797,13 +798,14 @@ function increment_action_count(
   actionType,
   leadId = null,
   outcome = "sent",
+  reason = null,
 ) {
   const normalizedActionType = normalizeActionType(actionType);
   const insert = db.prepare(
-    `INSERT INTO daily_actions (platform, action_type, lead_id, outcome, performed_at)
-     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+    `INSERT INTO daily_actions (platform, action_type, lead_id, outcome, reason, performed_at)
+     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
   );
-  insert.run(platform, normalizedActionType, leadId, outcome);
+  insert.run(platform, normalizedActionType, leadId, outcome, reason);
 }
 
 function getDb() {

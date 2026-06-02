@@ -96,7 +96,8 @@ CREATE TABLE IF NOT EXISTS daily_actions (
   action_type TEXT,
   performed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   lead_id INTEGER REFERENCES leads(id),
-  outcome TEXT
+  outcome TEXT,
+  reason TEXT
 );
 
 CREATE TABLE IF NOT EXISTS settings (

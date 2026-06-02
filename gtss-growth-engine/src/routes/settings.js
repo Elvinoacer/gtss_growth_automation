@@ -436,8 +436,8 @@ function validateLimits(nextLimits) {
 
     for (const [field, rawValue] of Object.entries(fields)) {
       const value = Number(rawValue);
-      if (!Number.isInteger(value) || value < 1 || value > 200) {
-        return `${platform}.${field} must be an integer between 1 and 200`;
+      if (!Number.isInteger(value) || value < 1 || value > 1000) {
+        return `${platform}.${field} must be an integer between 1 and 1000`;
       }
       nextLimits[platform][field] = value;
     }
@@ -459,64 +459,99 @@ apiRouter.get("/pipeline", (req, res) => {
   const db = getDb();
   const getSettingValue = (key) =>
     db.prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value;
+  const getPipelineLimit = (key, fallback) => {
+    const row = db
+      .prepare("SELECT limits_json FROM pipeline_schedules WHERE id = 'outreach'")
+      .get();
+    try {
+      const limits = JSON.parse(row?.limits_json || "{}");
+      return limits[key] !== undefined ? limits[key] : fallback;
+    } catch (_) {
+      return fallback;
+    }
+  };
   res.json({
-    pipelineMode: process.env.PIPELINE_MODE || "ai",
-    discoveryMode: process.env.DISCOVERY_MODE || "",
-    qualificationMode: process.env.QUALIFICATION_MODE || "",
-    messageMode: process.env.MESSAGE_MODE || "",
-    sendMode: process.env.SEND_MODE || "",
+    pipelineMode: getSettingValue("pipeline_mode") || process.env.PIPELINE_MODE || "ai",
+    discoveryMode: getSettingValue("discovery_mode") || process.env.DISCOVERY_MODE || "",
+    qualificationMode: getSettingValue("qualification_mode") || process.env.QUALIFICATION_MODE || "",
+    messageMode: getSettingValue("message_mode") || process.env.MESSAGE_MODE || "",
+    sendMode: getSettingValue("send_mode") || process.env.SEND_MODE || "",
     qualificationThreshold: pipelineConfig.qualificationThreshold(),
     qualificationManualScore: pipelineConfig.manualQualificationScore(),
     autoApproveVariant: pipelineConfig.autoApproveVariant(),
     pipelineCron: pipelineConfig.pipelineCron(),
+    outreachPlatforms: getPipelineLimit("platforms", ["linkedin", "x"]),
+    maxDmsPerRun: getPipelineLimit("max_dms_per_run", 20),
+    maxConnectionsPerRun: getPipelineLimit("max_connections_per_run", 15),
     xOutreachMode:
-      process.env.X_OUTREACH_MODE ||
       getSettingValue("x_outreach_mode") ||
+      process.env.X_OUTREACH_MODE ||
       "follow_first",
     linkedinOutreachMode:
-      process.env.LINKEDIN_OUTREACH_MODE ||
       getSettingValue("linkedin_outreach_mode") ||
+      process.env.LINKEDIN_OUTREACH_MODE ||
       "connect_first",
   });
 });
 
 apiRouter.patch("/pipeline", (req, res) => {
   const fields = {
-    pipelineMode: "PIPELINE_MODE",
-    discoveryMode: "DISCOVERY_MODE",
-    qualificationMode: "QUALIFICATION_MODE",
-    messageMode: "MESSAGE_MODE",
-    sendMode: "SEND_MODE",
-    qualificationThreshold: "QUALIFICATION_THRESHOLD",
-    qualificationManualScore: "QUALIFICATION_MANUAL_SCORE",
-    autoApproveVariant: "MESSAGE_AUTO_APPROVE_VARIANT",
-    pipelineCron: "PIPELINE_CRON",
-    xOutreachMode: "X_OUTREACH_MODE",
-    linkedinOutreachMode: "LINKEDIN_OUTREACH_MODE",
+    pipelineMode: ["PIPELINE_MODE", "pipeline_mode"],
+    discoveryMode: ["DISCOVERY_MODE", "discovery_mode"],
+    qualificationMode: ["QUALIFICATION_MODE", "qualification_mode"],
+    messageMode: ["MESSAGE_MODE", "message_mode"],
+    sendMode: ["SEND_MODE", "send_mode"],
+    qualificationThreshold: ["QUALIFICATION_THRESHOLD", "qualification_threshold"],
+    qualificationManualScore: ["QUALIFICATION_MANUAL_SCORE", "qualification_manual_score"],
+    autoApproveVariant: ["MESSAGE_AUTO_APPROVE_VARIANT", "message_auto_approve_variant"],
+    pipelineCron: ["PIPELINE_CRON", "pipeline_cron"],
+    xOutreachMode: ["X_OUTREACH_MODE", "x_outreach_mode"],
+    linkedinOutreachMode: ["LINKEDIN_OUTREACH_MODE", "linkedin_outreach_mode"],
   };
 
   const updated = [];
   const db = getDb();
 
-  for (const [bodyKey, envKey] of Object.entries(fields)) {
+  for (const [bodyKey, [envKey, settingKey]] of Object.entries(fields)) {
     if (req.body[bodyKey] !== undefined) {
       const value = String(req.body[bodyKey]).trim();
       upsertEnvValue(envKey, value);
       process.env[envKey] = value;
-
-      // Synchronize back to the settings table
-      if (bodyKey === "xOutreachMode") {
-        db.prepare(
-          "INSERT INTO settings (key, value) VALUES ('x_outreach_mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        ).run(value);
-      } else if (bodyKey === "linkedinOutreachMode") {
-        db.prepare(
-          "INSERT INTO settings (key, value) VALUES ('linkedin_outreach_mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        ).run(value);
-      }
+      upsertSetting(settingKey, value);
 
       updated.push(bodyKey);
     }
+  }
+
+  const row = db
+    .prepare("SELECT limits_json FROM pipeline_schedules WHERE id = 'outreach'")
+    .get();
+  let limits = {};
+  try {
+    limits = JSON.parse(row?.limits_json || "{}");
+  } catch (_) {}
+
+  if (Array.isArray(req.body.outreachPlatforms)) {
+    const valid = new Set(getPlatformCatalog().keys);
+    limits.platforms = req.body.outreachPlatforms
+      .map((platform) => String(platform).trim().toLowerCase())
+      .filter((platform) => valid.has(platform));
+    updated.push("outreachPlatforms");
+  }
+  if (req.body.maxDmsPerRun !== undefined) {
+    limits.max_dms_per_run = Math.max(1, Math.floor(Number(req.body.maxDmsPerRun) || 1));
+    updated.push("maxDmsPerRun");
+  }
+  if (req.body.maxConnectionsPerRun !== undefined) {
+    limits.max_connections_per_run = Math.max(1, Math.floor(Number(req.body.maxConnectionsPerRun) || 1));
+    updated.push("maxConnectionsPerRun");
+  }
+  if (updated.some((key) => ["outreachPlatforms", "maxDmsPerRun", "maxConnectionsPerRun"].includes(key))) {
+    db.prepare(
+      `UPDATE pipeline_schedules
+       SET limits_json = ?, cron = COALESCE(NULLIF(?, ''), cron), updated_at = CURRENT_TIMESTAMP
+       WHERE id = 'outreach'`,
+    ).run(JSON.stringify(limits), req.body.pipelineCron ? String(req.body.pipelineCron).trim() : "");
   }
 
   if (updated.length === 0) {

@@ -394,10 +394,17 @@ async function generateAllMessages(jobId, productPitch, tone) {
  * @param {Function} emit - Event emitter function
  * @returns {Promise<{generated: number, approved: number}>}
  */
-async function runMessageStage(jobId, emit) {
+async function runMessageStage(jobId, emit, platforms = []) {
   const db = getDb();
   const mode = stageMode("message");
   const variant = autoApproveVariant();
+  const selectedPlatforms = Array.isArray(platforms)
+    ? platforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean)
+    : [];
+  const platformClause =
+    selectedPlatforms.length > 0
+      ? `AND l.platform IN (${selectedPlatforms.map(() => "?").join(",")})`
+      : "";
 
   // Get all qualified leads that don't yet have an approved message
   const leads = db
@@ -406,10 +413,11 @@ async function runMessageStage(jobId, emit) {
     SELECT l.* FROM leads l
     LEFT JOIN messages m ON m.lead_id = l.id AND m.status = 'approved'
     WHERE l.status = 'qualified' AND m.id IS NULL
+    ${platformClause}
     ORDER BY l.lead_score DESC
   `,
     )
-    .all();
+    .all(...selectedPlatforms);
 
   if (leads.length === 0) {
     emit({ type: "info", message: "No qualified leads need messages" });

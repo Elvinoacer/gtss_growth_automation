@@ -298,6 +298,12 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
   const limits = options.limits || {};
   const maxLeadsPerKeyword = limits.max_leads_per_keyword;
   const maxDmsPerRun = limits.max_dms_per_run;
+  const maxConnectionsPerRun = limits.max_connections_per_run;
+  const selectedPlatforms = Array.isArray(limits.platforms)
+    ? limits.platforms
+        .map((platform) => String(platform).trim().toLowerCase())
+        .filter(Boolean)
+    : [];
 
   const pipelineRunId = createPipelineRun(triggerSource);
   if (typeof options.onRunId === "function") options.onRunId(pipelineRunId);
@@ -320,7 +326,7 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
 
   emit({
     type: "start",
-    message: `Pipeline started (mode: ${globalMode}, trigger: ${triggerSource}, stages: ${stagesToRun.join(", ")})`,
+    message: `Pipeline started (mode: ${globalMode}, trigger: ${triggerSource}, stages: ${stagesToRun.join(", ")}${selectedPlatforms.length ? `, platforms: ${selectedPlatforms.join(", ")}` : ""})`,
   });
   logActivity({
     activityType: "pipeline_run",
@@ -329,7 +335,7 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
     actor: triggerSource,
     status: "running",
     summary: `Outreach pipeline #${pipelineRunId} started`,
-    details: { stages: stagesToRun, limits, keywords: options.keywords || [] },
+    details: { stages: stagesToRun, limits, keywords: options.keywords || [], platforms: selectedPlatforms },
   });
 
   try {
@@ -354,6 +360,7 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
               emit,
               maxLeadsPerKeyword,
               options.keywords,
+              selectedPlatforms,
             ),
           signal,
         );
@@ -387,7 +394,7 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
           "outreach",
           pipelineRunId,
           emit,
-          () => runQualificationStage(pipelineRunId, emit),
+          () => runQualificationStage(pipelineRunId, emit, selectedPlatforms),
           signal,
         );
         emit({
@@ -423,7 +430,7 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
           "outreach",
           pipelineRunId,
           emit,
-          () => runMessageStage(pipelineRunId, emit),
+          () => runMessageStage(pipelineRunId, emit, selectedPlatforms),
           signal,
         );
         emit({
@@ -459,7 +466,14 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
           "outreach",
           pipelineRunId,
           emit,
-          () => runSendStage(pipelineRunId, emit, maxDmsPerRun),
+          () =>
+            runSendStage(
+              pipelineRunId,
+              emit,
+              maxDmsPerRun,
+              selectedPlatforms,
+              maxConnectionsPerRun,
+            ),
           signal,
         );
         emit({

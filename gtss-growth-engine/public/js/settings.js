@@ -707,10 +707,50 @@ function applyPipelineConfig(config) {
     config.qualificationThreshold ?? 50;
   document.getElementById("qualification-manual-score").value =
     config.qualificationManualScore ?? 75;
+  const maxDmsInput = document.getElementById("pipeline-max-dms-per-run");
+  if (maxDmsInput) maxDmsInput.value = config.maxDmsPerRun ?? 20;
+  const maxConnectionsInput = document.getElementById(
+    "pipeline-max-connections-per-run",
+  );
+  if (maxConnectionsInput) {
+    maxConnectionsInput.value = config.maxConnectionsPerRun ?? 15;
+  }
   document.getElementById("linkedin-outreach-mode").value =
     config.linkedinOutreachMode || "connect_first";
   document.getElementById("x-outreach-mode").value =
     config.xOutreachMode || "follow_first";
+  renderOutreachPlatforms(config.outreachPlatforms || []);
+}
+
+function renderOutreachPlatforms(selectedPlatforms) {
+  const container = document.getElementById("outreach-platforms-list");
+  if (!container) return;
+  const selected = new Set(
+    (Array.isArray(selectedPlatforms) ? selectedPlatforms : [])
+      .map((platform) => String(platform).toLowerCase())
+      .filter(Boolean),
+  );
+  const platforms = settingsState.settings.platforms || [];
+  container.innerHTML = platforms
+    .map(
+      (platform) => `
+      <label>
+        <input
+          type="checkbox"
+          data-outreach-platform="${platform.key}"
+          ${selected.has(platform.key) ? "checked" : ""}
+        />
+        ${platform.label || platformLabel(platform.key)}
+      </label>
+    `,
+    )
+    .join("");
+}
+
+function collectOutreachPlatforms() {
+  return [
+    ...document.querySelectorAll("[data-outreach-platform]:checked"),
+  ].map((checkbox) => checkbox.dataset.outreachPlatform);
 }
 
 function renderKeywords(data) {
@@ -781,6 +821,12 @@ async function savePipelineSettings() {
         qualificationManualScore: document.getElementById(
           "qualification-manual-score",
         ).value,
+        maxDmsPerRun: document.getElementById("pipeline-max-dms-per-run")
+          ?.value,
+        maxConnectionsPerRun: document.getElementById(
+          "pipeline-max-connections-per-run",
+        )?.value,
+        outreachPlatforms: collectOutreachPlatforms(),
         linkedinOutreachMode: document.getElementById("linkedin-outreach-mode")
           .value,
         xOutreachMode: document.getElementById("x-outreach-mode").value,

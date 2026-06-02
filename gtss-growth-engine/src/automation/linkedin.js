@@ -411,9 +411,9 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
   try {
     emit("info", `Navigating to ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
-    await humanDelay(3000, 5000);
+    await humanDelay(900, 1600);
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
-    await humanDelay(500, 1000);
+    await humanDelay(250, 500);
 
     emit("info", "Page loaded. Locating Connect action...");
 
@@ -451,7 +451,7 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
 
     emit("info", `Clicking Connect (${connectMatch.selector})...`);
     await connectMatch.locator.click();
-    await humanDelay(2000, 3000);
+    await humanDelay(700, 1200);
 
     // If there's a message, look for "Add a note"
     if (message) {
@@ -460,7 +460,7 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
       if (addNoteMatch) {
         emit("info", "Adding connection note...");
         await addNoteMatch.locator.click();
-        await humanDelay(1000, 2000);
+        await humanDelay(500, 900);
 
         emit("info", "Typing message...");
         const noteModalMatch = await firstVisible(page, SELECTORS.modal, 3000);
@@ -468,7 +468,7 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
           throw new Error("Connection note modal not visible");
         }
         await typeIntoFirstVisibleIn(page, noteModalMatch.locator, SELECTORS.noteTextarea, message);
-        await humanDelay(1000, 2000);
+        await humanDelay(500, 900);
       } else {
         emit("warn", "Add-note option not found. This request may send without a note.");
       }
@@ -479,7 +479,7 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
     if (sendMatch && !(await sendMatch.locator.isDisabled().catch(() => false))) {
       emit("info", `Clicking Send (${sendMatch.selector})...`);
       await sendMatch.locator.click();
-      await humanDelay(2000, 4000);
+      await humanDelay(700, 1400);
 
       const warning = await detectActionWarning(page);
       if (warning) {
@@ -523,9 +523,9 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
   try {
     emit("info", `Navigating to ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
-    await humanDelay(3000, 5000);
+    await humanDelay(900, 1600);
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
-    await humanDelay(500, 1000);
+    await humanDelay(250, 500);
 
     const messageMatch = await firstVisibleOnProfile(page, SELECTORS.message, 3000);
     if (!messageMatch) {
@@ -538,7 +538,7 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
 
     emit("info", `Clicking Message (${messageMatch.selector})...`);
     await messageMatch.locator.click();
-    await humanDelay(3000, 4500);
+    await humanDelay(800, 1400);
 
     const premiumRequired = await detectPremiumRequired(page);
     if (premiumRequired) {
@@ -561,7 +561,7 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
 
     emit("info", `Typing DM using ${editorMatch.selector}...`);
     await typeLikeHuman(page, editorMatch.locator, message);
-    await humanDelay(1000, 2000);
+    await humanDelay(400, 800);
 
     // Find the Send button
     const sendMatch = dmOverlayMatch ? await firstVisibleIn(dmOverlayMatch.locator, SELECTORS.dmSend, 3000) : null;

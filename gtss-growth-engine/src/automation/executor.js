@@ -102,6 +102,11 @@ function getQueuedActions(options = {}) {
   const db = getDb();
   const includeBlocked = options.includeBlocked === true;
   const includeWaiting = options.includeWaiting === true;
+  const platforms = Array.isArray(options.platforms)
+    ? options.platforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean)
+    : [];
+  const platformClause =
+    platforms.length > 0 ? `AND m.platform IN (${platforms.map(() => "?").join(",")})` : "";
   return db
     .prepare(
       `
@@ -118,6 +123,7 @@ function getQueuedActions(options = {}) {
       (m.status = 'approved' ${includeWaiting ? "" : "AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now'))"})
       ${includeBlocked ? "OR m.status = 'blocked'" : ""}
     )
+    ${platformClause}
     ORDER BY
       CASE
         WHEN m.status = 'approved' AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now')) THEN 0
@@ -128,7 +134,7 @@ function getQueuedActions(options = {}) {
       m.approved_at ASC
   `,
     )
-    .all()
+    .all(...platforms)
     .map((action) => ({
       ...action,
       action_type: action.action_type || determineActionType(action),
@@ -363,7 +369,13 @@ function recordOutcome(action, actionType, outcomeObj) {
     reason: String(reason || "").slice(0, 200),
   });
 
-  increment_action_count(action.platform, normalizedActionType, action.lead_id, outcome);
+  increment_action_count(
+    action.platform,
+    normalizedActionType,
+    action.lead_id,
+    outcome,
+    reason || null,
+  );
 
   db.prepare(
     `
@@ -628,8 +640,7 @@ function getSessionCheckUrl(platform) {
 
 async function openSessionCheckPage(page, platform) {
   const url = getSessionCheckUrl(platform);
-  const waitUntil =
-    platform === "linkedin" ? "networkidle" : "domcontentloaded";
+  const waitUntil = "domcontentloaded";
 
   await page.goto(url, { waitUntil, timeout: 60000 }).catch(async (error) => {
     logger.warn(
@@ -648,7 +659,7 @@ async function openSessionCheckPage(page, platform) {
   });
 
   if (platform === "linkedin") {
-    await humanDelay(5000, 8000);
+    await humanDelay(1000, 1800);
   }
 }
 
@@ -687,12 +698,11 @@ async function createValidatedBrowser(platform, emit) {
         );
         await browserState.page
           .reload({
-            waitUntil:
-              platform === "linkedin" ? "networkidle" : "domcontentloaded",
+            waitUntil: "domcontentloaded",
             timeout: 60000,
           })
           .catch(() => {});
-        await humanDelay(5000, 8000);
+        await humanDelay(1200, 2200);
       }
     } finally {
       if (
@@ -727,10 +737,14 @@ async function processActionQueue(jobId, sseRes, options = {}) {
   emitState(emit, jobId, "PENDING", "Automation run queued.");
 
   try {
-    const runnableQueue = getQueuedActions();
+    const platforms = Array.isArray(options.platforms)
+      ? options.platforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean)
+      : [];
+    const runnableQueue = getQueuedActions({ platforms });
     const fullQueue = getQueuedActions({
       includeBlocked: true,
       includeWaiting: true,
+      platforms,
     });
     const waitingCount = fullQueue.filter(
       (action) => action.status === "approved" && !action.runnable,
@@ -758,14 +772,24 @@ async function processActionQueue(jobId, sseRes, options = {}) {
         waitingCount,
         blockedCount,
       });
-      return;
+      return {
+        successes: 0,
+        failures: 0,
+        skipped: 0,
+        queueLength: fullQueue.length,
+        runnableCount: 0,
+        waitingCount,
+        blockedCount,
+      };
     }
 
     let successes = 0;
     let failures = 0;
     let skipped = 0;
     const maxDmsPerRun = options.maxDmsPerRun;
+    const maxConnectionsPerRun = options.maxConnectionsPerRun;
     let dmsSentThisRun = 0;
+    let connectionsSentThisRun = 0;
 
     // Cache one browser/tab per platform — reuse across all actions in this run
     const browserCache = new Map();
@@ -822,9 +846,22 @@ async function processActionQueue(jobId, sseRes, options = {}) {
       const { platform } = action;
       const actionType = determineActionType(action);
       const isDm = actionType === "dm" || actionType === "instagram_dm";
+      const isConnection =
+        actionType === "connect" || actionType === "connection";
 
       if (isDm && typeof maxDmsPerRun === "number" && dmsSentThisRun >= maxDmsPerRun) {
         emit("info", `Stopping DM actions: hit max_dms_per_run cap of ${maxDmsPerRun}.`);
+        break;
+      }
+      if (
+        isConnection &&
+        typeof maxConnectionsPerRun === "number" &&
+        connectionsSentThisRun >= maxConnectionsPerRun
+      ) {
+        emit(
+          "info",
+          `Stopping connection actions: hit max_connections_per_run cap of ${maxConnectionsPerRun}.`,
+        );
         break;
       }
 
@@ -1027,6 +1064,9 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           if (actionType === "dm" || actionType === "instagram_dm") {
             dmsSentThisRun++;
           }
+          if (actionType === "connect" || actionType === "connection") {
+            connectionsSentThisRun++;
+          }
         }
         else if (
           [
@@ -1091,6 +1131,7 @@ async function processActionQueue(jobId, sseRes, options = {}) {
     const remainingQueue = getQueuedActions({
       includeBlocked: true,
       includeWaiting: true,
+      platforms,
     });
     const remainingWaiting = remainingQueue.filter(
       (action) => action.status === "approved" && !action.runnable,
@@ -1099,31 +1140,26 @@ async function processActionQueue(jobId, sseRes, options = {}) {
       (action) => action.status === "blocked",
     ).length;
 
+    const summary = {
+      successes,
+      failures,
+      skipped,
+      queueLength: remainingQueue.length,
+      runnableCount: remainingQueue.filter((action) => action.runnable)
+        .length,
+      waitingCount: remainingWaiting,
+      blockedCount: remainingBlocked,
+    };
+
     emitState(
       emit,
       jobId,
       failures > 0 ? "FAILED" : "COMPLETED",
       "Automation run completed.",
-      {
-        successes,
-        failures,
-        skipped,
-        queueLength: remainingQueue.length,
-        runnableCount: remainingQueue.filter((action) => action.runnable)
-          .length,
-        waitingCount: remainingWaiting,
-        blockedCount: remainingBlocked,
-      },
+      summary,
     );
-    emit("done", "Automation run completed.", {
-      successes,
-      failures,
-      skipped,
-      queueLength: remainingQueue.length,
-      runnableCount: remainingQueue.filter((action) => action.runnable).length,
-      waitingCount: remainingWaiting,
-      blockedCount: remainingBlocked,
-    });
+    emit("done", "Automation run completed.", summary);
+    return summary;
   } catch (error) {
     logger.error("AUTOMATION", "Executor failure", error);
     emitState(emit, jobId, "FAILED", `Executor error: ${error.message}`, {

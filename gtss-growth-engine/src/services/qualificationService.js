@@ -397,19 +397,29 @@ async function scoreLeadsBatch(leadIds, jobId, { pipelineRunId } = {}) {
  * @param {Function} emit - Event emitter function (type, message)
  * @returns {Promise<{processed: number, qualified: number, deprioritized: number}>}
  */
-async function runQualificationStage(jobId, emit) {
+async function runQualificationStage(jobId, emit, platforms = []) {
   const mode = stageMode("qualification");
   const db = getDb();
+  const selectedPlatforms = Array.isArray(platforms)
+    ? platforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean)
+    : [];
+  const platformClause =
+    selectedPlatforms.length > 0
+      ? `AND platform IN (${selectedPlatforms.map(() => "?").join(",")})`
+      : "";
 
   // Find all leads that need qualification
   const pending = db
     .prepare(
       `SELECT id FROM leads
-     WHERE status IN ('discovered', 'pending_qualification')
+     WHERE (
+        status IN ('discovered', 'pending_qualification')
         OR (lead_score IS NULL AND status NOT IN ('dismissed', 'messaged', 'replied', 'meeting_booked', 'converted', 'lost'))
+     )
+     ${platformClause}
      ORDER BY created_at DESC`,
     )
-    .all()
+    .all(...selectedPlatforms)
     .map((r) => r.id);
 
   if (pending.length === 0) {

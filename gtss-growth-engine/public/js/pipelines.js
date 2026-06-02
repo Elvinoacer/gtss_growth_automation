@@ -25,6 +25,7 @@ const PIPELINE_META = {
       { key: 'max_dms_per_run', label: 'Max DMs per run', type: 'number', default: 20 },
       { key: 'max_connections_per_run', label: 'Max connections per run', type: 'number', default: 15 },
     ],
+    platformField: true,
   },
   content: {
     icon: '🟠',
@@ -81,8 +82,8 @@ async function savePipeline(id) {
     limits[key] = el.type === 'number' ? Number(el.value) : el.value;
   });
 
-  // Collect platforms for content and DM checker pipelines
-  if (id === 'content' || id === 'dm_check') {
+  // Collect platforms for pipelines that target selectable platforms
+  if (id === 'outreach' || id === 'content' || id === 'dm_check') {
     const checked = [];
     card.querySelectorAll('[data-platform-checkbox]').forEach(cb => {
       if (cb.checked) checked.push(cb.dataset.platformCheckbox);
@@ -269,8 +270,14 @@ function renderLimitFields(meta, limits) {
   return html;
 }
 
-function renderPlatformCheckboxes(selectedPlatforms) {
-  const selected = Array.isArray(selectedPlatforms) ? selectedPlatforms : ['instagram', 'linkedin'];
+function renderPlatformCheckboxes(selectedPlatforms, pipelineId) {
+  const fallback =
+    pipelineId === 'outreach'
+      ? ['linkedin', 'x']
+      : pipelineId === 'dm_check'
+        ? ALL_PLATFORMS
+        : ['instagram', 'linkedin'];
+  const selected = Array.isArray(selectedPlatforms) ? selectedPlatforms : fallback;
   return `<div style="display:flex;flex-wrap:wrap;gap:10px;padding:6px 0">
     <label style="color:#94a3b8;font-size:13px;white-space:nowrap;width:100%">Target Platforms</label>
     ${ALL_PLATFORMS.map(p => `
@@ -360,7 +367,7 @@ function renderPipelineCard(pipeline) {
         ${pipeline.id === 'content' ? 'Content Settings' : 'Limits'}
       </p>
       ${renderLimitFields(meta, limits)}
-      ${meta.platformField ? renderPlatformCheckboxes(limits.platforms) : ''}
+      ${meta.platformField ? renderPlatformCheckboxes(limits.platforms, pipeline.id) : ''}
     </div>
 
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;

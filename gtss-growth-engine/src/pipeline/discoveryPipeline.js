@@ -82,6 +82,7 @@ async function runDiscoveryStage(
   emit,
   maxLeadsPerKeywordOverride,
   keywordsOverride,
+  platformsOverride,
 ) {
   const mode = stageMode("discovery");
   const db = getDb();
@@ -111,6 +112,11 @@ async function runDiscoveryStage(
   // AI mode — full automated discovery
   const config = loadKeywords();
   let { keywords, platforms, maxLeadsPerKeyword } = config;
+  if (Array.isArray(platformsOverride) && platformsOverride.length > 0) {
+    platforms = platformsOverride
+      .map((platform) => String(platform).trim().toLowerCase())
+      .filter(Boolean);
+  }
   const selectedKeywords = Array.isArray(keywordsOverride)
     ? keywordsOverride.map((keyword) => String(keyword).trim()).filter(Boolean)
     : [];
