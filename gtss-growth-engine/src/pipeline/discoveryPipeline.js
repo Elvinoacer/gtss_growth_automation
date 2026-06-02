@@ -112,7 +112,8 @@ async function runDiscoveryStage(
   // AI mode — full automated discovery
   const config = loadKeywords();
   let { keywords, platforms, maxLeadsPerKeyword } = config;
-  if (Array.isArray(platformsOverride) && platformsOverride.length > 0) {
+  const hasPlatformsOverride = Array.isArray(platformsOverride) && platformsOverride.length > 0;
+  if (hasPlatformsOverride) {
     platforms = platformsOverride
       .map((platform) => String(platform).trim().toLowerCase())
       .filter(Boolean);
@@ -138,8 +139,9 @@ async function runDiscoveryStage(
     maxLeadsPerKeyword = maxLeadsPerKeywordOverride;
   }
 
-  // Support DISCOVERY_PLATFORMS environment variable override
-  if (process.env.DISCOVERY_PLATFORMS) {
+  // Support DISCOVERY_PLATFORMS environment variable only when the saved pipeline
+  // schedule did not explicitly choose outreach platforms.
+  if (!hasPlatformsOverride && process.env.DISCOVERY_PLATFORMS) {
     platforms = process.env.DISCOVERY_PLATFORMS.split(",")
       .map((p) => p.trim().toLowerCase())
       .filter(Boolean);
@@ -174,8 +176,8 @@ async function runDiscoveryStage(
       }
     }
 
-    // Apply active DISCOVERY_PLATFORMS override/filtering if set
-    if (process.env.DISCOVERY_PLATFORMS) {
+    // Keep per-keyword platform lists inside the active pipeline selection.
+    if (hasPlatformsOverride || process.env.DISCOVERY_PLATFORMS) {
       keywordPlatforms = keywordPlatforms.filter((p) => platforms.includes(p));
     }
 

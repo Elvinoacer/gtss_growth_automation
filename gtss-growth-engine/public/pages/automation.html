@@ -396,6 +396,16 @@
                   Run Queue
                 </button>
                 <button
+                  id="retry-selected-btn"
+                  style="display: none"
+                  class="bg-primary-container hover:bg-primary/10 text-primary font-label-caps text-label-caps px-4 py-3 rounded-lg flex items-center gap-2 border border-primary/20 transition-colors"
+                >
+                  <span class="material-symbols-outlined text-[18px]"
+                    >checklist</span
+                  >
+                  Retry Selected
+                </button>
+                <button
                   id="retry-all-btn"
                   style="display: none"
                   class="bg-surface-container-high hover:bg-surface-container-highest text-on-surface font-label-caps text-label-caps px-4 py-3 rounded-lg flex items-center gap-2 border border-outline-variant transition-colors"
@@ -516,6 +526,11 @@
                       class="sticky top-0 bg-surface-bright shadow-sm z-10"
                     >
                       <tr>
+                        <th
+                          class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant w-10"
+                        >
+                          <input id="queue-select-all" type="checkbox" />
+                        </th>
                         <th
                           class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant w-1/4"
                         >

@@ -26,6 +26,8 @@
   const postRunBannerText = document.getElementById("post-run-banner-text");
   const postRunBannerMeta = document.getElementById("post-run-banner-meta");
   const retryAllBtn = document.getElementById("retry-all-btn");
+  const retrySelectedBtn = document.getElementById("retry-selected-btn");
+  const queueSelectAll = document.getElementById("queue-select-all");
   const retryWaitingBtn = document.getElementById("retry-waiting-btn");
   const retryBlockedBtn = document.getElementById("retry-blocked-btn");
 
@@ -34,6 +36,7 @@
   const manualOpenBtn = document.getElementById("manual-open-btn");
   const manualResumeBtn = document.getElementById("manual-resume-btn");
   let currentCaptchaPlatform = null;
+  let selectedRetryIds = new Set();
 
   // ----------------------------------------------------------------
   // Init
@@ -99,7 +102,7 @@
           : 0;
 
       const card = `
-        <div class="bg-surface-container-lowest border border-outline-variant shadow-sm rounded-lg p-5 flex flex-col justify-between h-32 relative overflow-hidden">
+        <div class="bg-surface-container-lowest border border-outline-variant shadow-sm rounded-lg p-5 flex flex-col justify-between min-h-40 relative overflow-hidden">
           <div class="flex justify-between items-start">
             <span class="font-label-caps text-label-caps text-on-surface-variant capitalize">${platform}</span>
             <span class="material-symbols-outlined text-${bgClass} text-lg">${icon}</span>
@@ -111,6 +114,12 @@
             <div class="w-full h-1.5 bg-surface-container-high rounded-full mt-3 overflow-hidden">
                 <div class="h-full bg-${bgClass} rounded-full transition-all" style="width: ${pct}%"></div>
             </div>
+          </div>
+          <div class="mt-3 flex items-center gap-2 text-[11px] text-on-surface-variant">
+            <label class="flex items-center gap-1">DM limit
+              <input class="automation-limit-input w-16 rounded border border-outline-variant bg-surface px-2 py-1 text-on-surface" data-limit-platform="${platform}" data-limit-action="dms" type="number" min="1" max="1000" value="${counts.dmsLimit || 1}" />
+            </label>
+            <button class="save-limit-btn rounded border border-outline-variant px-2 py-1 hover:border-primary hover:text-primary" data-platform="${platform}" type="button">Save</button>
           </div>
           <button class="absolute top-4 right-10 text-outline hover:text-primary transition-colors auth-btn" data-platform="${platform}" title="Authenticate">
             <span class="material-symbols-outlined text-sm">login</span>
@@ -198,6 +207,7 @@
       retryWaitingBtn.style.display = waiting > 0 ? "flex" : "none";
     if (retryBlockedBtn)
       retryBlockedBtn.style.display = blocked > 0 ? "flex" : "none";
+    updateSelectedRetryButton();
 
     if (total === 0) {
       queueSummary.innerHTML = "No queued actions.";
@@ -284,6 +294,33 @@
     }
   }
 
+  function updateSelectedRetryButton() {
+    if (retrySelectedBtn) {
+      retrySelectedBtn.style.display = selectedRetryIds.size > 0 ? "flex" : "none";
+      retrySelectedBtn.innerHTML = `<span class="material-symbols-outlined text-[18px]">checklist</span> ${selectedRetryIds.size > 0 ? `Retry Selected (${selectedRetryIds.size})` : "Retry Selected"}`;
+    }
+    if (queueSelectAll) {
+      const checkboxes = [...document.querySelectorAll(".queue-retry-checkbox")];
+      queueSelectAll.checked = checkboxes.length > 0 && checkboxes.every((box) => box.checked);
+      queueSelectAll.indeterminate = checkboxes.some((box) => box.checked) && !queueSelectAll.checked;
+    }
+  }
+
+  async function retrySelectedQueue() {
+    try {
+      const result = await fetchJSON("/api/automation/queue/retry-selected", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageIds: [...selectedRetryIds] }),
+      });
+      showToast(`${result.updated} selected action(s) returned to the queue`, result.updated > 0 ? "success" : "info");
+      selectedRetryIds.clear();
+      await loadQueue();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  }
+
   function renderQueueGroup(title, toneClass, items) {
     if (!items.length) return "";
 
@@ -292,7 +329,7 @@
 
     return `
       <tr class="${headerClass}">
-        <td colspan="5" class="px-4 py-2 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant">
+        <td colspan="6" class="px-4 py-2 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant">
           ${title} (${items.length})
         </td>
       </tr>
@@ -303,7 +340,11 @@
   function renderQueueRow(action) {
     const leadName = escapeHtml(action.lead_name || "Unknown");
     const platform = escapeHtml(action.platform || "");
-    const actionType = action.action_type === "connect" ? "Connect" : "DM";
+    const actionType = ["connect", "connection", "connections"].includes(action.action_type)
+      ? "Connect"
+      : ["follow", "follows"].includes(action.action_type)
+        ? "Follow"
+        : "DM";
     const isBlocked = action.status === "blocked";
     const isWaiting = action.status === "approved" && !action.runnable;
     const statusLabel = isBlocked
@@ -339,6 +380,9 @@
 
     return `
       <tr class="h-table-row-height border-b border-outline-variant/50 hover:bg-surface-variant/10 transition-colors group" data-id="${action.message_id}" data-status="${action.status || "approved"}">
+        <td class="px-4 py-3 align-top">
+          <input class="queue-retry-checkbox" data-id="${action.message_id}" type="checkbox" ${selectedRetryIds.has(Number(action.message_id)) ? "checked" : ""} title="Select for retry" />
+        </td>
         <td class="px-4 py-3 align-top font-medium">${leadName}</td>
         <td class="px-4 py-3 align-top text-on-surface-variant capitalize">${platform}</td>
         <td class="px-4 py-3 align-top">${actionType}</td>
@@ -568,6 +612,15 @@
   // ----------------------------------------------------------------
 
   queueBody.addEventListener("click", async (e) => {
+    const checkbox = e.target.closest(".queue-retry-checkbox");
+    if (checkbox) {
+      const id = Number(checkbox.dataset.id);
+      if (checkbox.checked) selectedRetryIds.add(id);
+      else selectedRetryIds.delete(id);
+      updateSelectedRetryButton();
+      return;
+    }
+
     const retryBtn = e.target.closest(".retry-btn");
     if (retryBtn) {
       const id = retryBtn.dataset.id;
@@ -596,6 +649,24 @@
     }
   });
 
+  limitCards?.addEventListener("click", async (e) => {
+    const saveBtn = e.target.closest(".save-limit-btn");
+    if (!saveBtn) return;
+    const platform = saveBtn.dataset.platform;
+    const input = document.querySelector(`[data-limit-platform="${platform}"][data-limit-action="dms"]`);
+    try {
+      await fetchJSON("/api/automation/limits", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [platform]: { dms: Number(input.value) } }),
+      });
+      showToast(`${platform} DM limit saved`, "success");
+      await loadLimits();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  });
+
   if (queueSummary) {
     queueSummary.addEventListener("click", async (e) => {
       const categoryBtn = e.target.closest(".retry-category-btn");
@@ -604,6 +675,20 @@
     });
   }
 
+  if (retrySelectedBtn) {
+    retrySelectedBtn.addEventListener("click", retrySelectedQueue);
+  }
+  if (queueSelectAll) {
+    queueSelectAll.addEventListener("change", () => {
+      document.querySelectorAll(".queue-retry-checkbox").forEach((checkbox) => {
+        checkbox.checked = queueSelectAll.checked;
+        const id = Number(checkbox.dataset.id);
+        if (queueSelectAll.checked) selectedRetryIds.add(id);
+        else selectedRetryIds.delete(id);
+      });
+      updateSelectedRetryButton();
+    });
+  }
   if (retryAllBtn) {
     retryAllBtn.addEventListener("click", async () => retryQueue("all"));
   }

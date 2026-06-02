@@ -207,8 +207,8 @@ async function firstVisibleOverlay(page, overlaySelectors, selectors, timeout = 
   return { ...match, selector: `${overlay.selector} >> ${match.selector}` };
 }
 
-async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 4) {
-  const PER_ATTEMPT_TIMEOUT = 6000;
+async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 2) {
+  const PER_ATTEMPT_TIMEOUT = 2500;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (dmOverlayMatch) {
@@ -221,17 +221,17 @@ async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 4) {
 
     if (dmOverlayMatch && attempt <= 2) {
       await dmOverlayMatch.locator.click({ force: true }).catch(() => {});
-      await humanDelay(1000, 1500);
+      await humanDelay(250, 450);
     }
 
-    const freshOverlay = await firstVisible(page, SELECTORS.dmOverlay, 3000);
+    const freshOverlay = await firstVisible(page, SELECTORS.dmOverlay, 1200);
     if (freshOverlay) {
       const scoped = await firstVisibleIn(freshOverlay.locator, SELECTORS.dmEditor, PER_ATTEMPT_TIMEOUT);
       if (scoped) return scoped;
     }
 
     if (attempt < maxAttempts) {
-      await humanDelay(1500 * attempt, 2000 * attempt);
+      await humanDelay(400 * attempt, 650 * attempt);
     }
   }
 
@@ -411,9 +411,9 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
   try {
     emit("info", `Navigating to ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
-    await humanDelay(900, 1600);
+    await humanDelay(300, 650);
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
-    await humanDelay(250, 500);
+    await humanDelay(100, 250);
 
     emit("info", "Page loaded. Locating Connect action...");
 
@@ -523,11 +523,11 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
   try {
     emit("info", `Navigating to ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
-    await humanDelay(900, 1600);
+    await humanDelay(300, 650);
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
-    await humanDelay(250, 500);
+    await humanDelay(100, 250);
 
-    const messageMatch = await firstVisibleOnProfile(page, SELECTORS.message, 3000);
+    const messageMatch = await firstVisibleOnProfile(page, SELECTORS.message, 1800);
     if (!messageMatch) {
       emit("warn", 'Could not find "Message" button. Ensure you are connected 1st-degree.');
       return {
@@ -538,7 +538,7 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
 
     emit("info", `Clicking Message (${messageMatch.selector})...`);
     await messageMatch.locator.click();
-    await humanDelay(800, 1400);
+    await humanDelay(250, 500);
 
     const premiumRequired = await detectPremiumRequired(page);
     if (premiumRequired) {
@@ -546,25 +546,25 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
       return premiumRequired;
     }
 
-    const dmOverlayMatch = await firstVisible(page, SELECTORS.dmOverlay, 7000);
+    const dmOverlayMatch = await firstVisible(page, SELECTORS.dmOverlay, 3000);
     if (!dmOverlayMatch) {
       emit("warn", "DM overlay container not detected — trying editor directly.");
     }
 
     emit("info", "Waiting for DM editor to become available...");
-    const editorMatch = await waitForDmEditor(page, dmOverlayMatch, 4);
+    const editorMatch = await waitForDmEditor(page, dmOverlayMatch, 2);
 
     if (!editorMatch) {
-      emit("error", "Could not find message textarea after 4 attempts across all strategies.");
-      return { outcome: "failed", reason: "Textarea not found after retry" };
+      emit("error", "Could not find message textarea after fast retry.");
+      return { outcome: "failed", reason: "Textarea not found after fast retry" };
     }
 
     emit("info", `Typing DM using ${editorMatch.selector}...`);
     await typeLikeHuman(page, editorMatch.locator, message);
-    await humanDelay(400, 800);
+    await humanDelay(150, 300);
 
     // Find the Send button
-    const sendMatch = dmOverlayMatch ? await firstVisibleIn(dmOverlayMatch.locator, SELECTORS.dmSend, 3000) : null;
+    const sendMatch = dmOverlayMatch ? await firstVisibleIn(dmOverlayMatch.locator, SELECTORS.dmSend, 1200) : null;
     if (sendMatch && !(await sendMatch.locator.isDisabled().catch(() => false))) {
       emit("info", `Clicking Send (${sendMatch.selector})...`);
       await sendMatch.locator.click();

@@ -155,7 +155,8 @@ apiRouter.post("/test-email", async (req, res) => {
 });
 
 apiRouter.patch("/limits", (req, res) => {
-  const nextLimits = req.body || {};
+  const currentLimits = getStoredLimits();
+  const nextLimits = mergeDailyLimitUpdates(currentLimits, req.body || {});
   const validationError = validateLimits(nextLimits);
 
   if (validationError) {
@@ -164,7 +165,7 @@ apiRouter.patch("/limits", (req, res) => {
 
   upsertSetting("daily_limits", JSON.stringify(nextLimits));
 
-  return res.json({ success: true });
+  return res.json({ success: true, limits: nextLimits });
 });
 
 apiRouter.patch("/notifications", (req, res) => {
@@ -416,6 +417,24 @@ function parseSettingValue(value) {
   }
 }
 
+function mergeDailyLimitUpdates(currentLimits, updates) {
+  const merged = clone(currentLimits || {});
+
+  Object.entries(updates || {}).forEach(([platform, fields]) => {
+    if (!fields || typeof fields !== "object" || Array.isArray(fields)) return;
+    if (!merged[platform] || typeof merged[platform] !== "object") {
+      merged[platform] = {};
+    }
+
+    Object.entries(fields).forEach(([field, value]) => {
+      if (value && typeof value === "object") return;
+      merged[platform][field] = value;
+    });
+  });
+
+  return merged;
+}
+
 function validateLimits(nextLimits) {
   const expectedPlatforms = getPlatformCatalog().keys;
 
@@ -435,6 +454,7 @@ function validateLimits(nextLimits) {
     }
 
     for (const [field, rawValue] of Object.entries(fields)) {
+      if (rawValue && typeof rawValue === "object") continue;
       const value = Number(rawValue);
       if (!Number.isInteger(value) || value < 1 || value > 1000) {
         return `${platform}.${field} must be an integer between 1 and 1000`;
@@ -536,6 +556,9 @@ apiRouter.patch("/pipeline", (req, res) => {
     limits.platforms = req.body.outreachPlatforms
       .map((platform) => String(platform).trim().toLowerCase())
       .filter((platform) => valid.has(platform));
+    if (limits.platforms.length === 0) {
+      return res.status(400).json({ error: "Select at least one outreach platform" });
+    }
     updated.push("outreachPlatforms");
   }
   if (req.body.maxDmsPerRun !== undefined) {
