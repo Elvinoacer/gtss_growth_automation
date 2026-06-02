@@ -20,6 +20,7 @@ const { withRetry } = require("../utils/retryHelper");
 const jobRegistry = require("../jobs/jobRegistry");
 const logger = require("../utils/logger");
 const { broadcast } = require("../services/socketService");
+const { enqueuePipelineRun } = require("./pipelineQueue");
 
 // ---------------------------------------------------------------------------
 // Pipeline run tracking
@@ -289,7 +290,7 @@ async function sendPipelineSummaryEmail(runId) {
  * @param {string} [options.mode] - Override the pipeline mode for this run
  * @returns {Promise<number>} The pipeline run ID
  */
-async function runFullPipeline(triggerSource = "scheduled", options = {}) {
+async function runFullPipelineNow(triggerSource = "scheduled", options = {}) {
   // Optionally override PIPELINE_MODE for this run
   if (options.mode) {
     process.env.PIPELINE_MODE = options.mode;
@@ -522,6 +523,24 @@ async function runFullPipeline(triggerSource = "scheduled", options = {}) {
   }
 
   return pipelineRunId;
+}
+
+
+async function runFullPipeline(triggerSource = "scheduled", options = {}) {
+  return enqueuePipelineRun(
+    "outreach",
+    `outreach:${triggerSource}:${Date.now()}`,
+    () => runFullPipelineNow(triggerSource, options),
+    {
+      onQueued: ({ position, activeRun }) => {
+        logger.info(
+          "PIPELINE",
+          `Outreach pipeline queued at position ${position}; waiting for active run to finish`,
+          { activeRun },
+        );
+      },
+    },
+  );
 }
 
 /**

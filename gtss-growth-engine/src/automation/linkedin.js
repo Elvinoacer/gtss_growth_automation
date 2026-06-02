@@ -197,6 +197,110 @@ async function firstVisibleInMainProfileArea(page, selectors, timeout = 1500) {
   return null;
 }
 
+
+function normalizeText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+async function quickVisibleProfileAction(page, action, timeout = 900) {
+  const actionText = normalizeText(action);
+  const token = `gtss-${actionText}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const result = await page
+      .evaluate(
+        ({ actionText, token }) => {
+          const viewportWidth = window.innerWidth || 1366;
+          const viewportHeight = window.innerHeight || 768;
+          const maxX = Math.max(760, viewportWidth * 0.72);
+          const maxY = Math.max(620, viewportHeight * 0.82);
+          const actionSelectors = [
+            "main .pv-top-card button",
+            "main .pv-top-card a",
+            "main section button",
+            "main section a",
+            "main button",
+            "main a",
+          ];
+          const seen = new Set();
+          const candidates = [];
+
+          for (const selector of actionSelectors) {
+            for (const el of document.querySelectorAll(selector)) {
+              if (seen.has(el)) continue;
+              seen.add(el);
+
+              const rect = el.getBoundingClientRect();
+              const style = window.getComputedStyle(el);
+              if (
+                rect.width < 8 ||
+                rect.height < 8 ||
+                rect.x < 0 ||
+                rect.x > maxX ||
+                rect.y < 55 ||
+                rect.y > maxY ||
+                style.visibility === "hidden" ||
+                style.display === "none" ||
+                el.disabled ||
+                el.getAttribute("aria-disabled") === "true"
+              ) {
+                continue;
+              }
+
+              const label = [
+                el.getAttribute("aria-label"),
+                el.getAttribute("title"),
+                el.getAttribute("data-control-name"),
+                el.textContent,
+              ]
+                .filter(Boolean)
+                .join(" ")
+                .replace(/\s+/g, " ")
+                .trim()
+                .toLowerCase();
+              const href = String(el.getAttribute("href") || "").toLowerCase();
+              const isMessageLink = actionText === "message" && href.includes("/messaging");
+
+              if (!label.includes(actionText) && !isMessageLink) continue;
+
+              const topCard = el.closest(".pv-top-card, .ph5.pb5, section:has(h1)");
+              candidates.push({ el, score: (topCard ? 100 : 0) - rect.y / 10 - rect.x / 100 });
+            }
+          }
+
+          candidates.sort((a, b) => b.score - a.score);
+          const best = candidates[0]?.el;
+          if (!best) return null;
+          best.setAttribute("data-gtss-profile-action", token);
+          return {
+            selector: `[data-gtss-profile-action="${token}"]`,
+            label: (best.getAttribute("aria-label") || best.textContent || best.href || "").replace(/\s+/g, " ").trim(),
+          };
+        },
+        { actionText, token },
+      )
+      .catch(() => null);
+
+    if (result?.selector) {
+      const locator = page.locator(result.selector).first();
+      if (await locator.isVisible({ timeout: 150 }).catch(() => false)) {
+        return { locator, selector: `quick:${actionText}:${result.label || result.selector}` };
+      }
+    }
+
+    await humanDelay(80, 140);
+  }
+
+  return null;
+}
+
+async function findProfileAction(page, selectors, actionName, timeout = 1200) {
+  const quick = await quickVisibleProfileAction(page, actionName, Math.min(timeout, 900));
+  if (quick) return quick;
+  return firstVisibleOnProfile(page, selectors, timeout);
+}
+
 async function firstVisibleOverlay(page, overlaySelectors, selectors, timeout = 1500) {
   const overlay = await firstVisible(page, overlaySelectors, timeout);
   if (!overlay) return null;
@@ -207,31 +311,212 @@ async function firstVisibleOverlay(page, overlaySelectors, selectors, timeout = 
   return { ...match, selector: `${overlay.selector} >> ${match.selector}` };
 }
 
-async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 2) {
-  const PER_ATTEMPT_TIMEOUT = 2500;
+async function findBestDmEditor(page, timeout = 2500) {
+  const token = `gtss-dm-editor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const result = await page
+      .evaluate(({ token }) => {
+        const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+        const visible = (el) => {
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          return (
+            rect.width >= 20 &&
+            rect.height >= 18 &&
+            rect.bottom > 0 &&
+            rect.right > 0 &&
+            rect.top < (window.innerHeight || 900) &&
+            rect.left < (window.innerWidth || 1400) &&
+            style.visibility !== "hidden" &&
+            style.display !== "none" &&
+            Number(style.opacity || 1) > 0
+          );
+        };
+        const attrText = (el) =>
+          normalize([
+            el.getAttribute("aria-label"),
+            el.getAttribute("placeholder"),
+            el.getAttribute("data-placeholder"),
+            el.getAttribute("name"),
+            el.getAttribute("id"),
+            el.getAttribute("class"),
+            el.getAttribute("role"),
+            el.textContent,
+          ].filter(Boolean).join(" "));
+        const rejectPattern = /\b(subject|recipient|recipients|to:|search|people|name|email|add people|conversation name)\b/;
+        const messagePattern = /\b(write a message|message|reply|body|compose)\b/;
+        const selectors = [
+          '.msg-form__contenteditable[contenteditable="true"]',
+          '.msg-form [contenteditable="true"]',
+          '.msg-form textarea',
+          'textarea[name*="message" i]',
+          'textarea[placeholder*="message" i]',
+          'textarea[aria-label*="message" i]',
+          '[contenteditable="true"][aria-label*="message" i]',
+          '[contenteditable="true"][aria-label*="write" i]',
+          '[contenteditable="true"][data-placeholder*="message" i]',
+          '[role="textbox"][aria-label*="message" i]',
+          '[role="textbox"][aria-label*="write" i]',
+          '[contenteditable="true"]',
+          '[role="textbox"]',
+          'textarea',
+        ];
+        const seen = new Set();
+        const candidates = [];
+
+        for (const selector of selectors) {
+          for (const el of document.querySelectorAll(selector)) {
+            if (seen.has(el) || !visible(el)) continue;
+            seen.add(el);
+
+            const tagName = normalize(el.tagName);
+            const type = normalize(el.getAttribute("type"));
+            if (type && ["hidden", "button", "submit", "checkbox", "radio"].includes(type)) continue;
+            if (el.disabled || el.getAttribute("aria-disabled") === "true" || el.readOnly) continue;
+
+            const text = attrText(el);
+            const rect = el.getBoundingClientRect();
+            const overlay = el.closest('.msg-overlay-conversation-bubble, .msg-convo-wrapper, [role="dialog"], .artdeco-modal--type-is-messaging, .msg-form');
+            const overlayText = overlay ? normalize(overlay.textContent) : "";
+            const inMsgForm = Boolean(el.closest(".msg-form"));
+            const isContentEditable = el.getAttribute("contenteditable") === "true";
+            const isTextarea = tagName === "textarea";
+            const isSubjectLike = rejectPattern.test(text) && !messagePattern.test(text);
+            const isExplicitMessage = messagePattern.test(text);
+
+            let score = 0;
+            if (el.matches('.msg-form__contenteditable[contenteditable="true"]')) score += 1400;
+            if (inMsgForm) score += 700;
+            if (isExplicitMessage) score += 650;
+            if (isContentEditable) score += 320;
+            if (isTextarea) score += 220;
+            if (overlay && visible(overlay)) score += 180;
+            if (/new message|messaging|message/.test(overlayText)) score += 120;
+            if (rect.height >= 80) score += 420;
+            if (rect.height >= 140) score += 260;
+            score += Math.min(260, (rect.width * rect.height) / 900);
+            score -= rect.top / 50;
+            if (isSubjectLike) score -= 1600;
+            if (rect.height < 45 && !isExplicitMessage) score -= 500;
+            if (text.includes("subject")) score -= 900;
+            if (/\b(to|recipient|recipients)\b/.test(text)) score -= 700;
+
+            candidates.push({ el, score, text, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } });
+          }
+        }
+
+        candidates.sort((a, b) => b.score - a.score);
+        const best = candidates.find((candidate) => candidate.score > 0);
+        if (!best) return null;
+
+        best.el.setAttribute("data-gtss-dm-editor", token);
+        return {
+          selector: `[data-gtss-dm-editor="${token}"]`,
+          score: Math.round(best.score),
+          label: best.text.slice(0, 120),
+          rect: best.rect,
+        };
+      }, { token })
+      .catch(() => null);
+
+    if (result?.selector) {
+      const locator = page.locator(result.selector).first();
+      if (await locator.isVisible({ timeout: 150 }).catch(() => false)) {
+        return {
+          locator,
+          selector: `best-dm-editor:${result.selector}`,
+          detail: result,
+        };
+      }
+    }
+
+    await humanDelay(100, 160);
+  }
+
+  return null;
+}
+
+async function findBestDmOverlay(page, timeout = 1500) {
+  const token = `gtss-dm-overlay-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const result = await page
+      .evaluate(({ token }) => {
+        const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+        const visible = (el) => {
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          return rect.width >= 120 && rect.height >= 80 && style.visibility !== "hidden" && style.display !== "none";
+        };
+        const overlays = [...document.querySelectorAll('.msg-overlay-conversation-bubble, .msg-convo-wrapper, [role="dialog"], .artdeco-modal--type-is-messaging')]
+          .filter(visible)
+          .map((el) => {
+            const rect = el.getBoundingClientRect();
+            const text = normalize(el.textContent);
+            const hasEditor = Boolean(el.querySelector('.msg-form__contenteditable[contenteditable="true"], .msg-form [contenteditable="true"], textarea, [role="textbox"]'));
+            let score = 0;
+            if (hasEditor) score += 900;
+            if (/new message|message|messaging/.test(text)) score += 250;
+            if (rect.height >= 260) score += 180;
+            score += Math.min(220, (rect.width * rect.height) / 1800);
+            return { el, score, text: text.slice(0, 80) };
+          })
+          .sort((a, b) => b.score - a.score);
+        const best = overlays[0];
+        if (!best) return null;
+        best.el.setAttribute("data-gtss-dm-overlay", token);
+        return { selector: `[data-gtss-dm-overlay="${token}"]`, score: Math.round(best.score), label: best.text };
+      }, { token })
+      .catch(() => null);
+
+    if (result?.selector) {
+      const locator = page.locator(result.selector).first();
+      if (await locator.isVisible({ timeout: 150 }).catch(() => false)) {
+        return { locator, selector: `best-dm-overlay:${result.selector}`, detail: result };
+      }
+    }
+
+    await humanDelay(100, 160);
+  }
+
+  return null;
+}
+
+async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 3) {
+  const PER_ATTEMPT_TIMEOUT = 1800;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const best = await findBestDmEditor(page, PER_ATTEMPT_TIMEOUT);
+    if (best) return best;
+
     if (dmOverlayMatch) {
-      const scoped = await firstVisibleIn(dmOverlayMatch.locator, SELECTORS.dmEditor, PER_ATTEMPT_TIMEOUT);
-      if (scoped) return scoped;
-    }
-
-    const pageLevel = await firstVisible(page, SELECTORS.dmEditor, PER_ATTEMPT_TIMEOUT);
-    if (pageLevel) return pageLevel;
-
-    if (dmOverlayMatch && attempt <= 2) {
       await dmOverlayMatch.locator.click({ force: true }).catch(() => {});
-      await humanDelay(250, 450);
+      await humanDelay(150, 280);
     }
 
-    const freshOverlay = await firstVisible(page, SELECTORS.dmOverlay, 1200);
+    const freshOverlay = await findBestDmOverlay(page, 700);
     if (freshOverlay) {
-      const scoped = await firstVisibleIn(freshOverlay.locator, SELECTORS.dmEditor, PER_ATTEMPT_TIMEOUT);
-      if (scoped) return scoped;
+      await freshOverlay.locator.click({ force: true }).catch(() => {});
+      const freshBest = await findBestDmEditor(page, 900);
+      if (freshBest) return freshBest;
+    }
+
+    // Last-resort legacy selector scan, but reject subject/recipient-like fields.
+    const legacy = await firstVisible(page, SELECTORS.dmEditor, 700);
+    if (legacy) {
+      const label = await legacy.locator
+        .evaluate((el) => [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"), el.getAttribute("id"), el.textContent].filter(Boolean).join(" ").toLowerCase())
+        .catch(() => "");
+      if (!/\b(subject|recipient|recipients|to:|search|people|name|email)\b/.test(label) || /message|write|reply/.test(label)) {
+        return legacy;
+      }
     }
 
     if (attempt < maxAttempts) {
-      await humanDelay(400 * attempt, 650 * attempt);
+      await humanDelay(220 * attempt, 360 * attempt);
     }
   }
 
@@ -354,21 +639,59 @@ async function verifyDmSent(page, editorTarget, message) {
   };
 }
 
+async function getEditableText(locator) {
+  return locator
+    .evaluate((el) => {
+      const tagName = String(el.tagName || "").toLowerCase();
+      if (tagName === "textarea" || tagName === "input") return String(el.value || "");
+      return String(el.textContent || el.innerText || "");
+    })
+    .catch(() => "");
+}
+
 /**
- * Type a string character by character with human-like delays
+ * Fast, reliable message entry for LinkedIn's composer.
+ * Playwright fill() handles most textarea/contenteditable cases; keyboard.insertText
+ * is the fallback that still fires real input events without slow per-character delays.
  */
 async function typeLikeHuman(page, locatorOrSelector, text) {
-  // Accept both a locator object and a CSS selector string
   const locator = typeof locatorOrSelector === "string" ? page.locator(locatorOrSelector).first() : locatorOrSelector;
+  const expected = String(text || "").trim();
 
-  await locator.scrollIntoViewIfNeeded();
-  await locator.click(); // Places cursor in contenteditable
-  await humanDelay(300, 600);
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  await locator.click({ force: true }).catch(() => {});
+  await locator.focus().catch(() => {});
 
-  for (let i = 0; i < text.length; i++) {
-    await page.keyboard.type(text[i]);
-    const delay = Math.floor(Math.random() * 100) + 50;
-    await humanDelay(delay, delay + 20);
+  await locator.fill(text, { timeout: 1200 }).catch(async () => {
+    await locator.click({ force: true }).catch(() => {});
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+    await page.keyboard.insertText(text).catch(async () => page.keyboard.type(text, { delay: 5 }));
+  });
+
+  let actual = (await getEditableText(locator)).trim();
+  if (!actual.includes(expected)) {
+    await locator.evaluate((el, value) => {
+      const tagName = String(el.tagName || "").toLowerCase();
+      el.focus();
+      if (tagName === "textarea" || tagName === "input") {
+        el.value = value;
+      } else {
+        el.textContent = value;
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }, text);
+    actual = (await getEditableText(locator)).trim();
+  }
+
+  if (!actual.includes(expected)) {
+    throw new Error("LinkedIn message editor did not accept typed text");
   }
 }
 
@@ -417,7 +740,7 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
 
     emit("info", "Page loaded. Locating Connect action...");
 
-    const messageBtnVisible = await isAnyVisibleOnProfile(page, SELECTORS.message);
+    const messageBtnVisible = Boolean(await findProfileAction(page, SELECTORS.message, "Message", 700));
     const isPending = await isAnyVisibleOnProfile(page, SELECTORS.pending);
 
     if (isPending) {
@@ -425,12 +748,12 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
       return { outcome: "already_connected" };
     }
 
-    let connectMatch = await firstVisibleOnProfile(page, SELECTORS.connect);
+    let connectMatch = await findProfileAction(page, SELECTORS.connect, "Connect", 1200);
 
     // Sometimes Connect is hidden under a "More" menu
     if (!connectMatch) {
       emit("info", "Connect action not immediately visible. Checking More menu...");
-      const moreMatch = await firstVisibleOnProfile(page, SELECTORS.more, 1000);
+      const moreMatch = await findProfileAction(page, SELECTORS.more, "More", 800);
       if (moreMatch) {
         await moreMatch.locator.click();
         await humanDelay(1000, 2000);
@@ -527,7 +850,7 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
     await humanDelay(100, 250);
 
-    const messageMatch = await firstVisibleOnProfile(page, SELECTORS.message, 1800);
+    const messageMatch = await findProfileAction(page, SELECTORS.message, "Message", 1200);
     if (!messageMatch) {
       emit("warn", 'Could not find "Message" button. Ensure you are connected 1st-degree.');
       return {
@@ -546,13 +869,13 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
       return premiumRequired;
     }
 
-    const dmOverlayMatch = await firstVisible(page, SELECTORS.dmOverlay, 3000);
+    const dmOverlayMatch = await findBestDmOverlay(page, 3000);
     if (!dmOverlayMatch) {
       emit("warn", "DM overlay container not detected — trying editor directly.");
     }
 
     emit("info", "Waiting for DM editor to become available...");
-    const editorMatch = await waitForDmEditor(page, dmOverlayMatch, 2);
+    const editorMatch = await waitForDmEditor(page, dmOverlayMatch, 3);
 
     if (!editorMatch) {
       emit("error", "Could not find message textarea after fast retry.");
@@ -563,8 +886,11 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     await typeLikeHuman(page, editorMatch.locator, message);
     await humanDelay(150, 300);
 
-    // Find the Send button
-    const sendMatch = dmOverlayMatch ? await firstVisibleIn(dmOverlayMatch.locator, SELECTORS.dmSend, 1200) : null;
+    // Find the Send button in the active overlay first, then fall back to page-level search.
+    const freshOverlayMatch = (await findBestDmOverlay(page, 900)) || dmOverlayMatch;
+    const sendMatch = freshOverlayMatch
+      ? (await firstVisibleIn(freshOverlayMatch.locator, SELECTORS.dmSend, 900)) || (await firstVisible(page, SELECTORS.dmSend, 700))
+      : await firstVisible(page, SELECTORS.dmSend, 900);
     if (sendMatch && !(await sendMatch.locator.isDisabled().catch(() => false))) {
       emit("info", `Clicking Send (${sendMatch.selector})...`);
       await sendMatch.locator.click();
@@ -647,4 +973,9 @@ module.exports = {
   sendConnectionRequest,
   sendDirectMessage,
   likeRecentPost,
+  __private: {
+    findBestDmEditor,
+    findBestDmOverlay,
+    typeLikeHuman,
+  },
 };
