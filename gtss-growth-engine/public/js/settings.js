@@ -703,6 +703,7 @@ function applyPipelineConfig(config) {
   document.getElementById("qualification-mode").value =
     config.qualificationMode || "";
   document.getElementById("message-mode").value = config.messageMode || "";
+  document.getElementById("send-mode").value = config.sendMode || "";
   document.getElementById("qualification-threshold").value =
     config.qualificationThreshold ?? 50;
   document.getElementById("qualification-manual-score").value =
@@ -815,6 +816,7 @@ async function savePipelineSettings() {
         discoveryMode: document.getElementById("discovery-mode").value,
         qualificationMode: document.getElementById("qualification-mode").value,
         messageMode: document.getElementById("message-mode").value,
+        sendMode: document.getElementById("send-mode").value,
         qualificationThreshold: document.getElementById(
           "qualification-threshold",
         ).value,

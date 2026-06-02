@@ -1,8 +1,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const { renderPage } = require("./pageRenderer");
-const { getDb } = require("../db/database");
-const { getDailyLimits } = require("../db/database");
+const { getDb, getDailyLimits } = require("../db/database");
 const {
   enqueueActionQueue,
   stopJob,
@@ -79,10 +78,51 @@ router.get("/api/automation/limits", (req, res) => {
     data[platform] = {
       used: totalUsed,
       limit: totalLimit,
+      dmsLimit: Number(dailyLimits[platform]?.dms || 0),
+      limits: dailyLimits[platform] || {},
     };
   });
 
   res.json(data);
+});
+
+
+// Update daily automation limits in the shared settings.daily_limits store.
+router.patch("/api/automation/limits", (req, res) => {
+  try {
+    const db = getDb();
+    const currentLimits = getDailyLimits();
+    const updates = req.body || {};
+
+    Object.entries(updates).forEach(([platform, fields]) => {
+      const normalizedPlatform = String(platform || "").trim().toLowerCase();
+      if (!normalizedPlatform || !fields || typeof fields !== "object" || Array.isArray(fields)) return;
+
+      if (!currentLimits[normalizedPlatform] || typeof currentLimits[normalizedPlatform] !== "object") {
+        currentLimits[normalizedPlatform] = {};
+      }
+
+      Object.entries(fields).forEach(([actionType, rawValue]) => {
+        if (rawValue && typeof rawValue === "object") return;
+        const value = Math.floor(Number(rawValue));
+        if (!Number.isInteger(value) || value < 1 || value > 1000) {
+          throw new Error(`${normalizedPlatform}.${actionType} must be an integer between 1 and 1000`);
+        }
+        currentLimits[normalizedPlatform][actionType] = value;
+      });
+    });
+
+    db.prepare(
+      `INSERT INTO settings (key, value)
+       VALUES ('daily_limits', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    ).run(JSON.stringify(currentLimits));
+
+    broadcast('automation:refresh', { type: 'limits-updated' });
+    res.json({ success: true, limits: currentLimits });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 // Get queued actions
@@ -277,6 +317,63 @@ router.patch("/api/automation/queue/:messageId/retry", (req, res) => {
 
     res.json({ success: true });
     broadcast('automation:queue', { action: 'retry', messageId: req.params.messageId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+router.post("/api/automation/queue/retry-selected", (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.messageIds)
+      ? req.body.messageIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
+      : [];
+
+    if (ids.length === 0) {
+      return res.status(400).json({ error: "Select at least one action to retry" });
+    }
+
+    const db = getDb();
+    const placeholders = ids.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT m.id, m.platform, m.lead_id, m.status, m.fail_category, m.is_follow_up, l.profile_url
+         FROM messages m
+         JOIN leads l ON l.id = m.lead_id
+         WHERE m.id IN (${placeholders})
+           AND (m.status IN ('blocked', 'skipped', 'sent')
+             OR (m.status = 'approved' AND m.snooze_until IS NOT NULL AND datetime(m.snooze_until) > datetime('now')))`
+      )
+      .all(...ids);
+
+    const update = db.prepare(`
+      UPDATE messages
+      SET status = 'approved',
+          blocked_reason = NULL,
+          fail_category = NULL,
+          last_error = NULL,
+          snooze_until = NULL,
+          retry_count = 0
+      WHERE id = ?
+    `);
+
+    const updated = db.transaction((items) => {
+      let count = 0;
+      for (const item of items) {
+        const actionType = determineActionType(item);
+        releaseActionFingerprint(createActionFingerprint({
+          platform: item.platform,
+          profile_url: item.profile_url,
+          lead_id: item.lead_id,
+          message_id: item.id,
+        }, actionType));
+        count += update.run(item.id).changes;
+      }
+      return count;
+    })(rows);
+
+    broadcast('automation:queue', { action: 'retry-selected', updated, messageIds: ids });
+    res.json({ success: true, updated, requested: ids.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

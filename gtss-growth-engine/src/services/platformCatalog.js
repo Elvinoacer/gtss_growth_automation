@@ -135,8 +135,8 @@ function getLimitFields() {
 
   catalog.keys.forEach((platform) => {
     const platformLimits = catalog.limits[platform] || {};
-    Object.keys(platformLimits).forEach((field) => {
-      if (seen.has(field)) return;
+    Object.entries(platformLimits).forEach(([field, value]) => {
+      if (seen.has(field) || typeof value !== "number") return;
       seen.add(field);
       fields.push(field);
     });
