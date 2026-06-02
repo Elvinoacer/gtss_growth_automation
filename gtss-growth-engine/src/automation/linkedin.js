@@ -619,12 +619,17 @@ async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 3) {
 
     if (dmOverlayMatch) {
       await dmOverlayMatch.locator.click({ force: true }).catch(() => {});
-      await humanDelay(150, 280);
+      // FIX: wait for React to finish remounting the editor after the overlay click
+      // before immediately querying again — without this delay the query can race
+      // against React's async render and return null even when the editor exists.
+      await humanDelay(350, 550);
     }
 
     const freshOverlay = await findBestDmOverlay(page, 700);
     if (freshOverlay) {
       await freshOverlay.locator.click({ force: true }).catch(() => {});
+      // FIX: same settle delay after fresh overlay click
+      await humanDelay(300, 480);
       const freshBest = await findBestDmEditor(page, 900);
       if (freshBest) return freshBest;
     }
@@ -662,6 +667,49 @@ async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 3) {
   }
 
   return null;
+}
+
+/**
+ * Poll until the LinkedIn DM contenteditable has pointer-events enabled and is
+ * fully interactive (i.e. the modal CSS animation has finished and React has
+ * mounted the editor node).
+ *
+ * LinkedIn's message overlay uses a CSS transition (opacity + transform) that
+ * temporarily sets pointer-events:none on child nodes during the animation.
+ * If we try to focus() before the animation completes, the click or CDP focus
+ * command hits an element with pointer-events:none and is silently ignored.
+ */
+async function waitForEditorInteractive(page, timeout = 2500) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const interactive = await page
+      .evaluate(() => {
+        const editors = document.querySelectorAll(
+          '.msg-form__contenteditable[contenteditable="true"],' +
+            '.msg-form [contenteditable="true"]',
+        );
+        for (const el of editors) {
+          const style = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          if (
+            rect.width > 20 &&
+            rect.height > 20 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            style.pointerEvents !== "none" &&
+            Number(style.opacity || "1") > 0.5 &&
+            !el.disabled &&
+            el.getAttribute("aria-disabled") !== "true"
+          )
+            return true;
+        }
+        return false;
+      })
+      .catch(() => false);
+    if (interactive) return true;
+    await humanDelay(100, 160);
+  }
+  return false;
 }
 
 async function closeOverlay(page, overlayMatch) {
@@ -809,61 +857,145 @@ async function getEditableText(locator) {
 /**
  * Activate LinkedIn's DM composer so it truly has keyboard focus.
  *
- * LinkedIn's contenteditable uses React synthetic events. A plain Playwright
- * click() or focus() is often insufficient — the editor becomes "visible" but
- * its internal React focus state doesn't fire, so subsequent keyboard input is
- * silently dropped.  We fix this by:
- *   1. Scrolling the element into view.
- *   2. Playwright click() FIRST — moves OS-level focus (critical for CDP mode).
- *   3. Then dispatching mousedown → mouseup → click + el.focus() inside the page
- *      so React's SyntheticEvent system also registers the interaction.
- *   4. If document.activeElement is still not our element, fall back to a
- *      raw mouse.click() at the element's centre coordinates.
- *   5. Waiting a short settle delay before typing.
+ * LinkedIn's contenteditable uses React synthetic events AND pointer events.
+ * A plain Playwright click() or el.focus() is often insufficient — the editor
+ * becomes "visible" but its internal React focus state doesn't fire, so
+ * subsequent keyboard input is silently dropped.  We fix this with:
+ *
+ *   1. Playwright native locator.focus() — sends a CDP AccessibilityNode.focus
+ *      command which sets OS-level focus independently of pointer events.
+ *   2. locator.click({ force: true }) — moves the cursor position for React.
+ *   3. Full pointer event sequence (pointerdown→mousedown→focusin→pointerup→
+ *      mouseup→click) dispatched via evaluate so React's SyntheticEvent system
+ *      also registers the interaction. LinkedIn's editor uses onPointerDown,
+ *      not just onMouseDown, so skipping pointer events breaks its handler.
+ *   4. Coordinate-based page.mouse.click() fallback when the locator is stale
+ *      (e.g. after a React re-render wiped the data-gtss-dm-editor attribute).
+ *   5. Fresh-editor re-discovery when the locator matches nothing at all.
+ *   6. The entire sequence retries up to MAX_FOCUS_ATTEMPTS times.
  */
 async function activateDmEditor(page, locator) {
-  await locator.scrollIntoViewIfNeeded().catch(() => {});
-  await humanDelay(60, 120);
+  const MAX_FOCUS_ATTEMPTS = 3;
 
-  // Step 1: OS-level focus via Playwright (must happen before React events)
-  await locator.click({ force: true }).catch(() => {});
-  await humanDelay(60, 100);
+  for (let attempt = 1; attempt <= MAX_FOCUS_ATTEMPTS; attempt++) {
+    await locator.scrollIntoViewIfNeeded().catch(() => {});
+    await humanDelay(60, 120);
 
-  // Step 2: React synthetic events + el.focus() — returns whether focus landed
-  const focusedAfterReact = await locator
-    .evaluate((el) => {
-      const opts = { bubbles: true, cancelable: true, view: window };
-      el.dispatchEvent(new MouseEvent("mousedown", opts));
-      el.dispatchEvent(new MouseEvent("mouseup", opts));
-      el.dispatchEvent(new MouseEvent("click", opts));
-      el.focus();
-      return (
-        document.activeElement === el || el.contains(document.activeElement)
-      );
-    })
-    .catch(() => false);
+    // Step 1: Playwright native focus (CDP AccessibilityNode.focus).
+    // This bypasses pointer-event guards and focus-trap JS that may block
+    // regular click-based focus during LinkedIn's modal animation.
+    await locator.focus().catch(() => {});
+    await humanDelay(40, 80);
 
-  if (!focusedAfterReact) {
-    // Step 3: Coordinate-based fallback — handles cases where the locator's
-    // dynamic data-gtss-* attribute was wiped by a React re-render, making the
-    // locator match nothing and causing silent click failures.
+    // Step 2: OS-level click via Playwright (establishes cursor position)
+    await locator.click({ force: true }).catch(() => {});
+    await humanDelay(60, 100);
+
+    // Step 3: Full React synthetic event sequence including pointer events.
+    // LinkedIn's DM editor registers onPointerDown before onMouseDown; firing
+    // only mousedown/click is not enough to trigger its internal focus handler.
+    const focusedAfterReact = await locator
+      .evaluate((el) => {
+        const opts = { bubbles: true, cancelable: true, view: window };
+        const pOpts = { ...opts, pointerId: 1, pointerType: "mouse" };
+        el.dispatchEvent(new PointerEvent("pointerover", pOpts));
+        el.dispatchEvent(
+          new PointerEvent("pointerenter", { ...pOpts, bubbles: false }),
+        );
+        el.dispatchEvent(new PointerEvent("pointerdown", pOpts));
+        el.dispatchEvent(new MouseEvent("mousedown", opts));
+        el.dispatchEvent(new FocusEvent("focus", { ...opts, bubbles: false }));
+        el.dispatchEvent(new FocusEvent("focusin", opts));
+        el.dispatchEvent(new PointerEvent("pointerup", pOpts));
+        el.dispatchEvent(new MouseEvent("mouseup", opts));
+        el.dispatchEvent(new MouseEvent("click", opts));
+        el.focus({ preventScroll: false });
+        return (
+          document.activeElement === el || el.contains(document.activeElement)
+        );
+      })
+      .catch(() => false);
+
+    if (focusedAfterReact) {
+      await humanDelay(100, 200);
+      return; // Focus successfully landed — done.
+    }
+
+    // Step 4: Coordinate-based fallback.
+    // When the locator's data-gtss-* attribute was wiped by a React re-render,
+    // evaluate() throws (0 matching elements) and is caught above as false.
+    // page.mouse.click() with explicit coordinates still works because it hits
+    // whatever DOM node is visually at that position — including the fresh node.
     const box = await locator.boundingBox().catch(() => null);
     if (box) {
-      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-    } else {
-      // Last resort: click the msg-form container first, then the editor
-      await page
-        .locator(".msg-form, .msg-overlay-conversation-bubble")
-        .last()
-        .click({ force: true })
-        .catch(() => {});
-      await humanDelay(40, 80);
-      await locator.click({ force: true }).catch(() => {});
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height * 0.4; // slightly above centre feels natural
+      await page.mouse.move(
+        cx + (Math.random() - 0.5) * 8,
+        cy + (Math.random() - 0.5) * 4,
+      );
+      await humanDelay(30, 60);
+      await page.mouse.click(cx, cy);
+      await humanDelay(60, 120);
+
+      const focusedAfterMouse = await locator
+        .evaluate(
+          (el) =>
+            document.activeElement === el ||
+            el.contains(document.activeElement),
+        )
+        .catch(() => false);
+
+      if (focusedAfterMouse) {
+        await humanDelay(100, 180);
+        return;
+      }
     }
-    await locator.evaluate((el) => el.focus()).catch(() => {});
+
+    // Step 5: Re-discover a fresh stable editor.
+    // If the original locator is completely stale (zero matching elements,
+    // null bounding box) we re-query using LinkedIn's own stable class name
+    // and focus that fresh element before retrying.
+    const freshEditor = page
+      .locator('.msg-form__contenteditable[contenteditable="true"]')
+      .last();
+    const freshVisible = await freshEditor
+      .isVisible({ timeout: 800 })
+      .catch(() => false);
+    if (freshVisible) {
+      await freshEditor.focus().catch(() => {});
+      await humanDelay(60, 100);
+      await freshEditor.click({ force: true }).catch(() => {});
+      await humanDelay(60, 100);
+      const freshFocused = await freshEditor
+        .evaluate(
+          (el) =>
+            document.activeElement === el ||
+            el.contains(document.activeElement),
+        )
+        .catch(() => false);
+      if (freshFocused) {
+        await humanDelay(100, 180);
+        return;
+      }
+    }
+
+    if (attempt < MAX_FOCUS_ATTEMPTS) {
+      await humanDelay(200 * attempt, 320 * attempt);
+    }
   }
 
-  await humanDelay(100, 200); // let React finish its focus handler
+  // Final fallback: click the overlay container to give it OS focus, then
+  // call el.focus() directly. This covers edge cases where all CDP and
+  // coordinate paths are blocked (e.g. overlapping modal shields).
+  await page
+    .locator(".msg-form, .msg-overlay-conversation-bubble")
+    .last()
+    .click({ force: true })
+    .catch(() => {});
+  await humanDelay(80, 150);
+  await locator.evaluate((el) => el.focus()).catch(() => {});
+  await humanDelay(150, 250); // let React finish its focus handler
 }
 
 /**
@@ -890,6 +1022,36 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
 
   // Step 1: Properly activate the editor (fixes the "open but can't type" bug)
   await activateDmEditor(page, locator);
+
+  // Step 1b: Verify focus actually landed on the editor before we start typing.
+  // If focus silently failed (landed on a different element or nowhere),
+  // Control+A and subsequent key presses would operate on the wrong element —
+  // e.g. wiping the recipient field or being swallowed by the page.
+  const focusLanded = await locator
+    .evaluate(
+      (el) =>
+        document.activeElement === el || el.contains(document.activeElement),
+    )
+    .catch(() => false);
+
+  if (!focusLanded) {
+    // Make one more direct attempt via the stable selector before giving up.
+    const stableFresh = page
+      .locator('.msg-form__contenteditable[contenteditable="true"]')
+      .last();
+    const freshVisible = await stableFresh
+      .isVisible({ timeout: 600 })
+      .catch(() => false);
+    if (freshVisible) {
+      await activateDmEditor(page, stableFresh);
+      // Re-point our local reference for the rest of the function.
+      return typeLikeHuman(page, stableFresh, text);
+    }
+    throw new Error(
+      "LinkedIn DM editor focus verification failed — document.activeElement is not the message composer. " +
+        "The editor may have been obscured by a modal overlay or LinkedIn re-rendered the composer tree.",
+    );
+  }
 
   // Step 2: Clear any pre-existing placeholder/text
   await page.keyboard
@@ -1202,6 +1364,15 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
       );
     }
 
+    // ── Wait for LinkedIn's modal animation to finish ─────────────────────────
+    // LinkedIn's message overlay uses CSS transitions (opacity, transform) that
+    // temporarily set pointer-events:none on child nodes. Attempting to focus
+    // during the animation results in silent failure — the click or CDP focus
+    // command is accepted but immediately stolen back by the animation guard.
+    // waitForEditorInteractive() polls until the contenteditable is interactive.
+    emit("info", "Waiting for DM editor to become interactive...");
+    await waitForEditorInteractive(page, 2500);
+
     emit("info", "Waiting for DM editor to become available...");
     const editorMatch = await waitForDmEditor(page, dmOverlayMatch, 3);
 
@@ -1366,5 +1537,7 @@ module.exports = {
     findBestDmOverlay,
     activateDmEditor,
     typeLikeHuman,
+    waitForEditorInteractive,
+    waitForDmEditor,
   },
 };
