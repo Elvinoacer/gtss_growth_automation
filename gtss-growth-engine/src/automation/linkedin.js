@@ -650,24 +650,72 @@ async function getEditableText(locator) {
 }
 
 /**
- * Fast, reliable message entry for LinkedIn's composer.
- * Playwright fill() handles most textarea/contenteditable cases; keyboard.insertText
- * is the fallback that still fires real input events without slow per-character delays.
+ * Activate LinkedIn's DM composer so it truly has keyboard focus.
+ *
+ * LinkedIn's contenteditable uses React synthetic events. A plain Playwright
+ * click() or focus() is often insufficient — the editor becomes "visible" but
+ * its internal React focus state doesn't fire, so subsequent keyboard input is
+ * silently dropped.  We fix this by:
+ *   1. Scrolling the element into view.
+ *   2. Dispatching a real mousedown → mouseup → click sequence via evaluate()
+ *      so React's SyntheticEvent system registers the interaction.
+ *   3. Calling el.focus() inside the page to set the document activeElement.
+ *   4. Waiting a short settle delay before typing.
+ */
+async function activateDmEditor(page, locator) {
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  await humanDelay(80, 160);
+
+  // Dispatch pointer events inside the page context so React picks them up
+  await locator.evaluate((el) => {
+    const opts = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new MouseEvent("mousedown", opts));
+    el.dispatchEvent(new MouseEvent("mouseup", opts));
+    el.dispatchEvent(new MouseEvent("click", opts));
+    el.focus();
+  }).catch(() => {});
+
+  // Also fire Playwright's own click so the browser moves OS-level focus
+  await locator.click({ force: true }).catch(() => {});
+  await humanDelay(120, 240); // let React finish its focus handler
+}
+
+/**
+ * Human-like message entry for LinkedIn's DM composer.
+ *
+ * Types each character individually with a realistic random delay (40-140 ms)
+ * so it looks like a real person typing — important for avoiding bot detection.
+ * Falls back to DOM manipulation if per-character typing doesn't land (e.g. some
+ * LinkedIn overlay variants that swallow keyboard events before full activation).
  */
 async function typeLikeHuman(page, locatorOrSelector, text) {
   const locator = typeof locatorOrSelector === "string" ? page.locator(locatorOrSelector).first() : locatorOrSelector;
   const expected = String(text || "").trim();
 
-  await locator.scrollIntoViewIfNeeded().catch(() => {});
-  await locator.click({ force: true }).catch(() => {});
-  await locator.focus().catch(() => {});
+  // Step 1: Properly activate the editor (fixes the "open but can't type" bug)
+  await activateDmEditor(page, locator);
 
-  await locator.fill(text, { timeout: 1200 }).catch(async () => {
-    await locator.click({ force: true }).catch(() => {});
-    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
-    await page.keyboard.insertText(text).catch(async () => page.keyboard.type(text, { delay: 5 }));
-  });
+  // Step 2: Clear any pre-existing placeholder/text
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+  await page.keyboard.press("Backspace").catch(() => {});
+  await humanDelay(60, 120);
 
+  // Step 3: Type character by character with human-like timing
+  const speedup = process.env.TEST_SPEEDUP === "true";
+  for (const char of text) {
+    await page.keyboard.type(char);
+    if (!speedup) {
+      // Realistic human WPM range: ~55-90 WPM → ~40-140 ms per character
+      // Occasional longer pause simulates thinking/hesitation
+      const base = Math.floor(Math.random() * 100) + 40;
+      const pause = Math.random() < 0.07 ? base + Math.floor(Math.random() * 400) + 200 : base;
+      await new Promise((resolve) => setTimeout(resolve, pause));
+    }
+  }
+
+  await humanDelay(80, 160); // brief settle before verification
+
+  // Step 4: Verify text landed; if not, fall back to DOM injection
   let actual = (await getEditableText(locator)).trim();
   if (!actual.includes(expected)) {
     await locator.evaluate((el, value) => {
@@ -861,7 +909,9 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
 
     emit("info", `Clicking Message (${messageMatch.selector})...`);
     await messageMatch.locator.click();
-    await humanDelay(250, 500);
+    // Give LinkedIn's React overlay time to mount and finish its animation
+    // before we try to locate or interact with the DM composer.
+    await humanDelay(800, 1400);
 
     const premiumRequired = await detectPremiumRequired(page);
     if (premiumRequired) {
@@ -869,7 +919,7 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
       return premiumRequired;
     }
 
-    const dmOverlayMatch = await findBestDmOverlay(page, 3000);
+    const dmOverlayMatch = await findBestDmOverlay(page, 3500);
     if (!dmOverlayMatch) {
       emit("warn", "DM overlay container not detected — trying editor directly.");
     }
@@ -882,9 +932,15 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
       return { outcome: "failed", reason: "Textarea not found after fast retry" };
     }
 
+    // Explicitly activate the editor (scroll + pointer events + focus) before
+    // handing off to typeLikeHuman. This is the primary fix for DM delivery
+    // failures where the overlay is open but keystrokes are silently dropped.
+    emit("info", "Activating DM editor...");
+    await activateDmEditor(page, editorMatch.locator);
+
     emit("info", `Typing DM using ${editorMatch.selector}...`);
     await typeLikeHuman(page, editorMatch.locator, message);
-    await humanDelay(150, 300);
+    await humanDelay(250, 450);
 
     // Find the Send button in the active overlay first, then fall back to page-level search.
     const freshOverlayMatch = (await firstVisible(page, SELECTORS.dmOverlay, 900)) || dmOverlayMatch;
@@ -976,6 +1032,7 @@ module.exports = {
   __private: {
     findBestDmEditor,
     findBestDmOverlay,
+    activateDmEditor,
     typeLikeHuman,
   },
 };
