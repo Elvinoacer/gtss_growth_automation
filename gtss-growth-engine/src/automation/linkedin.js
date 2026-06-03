@@ -887,6 +887,13 @@ function messageSnippet(message) {
     .slice(0, 80);
 }
 
+function normalizeEditableText(value) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * Post-send verification.
  *
@@ -918,8 +925,12 @@ async function verifyDmSent(page, editorLocator, originalMessage) {
     try {
       const remainingText = await getEditableText(editorLocator);
       // Compare the first 20 chars to handle minor whitespace differences.
-      const snippet = originalMessage.substring(0, 20);
-      if (remainingText && snippet && remainingText.includes(snippet)) {
+      const snippet = normalizeEditableText(originalMessage).substring(0, 20);
+      if (
+        remainingText &&
+        snippet &&
+        normalizeEditableText(remainingText).includes(snippet)
+      ) {
         return {
           verified: false,
           reason: "Message still present in editor after send attempt",
@@ -962,9 +973,45 @@ async function getEditableText(locator) {
       const tagName = String(el.tagName || "").toLowerCase();
       if (tagName === "textarea" || tagName === "input")
         return String(el.value || "");
-      return String(el.textContent || el.innerText || "");
+      return String(el.innerText || el.textContent || "");
     })
     .catch(() => "");
+}
+
+async function getEditorState(locator) {
+  return locator
+    .evaluate((el) => {
+      const tagName = String(el.tagName || "").toLowerCase();
+      const value =
+        tagName === "textarea" || tagName === "input"
+          ? String(el.value || "")
+          : String(el.innerText || el.textContent || "");
+      return {
+        text: value,
+        focused:
+          document.activeElement === el || el.contains(document.activeElement),
+        connected: Boolean(el.isConnected),
+      };
+    })
+    .catch(() => ({ text: "", focused: false, connected: false }));
+}
+
+async function typeMessageWithKeyboard(page, text, charDelay = 0) {
+  const value = String(text || "");
+  const parts = value.split("\n");
+
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i]) {
+      await page.keyboard.type(parts[i], { delay: charDelay });
+    }
+
+    if (i < parts.length - 1) {
+      await page.keyboard.press("Shift+Enter");
+      if (process.env.TEST_SPEEDUP !== "true") {
+        await humanDelay(20, 45);
+      }
+    }
+  }
 }
 
 /**
@@ -1319,18 +1366,17 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
     await humanDelay(40, 80);
   }
 
-  // Step 3: pressSequentially fires proper keyboard events React can handle.
-  // It also calls locator.focus() internally, which is an additional safety net.
-  // Using a very small delay (3ms) to type visibly but extremely fast.
+  // Step 3: type through the real focused keyboard path. Newlines must be
+  // Shift+Enter in LinkedIn; plain Enter can submit the composer.
   const speedup = process.env.TEST_SPEEDUP === "true";
   const charDelay = speedup ? 0 : Number(process.env.TYPING_DELAY_MS || 3);
-  await locator.pressSequentially(text, { delay: charDelay });
+  await locator.focus().catch(() => {});
+  await typeMessageWithKeyboard(page, text, charDelay);
   await humanDelay(60, 120); // brief settle before verification
 
   // Step 4: Verify text landed; fall back to execCommand if not
   let actual = (await getEditableText(locator)).trim();
-  const normalizeWS = (s) => String(s).replace(/\s+/g, ' ').trim();
-  if (!normalizeWS(actual).includes(normalizeWS(expected))) {
+  if (!normalizeEditableText(actual).includes(normalizeEditableText(expected))) {
     // Re-activate so focus is clean before the fallback
     await activateDmEditor(page, locator);
     const fallbackText = (await getEditableText(locator)).trim();
@@ -1377,7 +1423,7 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
     actual = (await getEditableText(locator)).trim();
   }
 
-  if (!actual.includes(expected)) {
+  if (!normalizeEditableText(actual).includes(normalizeEditableText(expected))) {
     throw new Error("LinkedIn message editor did not accept typed text");
   }
 }
@@ -1577,12 +1623,60 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
 async function findSendButtonForEditor(page, editor, emit) {
   const log = emit || (() => {});
 
-  // Step 1: Try to find the send button scoped to the editor's form container
-  const selector = await editor.evaluate(el => {
+  const selector = await editor.evaluate((el) => {
+    const isDisabled = (btn) => {
+      const ariaDisabled = String(btn.getAttribute("aria-disabled") || "")
+        .trim()
+        .toLowerCase();
+      const classes = String(btn.className || "").toLowerCase();
+      return (
+        Boolean(btn.disabled) ||
+        ariaDisabled === "true" ||
+        classes.includes("disabled") ||
+        btn.matches("[disabled], .artdeco-button--disabled")
+      );
+    };
+
+    const visibleButton = (btn) => {
+      const rect = btn.getBoundingClientRect();
+      const style = window.getComputedStyle(btn);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.visibility !== "hidden" &&
+        style.display !== "none" &&
+        Number(style.opacity || "1") > 0
+      );
+    };
+
+    const isSendLike = (btn) => {
+      const label = [
+        btn.getAttribute("aria-label"),
+        btn.getAttribute("title"),
+        btn.getAttribute("data-control-name"),
+        btn.innerText,
+        btn.textContent,
+        btn.className,
+        btn.type,
+        btn.outerHTML,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return (
+        /\bsend\b/.test(label) ||
+        label.includes("msg-form__send") ||
+        label.includes("send-privately") ||
+        label.includes("paper-plane") ||
+        String(btn.type || "").toLowerCase() === "submit"
+      );
+    };
+
     const container =
       el.closest(".msg-form") ||
       el.closest(".msg-overlay-conversation-bubble") ||
       el.closest('[role="dialog"]') ||
+      el.closest(".msg-convo-wrapper") ||
       el.closest(".msg-overlay-list-bubble");
 
     if (!container) return { selector: null, debug: "No container found from editor" };
@@ -1606,64 +1700,65 @@ async function findSendButtonForEditor(page, editor, emit) {
       };
     });
 
-    const visible = allButtons.filter(btn => {
-      const rect = btn.getBoundingClientRect();
-      const style = window.getComputedStyle(btn);
-      return (
-        rect.width > 0 && rect.height > 0 &&
-        style.visibility !== "hidden" && style.display !== "none"
-      );
+    const visible = allButtons.filter(visibleButton);
+    const sendCandidates = visible.filter(isSendLike).sort((a, b) => {
+      const aDisabled = isDisabled(a) ? 1 : 0;
+      const bDisabled = isDisabled(b) ? 1 : 0;
+      if (aDisabled !== bDisabled) return aDisabled - bDisabled;
+
+      const score = (btn) => {
+        const rect = btn.getBoundingClientRect();
+        const label = [
+          btn.getAttribute("aria-label"),
+          btn.innerText,
+          btn.textContent,
+          btn.className,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        let value = 0;
+        if (label.includes("msg-form__send")) value += 80;
+        if (/\bsend\b/.test(label)) value += 60;
+        if (String(btn.type || "").toLowerCase() === "submit") value += 40;
+        value += rect.y / 100 + rect.x / 1000;
+        return value;
+      };
+
+      return score(b) - score(a);
     });
 
-    // Strategy A: match by outerHTML keywords
-    let send = visible.find(btn => {
-      const html = btn.outerHTML.toLowerCase();
-      return (
-        html.includes("msg-form__send") ||
-        html.includes("send-privately") ||
-        html.includes("paper-plane")
-      );
-    });
+    let send = sendCandidates[0] || null;
 
-    // Strategy B: match by class, aria-label, text, or type=submit
     if (!send) {
-      send = visible.find(btn => {
-        const label = (btn.getAttribute("aria-label") || "").toLowerCase();
-        const text = (btn.innerText || "").toLowerCase().trim();
-        const type = (btn.type || "").toLowerCase();
-        return (
-          label.includes("send") ||
-          text === "send" ||
-          type === "submit" ||
-          btn.className.toLowerCase().includes("send")
-        );
-      });
-    }
-
-    // Strategy C: last visible button at the bottom of the form footer
-    // LinkedIn places the Send button at the bottom-right of the form.
-    if (!send && visible.length > 0) {
-      const sorted = visible.slice().sort((a, b) => {
+      const sorted = visible
+        .filter((btn) => String(btn.type || "").toLowerCase() === "submit")
+        .sort((a, b) => {
         const ra = a.getBoundingClientRect();
         const rb = b.getBoundingClientRect();
-        return rb.y - ra.y || rb.x - ra.x; // bottom-most, then right-most
+          return rb.y - ra.y || rb.x - ra.x;
       });
-      // Pick the bottom-right button only if it's in the footer area
       const candidate = sorted[0];
-      const cRect = candidate.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
-      // If the button is in the bottom 60px of the container, it's likely Send
-      if (cRect.y > containerRect.bottom - 60) {
-        send = candidate;
+      if (candidate) {
+        const cRect = candidate.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        if (cRect.y > containerRect.bottom - 80) {
+          send = candidate;
+        }
       }
     }
 
     if (!send) return { selector: null, debug: JSON.stringify(debugInfo) };
 
-    const token = "gtss-" + Date.now();
+    const token =
+      "gtss-" + Date.now() + "-" + Math.random().toString(16).slice(2);
     send.setAttribute("data-gtss-send", token);
-    return { selector: `[data-gtss-send="${token}"]`, debug: JSON.stringify(debugInfo) };
-  }).catch(() => ({ selector: null, debug: "evaluate threw" }));
+    return {
+      selector: `[data-gtss-send="${token}"]`,
+      disabled: isDisabled(send),
+      debug: JSON.stringify(debugInfo),
+    };
+  }).catch(() => ({ selector: null, disabled: true, debug: "evaluate threw" }));
 
   log("info", `findSendButtonForEditor: debug=${selector.debug}`);
 
@@ -1672,8 +1767,30 @@ async function findSendButtonForEditor(page, editor, emit) {
     return null;
   }
 
-  log("info", `findSendButtonForEditor: found selector=${selector.selector}`);
-  return page.locator(selector.selector);
+  const locator = page.locator(selector.selector);
+  const disabled = await isLocatorDisabled(locator).catch(() => selector.disabled);
+  log(
+    "info",
+    `findSendButtonForEditor: found selector=${selector.selector}, disabled=${disabled}`,
+  );
+  return { locator, disabled };
+}
+
+async function isLocatorDisabled(locator) {
+  return locator
+    .evaluate((el) => {
+      const ariaDisabled = String(el.getAttribute("aria-disabled") || "")
+        .trim()
+        .toLowerCase();
+      const classes = String(el.className || "").toLowerCase();
+      return (
+        Boolean(el.disabled) ||
+        ariaDisabled === "true" ||
+        classes.includes("disabled") ||
+        el.matches("[disabled], .artdeco-button--disabled")
+      );
+    })
+    .catch(async () => locator.isDisabled().catch(() => true));
 }
 
 /**
@@ -1950,6 +2067,19 @@ async function sendDirectMessage(
     }
     await humanDelay(100, 200);
 
+    const typedState = await getEditorState(activeEditorLocator);
+    if (
+      !normalizeEditableText(typedState.text).includes(
+        normalizeEditableText(message),
+      )
+    ) {
+      emit("error", "Typed message is not present in the active DM editor.");
+      return {
+        outcome: "failed",
+        reason: "Typed message missing from DM editor before send",
+      };
+    }
+
     // Force React to recognize the content change
     await activeEditorLocator.evaluate(el => {
       el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
@@ -1969,16 +2099,15 @@ async function sendDirectMessage(
     while (Date.now() < sendEnableDeadline) {
       const candidate = await findSendButtonForEditor(page, activeEditorLocator, emit);
       if (candidate) {
-        const isDisabled = await candidate.isDisabled().catch(() => true);
-        if (!isDisabled) {
-          enabledSendBtn = candidate;
+        if (!candidate.disabled) {
+          enabledSendBtn = candidate.locator;
           break;
         }
       }
       // Also check the global stable selector as fallback
       const globalBtn = page.locator('button.msg-form__send-button').last();
       if (await globalBtn.isVisible({ timeout: 100 }).catch(() => false)) {
-        const globalDisabled = await globalBtn.isDisabled().catch(() => true);
+        const globalDisabled = await isLocatorDisabled(globalBtn);
         if (!globalDisabled) {
           enabledSendBtn = globalBtn;
           break;
@@ -1996,10 +2125,10 @@ async function sendDirectMessage(
       await humanDelay(80, 150);
 
       // Prefer Playwright's force click which pierces through invisible pointer-event blockers
-      await enabledSendBtn.click({ force: true }).catch(() => {});
-      
-      // Secondary fallback: trigger native click directly in DOM just in case
-      await enabledSendBtn.evaluate(el => el.click()).catch(() => {});
+      const clicked = await enabledSendBtn.click({ force: true }).then(() => true).catch(() => false);
+      if (!clicked) {
+        await enabledSendBtn.evaluate((el) => el.click()).catch(() => {});
+      }
 
       await humanDelay(600, 1000);
       sendSuccessful = true; // optimistic — verification below confirms
@@ -2115,6 +2244,7 @@ module.exports = {
     activateDmEditor,
     typeFast,
     typeLikeHuman,
+    findSendButtonForEditor,
     waitForEditorInteractive,
     waitForDmEditor,
     detectMessagingBlocked,

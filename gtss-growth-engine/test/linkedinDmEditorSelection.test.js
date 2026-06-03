@@ -89,6 +89,41 @@ test(
   },
 );
 
+// ─── test 1b: multi-line message verification ───────────────────────────────
+
+test(
+  "typeLikeHuman accepts LinkedIn's flattened textContent for multi-line DMs",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({
+      viewport: { width: 1366, height: 768 },
+    });
+
+    try {
+      await page.setContent(dmOverlayHtml());
+      process.env.TEST_SPEEDUP = "true";
+
+      const editor = await __private.findBestDmEditor(page, 1000);
+      assert.ok(editor, "expected a message editor to be found");
+
+      await __private.typeLikeHuman(
+        page,
+        editor.locator,
+        "Hi Allan,\n\nThanks for connecting.\n\nBest,\nElvin",
+      );
+
+      assert.match(
+        await editor.locator.textContent(),
+        /Hi Allan,\s*Thanks for connecting\.\s*Best,\s*Elvin/,
+      );
+    } finally {
+      delete process.env.TEST_SPEEDUP;
+      await browser.close();
+    }
+  },
+);
+
 // ─── test 2: pointer-events:none animation guard ───────────────────────────────
 
 test(
@@ -160,6 +195,11 @@ test(
       await page.evaluate(() => {
         const old = document.querySelector(".msg-form__contenteditable");
         const fresh = old.cloneNode(false); // clone without the data-gtss-* attribute
+        for (const attr of [...fresh.attributes]) {
+          if (attr.name.startsWith("data-gtss-")) {
+            fresh.removeAttribute(attr.name);
+          }
+        }
         fresh.textContent = "";
         old.replaceWith(fresh);
       });
@@ -291,7 +331,7 @@ test(
 // ─── test 6: focus verification catches wrong-element focus ───────────────────
 
 test(
-  "typeLikeHuman throws a descriptive error when focus cannot land on the editor",
+  "typeLikeHuman can still type when pointer events block regular clicks",
   { skip: SKIP },
   async () => {
     const browser = await chromium.launch({ headless: true });
@@ -314,18 +354,11 @@ test(
 
       const locator = page.locator("#broken-editor");
 
-      // typeLikeHuman must throw because focus cannot land and there's no
-      // stable .msg-form__contenteditable fallback to recover with.
-      await assert.rejects(
-        () => __private.typeLikeHuman(page, locator, "this should not land"),
-        (err) => {
-          assert.ok(
-            /focus verification failed/i.test(err.message) ||
-              /did not accept typed text/i.test(err.message),
-            `unexpected error message: ${err.message}`,
-          );
-          return true;
-        },
+      await __private.typeLikeHuman(page, locator, "this should still land");
+      assert.equal(
+        await locator.textContent(),
+        "this should still land",
+        "programmatic focus fallback should allow keyboard typing",
       );
     } finally {
       delete process.env.TEST_SPEEDUP;
@@ -425,6 +458,57 @@ test(
       const blocked = await __private.detectMessagingBlocked(page, 300);
       assert.ok(blocked, "premium dialog should be detected");
       assert.equal(blocked.outcome, "premium_required");
+    } finally {
+      await browser.close();
+    }
+  },
+);
+
+// ─── test 10: send button disabled state ────────────────────────────────────
+
+test(
+  "findSendButtonForEditor tracks aria-disabled send buttons inside the composer",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({ viewport: { width: 1366, height: 768 } });
+
+    try {
+      await page.setContent(`
+        <section class="msg-overlay-conversation-bubble" role="dialog" style="display:block;width:500px;height:420px;">
+          <form class="msg-form" style="display:block;height:360px;">
+            <div
+              class="msg-form__contenteditable"
+              contenteditable="true"
+              role="textbox"
+              aria-label="Write a message"
+              style="display:block;width:440px;height:200px;"
+            ></div>
+            <button aria-label="Attach" type="button">Attach</button>
+            <button
+              class="msg-form__send-button artdeco-button--disabled"
+              aria-label="Send"
+              aria-disabled="true"
+              type="submit"
+            >Send</button>
+          </form>
+        </section>
+      `);
+
+      const editor = page.locator(".msg-form__contenteditable");
+      const disabledSend = await __private.findSendButtonForEditor(page, editor);
+      assert.ok(disabledSend, "send button should be found while disabled");
+      assert.equal(disabledSend.disabled, true);
+
+      await page.evaluate(() => {
+        const send = document.querySelector(".msg-form__send-button");
+        send.setAttribute("aria-disabled", "false");
+        send.classList.remove("artdeco-button--disabled");
+      });
+
+      const enabledSend = await __private.findSendButtonForEditor(page, editor);
+      assert.ok(enabledSend, "send button should still be found after enabling");
+      assert.equal(enabledSend.disabled, false);
     } finally {
       await browser.close();
     }
