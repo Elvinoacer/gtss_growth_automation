@@ -265,7 +265,7 @@ async function quickVisibleProfileAction(page, action, timeout = 900) {
           const viewportWidth = window.innerWidth || 1366;
           const viewportHeight = window.innerHeight || 768;
           const maxX = Math.max(760, viewportWidth * 0.72);
-          const maxY = Math.max(620, viewportHeight * 0.82);
+          const maxY = Math.max(820, viewportHeight * 0.92);
           const actionSelectors = [
             "main .pv-top-card button",
             "main .pv-top-card a",
@@ -377,7 +377,7 @@ async function findProfileMessageAction(page, timeout = 2200) {
     page,
     SELECTORS.message,
     "Message",
-    Math.min(timeout, 1400),
+    Math.min(timeout, 2000),
   );
   if (direct) return direct;
 
@@ -1069,27 +1069,38 @@ async function activateDmEditor(page, locator) {
     // If the original locator is completely stale (zero matching elements,
     // null bounding box) we re-query using LinkedIn's own stable class name
     // and focus that fresh element before retrying.
-    const freshEditor = page
-      .locator('.msg-form__contenteditable[contenteditable="true"]')
-      .last();
-    const freshVisible = await freshEditor
-      .isVisible({ timeout: 800 })
-      .catch(() => false);
-    if (freshVisible) {
-      await freshEditor.focus().catch(() => {});
-      await humanDelay(60, 100);
-      await freshEditor.click({ force: true }).catch(() => {});
-      await humanDelay(60, 100);
-      const freshFocused = await freshEditor
-        .evaluate(
-          (el) =>
-            document.activeElement === el ||
-            el.contains(document.activeElement),
-        )
+    const freshSelectors = [
+      '.msg-form__contenteditable[contenteditable="true"]',
+      '.msg-form [contenteditable="true"]',
+      '[contenteditable="true"][data-placeholder*="message" i]',
+      '[contenteditable="true"][data-placeholder*="Write" i]',
+      '[contenteditable="true"][aria-placeholder*="message" i]',
+      '[contenteditable="true"][aria-label*="message" i]',
+      '[contenteditable="true"][aria-label*="Write" i]',
+      '[role="dialog"] [contenteditable="true"]',
+      '.msg-overlay-conversation-bubble [contenteditable="true"]',
+    ];
+    for (const freshSel of freshSelectors) {
+      const freshEditor = page.locator(freshSel).last();
+      const freshVisible = await freshEditor
+        .isVisible({ timeout: 400 })
         .catch(() => false);
-      if (freshFocused) {
-        await humanDelay(100, 180);
-        return;
+      if (freshVisible) {
+        await freshEditor.focus().catch(() => {});
+        await humanDelay(60, 100);
+        await freshEditor.click({ force: true }).catch(() => {});
+        await humanDelay(60, 100);
+        const freshFocused = await freshEditor
+          .evaluate(
+            (el) =>
+              document.activeElement === el ||
+              el.contains(document.activeElement),
+          )
+          .catch(() => false);
+        if (freshFocused) {
+          await humanDelay(100, 180);
+          return;
+        }
       }
     }
 
@@ -1298,17 +1309,21 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
     );
   }
 
-  // Step 2: Clear any pre-existing placeholder/text
-  await page.keyboard
-    .press(process.platform === "darwin" ? "Meta+A" : "Control+A")
-    .catch(() => {});
-  await page.keyboard.press("Delete").catch(() => {});
-  await humanDelay(40, 80);
+  // Step 2: Clear any pre-existing placeholder/text only if not empty
+  const currentText = (await getEditableText(locator)).trim();
+  if (currentText) {
+    await page.keyboard
+      .press(process.platform === "darwin" ? "Meta+A" : "Control+A")
+      .catch(() => {});
+    await page.keyboard.press("Delete").catch(() => {});
+    await humanDelay(40, 80);
+  }
 
   // Step 3: pressSequentially fires proper keyboard events React can handle.
   // It also calls locator.focus() internally, which is an additional safety net.
+  // Using a very small delay (3ms) to type visibly but extremely fast.
   const speedup = process.env.TEST_SPEEDUP === "true";
-  const charDelay = speedup ? 0 : Number(process.env.TYPING_DELAY_MS || 18);
+  const charDelay = speedup ? 0 : Number(process.env.TYPING_DELAY_MS || 3);
   await locator.pressSequentially(text, { delay: charDelay });
   await humanDelay(60, 120); // brief settle before verification
 
@@ -1318,11 +1333,14 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
   if (!normalizeWS(actual).includes(normalizeWS(expected))) {
     // Re-activate so focus is clean before the fallback
     await activateDmEditor(page, locator);
-    await page.keyboard
-      .press(process.platform === "darwin" ? "Meta+A" : "Control+A")
-      .catch(() => {});
-    await page.keyboard.press("Delete").catch(() => {});
-    await humanDelay(40, 80);
+    const fallbackText = (await getEditableText(locator)).trim();
+    if (fallbackText) {
+      await page.keyboard
+        .press(process.platform === "darwin" ? "Meta+A" : "Control+A")
+        .catch(() => {});
+      await page.keyboard.press("Delete").catch(() => {});
+      await humanDelay(40, 80);
+    }
 
     await locator.evaluate((el, value) => {
       el.focus();
@@ -1778,26 +1796,53 @@ async function sendDirectMessage(
       }
     }
 
-    // ── 1. Message button — no button means not connected; skip immediately ──
-    const messageMatch = await findProfileMessageAction(page, 2200);
+    // ── 1. Message button ─────────────────────────────────────────────────────
+    let messageMatch = await findProfileMessageAction(page, 2200);
+
+    // If not found after initial load, scroll the page once to trigger lazy
+    // rendering of the action buttons, then retry once more.
     if (!messageMatch) {
-      emit("warn", "No Message button — skipping profile.");
+      emit('info', 'Message button not visible on first pass — scrolling and retrying...');
+      await page.evaluate(() => window.scrollTo({ top: 200, behavior: 'instant' }));
+      await humanDelay(400, 600);
+      await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+      await humanDelay(300, 500);
+      messageMatch = await findProfileMessageAction(page, 2000);
+    }
+
+    if (!messageMatch) {
+      emit('warn', 'No Message button — skipping profile.');
       return {
-        outcome: "not_connected",
-        reason: "Message button not visible — not a 1st-degree connection",
+        outcome: 'not_connected',
+        reason: 'Message button not visible — not a 1st-degree connection',
       };
     }
 
     // ── 2. Click Message ─────────────────────────────────────────────────────
-    emit("info", `Clicking Message (${messageMatch.selector})...`);
+    emit('info', `Clicking Message (${messageMatch.selector})...`);
     await messageMatch.locator.click();
-    // Reduced from 700–1200 ms: 400–600 ms is enough for the overlay to mount.
-    await humanDelay(400, 600);
+    // Allow up to 900ms for the modal CSS animation to complete and React to mount.
+    await humanDelay(600, 900);
 
-    // ── 3. Premium / blocked popup — detect quickly, skip permanently ───────
+    // ── 2a. Detect navigation to full-page messaging UI ──────────────────────
+    // When the "Message" element is an <a> link to an existing thread, Playwright
+    // navigates to /messaging/thread/... instead of opening an overlay.
+    // In that case the overlay selectors will never appear, but the full-page
+    // messaging composer uses the same .msg-form__contenteditable class.
+    const currentUrl = page.url();
+    const navigatedToMessaging =
+      currentUrl.includes('/messaging/') || currentUrl.includes('/messages/');
+
+    if (navigatedToMessaging) {
+      emit('info', `Navigated to full messaging page (${currentUrl}). Waiting for full-page editor...`);
+      // The full-page composer may take a moment to hydrate.
+      await humanDelay(600, 1000);
+    }
+
+    // ── 3. Premium / blocked popup ───────────────────────────────────────────
     const blockedImmediately = await detectMessagingBlocked(page, 900);
     if (blockedImmediately) {
-      emit("warn", blockedImmediately.reason);
+      emit('warn', blockedImmediately.reason);
       return blockedImmediately;
     }
 
@@ -1814,7 +1859,7 @@ async function sendDirectMessage(
     }
 
     // ── 5. Locate DM editor — single attempt ────────────────────────────────
-    const editorMatch = await waitForDmEditor(page, null, 1);
+    const editorMatch = await waitForDmEditor(page, null, 3);
     if (!editorMatch) {
       emit("warn", "DM editor not found — skipping profile.");
       return { outcome: "failed", reason: "DM editor not found" };
@@ -1830,17 +1875,52 @@ async function sendDirectMessage(
       '[role="dialog"] [contenteditable="true"][aria-label*="message" i]',
       '[role="dialog"] [contenteditable="true"][aria-label*="Write" i]',
       '[role="dialog"] [contenteditable="true"][data-placeholder*="message" i]',
+      '[role="dialog"] [contenteditable="true"][data-placeholder*="Write" i]',
+      '[role="dialog"] [contenteditable="true"][aria-placeholder*="message" i]',
       '.msg-overlay-conversation-bubble [contenteditable="true"]',
       '.msg-form [role="textbox"]',
+      // Broad fallback: any contenteditable inside a dialog (but not subject/recipient)
+      '[role="dialog"] [contenteditable="true"]',
     ];
     let activeEditorLocator = editorMatch.locator;
     for (const sel of stableCandidates) {
       const candidate = page.locator(sel).last();
       const vis = await candidate.isVisible({ timeout: 200 }).catch(() => false);
       if (vis) {
-        activeEditorLocator = candidate;
-        break;
+        // Verify this is the message body, not a subject/recipient field
+        const isReject = await candidate.evaluate(el => {
+          const hint = [
+            el.getAttribute('aria-label') || '',
+            el.getAttribute('placeholder') || '',
+            el.getAttribute('data-placeholder') || '',
+            el.getAttribute('name') || '',
+            el.className || '',
+          ].join(' ').toLowerCase();
+          return /subject|recipient|\bto\b|people/.test(hint) && !/message|write|reply/.test(hint);
+        }).catch(() => false);
+        if (!isReject) {
+          activeEditorLocator = candidate;
+          break;
+        }
       }
+    }
+
+    // ── 5c. Explicitly activate focus on the chosen editor ───────────────────
+    // The "New message" compose modal often traps focus on the recipient pill
+    // or nowhere. Force focus before any typing attempt.
+    emit('info', 'Activating DM editor focus...');
+    await activateDmEditor(page, activeEditorLocator);
+    await humanDelay(150, 300);
+
+    // Verify focus actually landed
+    const editorHasFocus = await activeEditorLocator
+      .evaluate(el => document.activeElement === el || el.contains(document.activeElement))
+      .catch(() => false);
+    if (!editorHasFocus) {
+      emit('info', 'Focus did not land on editor — clicking directly...');
+      await activeEditorLocator.scrollIntoViewIfNeeded().catch(() => {});
+      await activeEditorLocator.click({ force: true }).catch(() => {});
+      await humanDelay(200, 400);
     }
 
     // ── 5b. Handle compose modals with Subject field ────────────────────────
@@ -1858,35 +1938,15 @@ async function sendDirectMessage(
       await humanDelay(150, 300);
     }
 
-    // ── 6. Type message — fast fill, not per-character simulation ───────────
-    emit("info", "Typing message (fast fill)...");
-    let textLanded = await typeFast(page, activeEditorLocator, message);
-
-    // ── 6a. Retry: re-focus editor + typeLikeHuman ──────────────────────────
-    // If typeFast failed (focus didn't land, locator stale, etc.), try clicking
-    // the editor directly and use the slower but more reliable typeLikeHuman
-    // which fires real keyboard events.
-    if (!textLanded) {
-      emit(
-        "info",
-        "Fast fill failed — retrying with direct click and human typing...",
-      );
-      // Only Tab if we know there's a Subject field trapping focus
-      if (hasSubject) {
-        await page.keyboard.press("Tab");
-        await humanDelay(100, 200);
-      }
-      // Re-click the editor directly
-      await activeEditorLocator.scrollIntoViewIfNeeded().catch(() => {});
-      await activeEditorLocator.click({ force: true }).catch(() => {});
-      await humanDelay(200, 350);
-      try {
-        await typeLikeHuman(page, activeEditorLocator, message);
-        textLanded = true;
-      } catch (retypeErr) {
-        emit("warn", `Human typing retry also failed: ${retypeErr.message}`);
-        return { outcome: "failed", reason: "Text entry failed (all methods)" };
-      }
+    // ── 6. Type message (Visible, Fast Human Typing) ────────────────────────
+    emit("info", "Typing message (visible fast typing)...");
+    
+    
+    try {
+      await typeLikeHuman(page, activeEditorLocator, message);
+    } catch (typeErr) {
+      emit("warn", `Typing failed: ${typeErr.message}`);
+      return { outcome: "failed", reason: "Text entry failed" };
     }
     await humanDelay(100, 200);
 
@@ -1899,107 +1959,88 @@ async function sendDirectMessage(
     // ── 6b. Short settle for React to process the input event ─────────────
     await humanDelay(300, 500);
 
-    // ── 7. Send (ROBUST) ─────────────────────────────────────────────────────
-    emit("info", "Attempting to send message...");
+    // ── 7. Wait for React to enable the Send button, then click it ───────────
+    emit('info', 'Waiting for Send button to become enabled...');
 
-    // Strategy 0: Ensure Send button is ready (critical)
-    await humanDelay(400, 700); // Let React fully process the input event
+    // Poll until a non-disabled send button appears (React processes input events).
+    // Budget: up to 3 s in 150 ms increments.
+    let enabledSendBtn = null;
+    const sendEnableDeadline = Date.now() + 3000;
+    while (Date.now() < sendEnableDeadline) {
+      const candidate = await findSendButtonForEditor(page, activeEditorLocator, emit);
+      if (candidate) {
+        const isDisabled = await candidate.isDisabled().catch(() => true);
+        if (!isDisabled) {
+          enabledSendBtn = candidate;
+          break;
+        }
+      }
+      // Also check the global stable selector as fallback
+      const globalBtn = page.locator('button.msg-form__send-button').last();
+      if (await globalBtn.isVisible({ timeout: 100 }).catch(() => false)) {
+        const globalDisabled = await globalBtn.isDisabled().catch(() => true);
+        if (!globalDisabled) {
+          enabledSendBtn = globalBtn;
+          break;
+        }
+      }
+      await humanDelay(150, 200);
+    }
 
     let sendSuccessful = false;
-    
-    // Check function: Verify the conversation changed.
-    // A React editor can clear visually but message fails.
-    const verifySentLocally = async () => {
-      const messageExists = await page.evaluate((msg) => {
-        const nodes = [...document.querySelectorAll(".msg-s-message-list__event")];
-        return nodes.some(n => n.innerText.includes(msg.substring(0, 20)));
-      }, message).catch(() => false);
-      return messageExists;
-    };
 
-    const sendButtonStrategies = [
-      // 1. Best: Scoped to same form tree as the editor
-      async () => {
-        const sendMatch = await findSendButtonForEditor(page, activeEditorLocator, emit);
-        if (!sendMatch) return false;
-        
-        emit("info", "Strategy 1: Found Send button inside same tree — clicking...");
-        
-        await sendMatch.scrollIntoViewIfNeeded().catch(() => {});
-        await sendMatch.hover().catch(() => {});
-        
-        const box = await sendMatch.boundingBox().catch(() => null);
-        if (box) {
-          emit("info", `Strategy 1: Clicking at (${Math.round(box.x + box.width/2)}, ${Math.round(box.y + box.height/2)})`);
-          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-        } else {
-          emit("info", "Strategy 1: No bounding box, using locator.click()");
-          await sendMatch.click().catch(() => {});
-        }
-        return true;
-      },
+    if (enabledSendBtn) {
+      emit('info', 'Send button is enabled — clicking...');
+      await enabledSendBtn.scrollIntoViewIfNeeded().catch(() => {});
+      await enabledSendBtn.hover().catch(() => {});
+      await humanDelay(80, 150);
+
+      // Prefer Playwright's force click which pierces through invisible pointer-event blockers
+      await enabledSendBtn.click({ force: true }).catch(() => {});
       
-      // 2. Direct DOM .click() on msg-form__send-button
-      async () => {
-        emit("info", "Strategy 2: Direct DOM click on .msg-form__send-button...");
-        return page.evaluate(() => {
-          const btn = document.querySelector(".msg-form__send-button");
-          if (!btn) return false;
-          btn.click();
-          return true;
-        }).catch(() => false);
-      },
+      // Secondary fallback: trigger native click directly in DOM just in case
+      await enabledSendBtn.evaluate(el => el.click()).catch(() => {});
 
-      // 3. Brute force: find ANY visible button with send-like traits in any msg container
-      async () => {
-        emit("info", "Strategy 3: Brute-force search for any send button...");
-        const result = await page.evaluate(() => {
-          // Search all message forms and overlays
-          const containers = document.querySelectorAll(
-            '.msg-form, .msg-overlay-conversation-bubble, [role="dialog"]'
-          );
-          for (const container of containers) {
-            const buttons = [...container.querySelectorAll("button")];
-            for (const btn of buttons) {
-              const rect = btn.getBoundingClientRect();
-              if (rect.width <= 0 || rect.height <= 0) continue;
-              const html = btn.outerHTML.toLowerCase();
-              if (
-                html.includes("send") ||
-                html.includes("msg-form__send") ||
-                html.includes("paper-plane") ||
-                html.includes("submit")
-              ) {
-                btn.click();
-                return { clicked: true, x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
-              }
-            }
-          }
-          return { clicked: false };
-        }).catch(() => ({ clicked: false }));
+      await humanDelay(600, 1000);
+      sendSuccessful = true; // optimistic — verification below confirms
+    }
 
-        if (result.clicked) {
-          emit("info", `Strategy 3: Clicked send at (${Math.round(result.x)}, ${Math.round(result.y)})`);
-          return true;
-        }
-        return false;
-      }
-    ];
+    // ── 7a. Keyboard Enter fallback ──────────────────────────────────────────
+    // If the send button was never found enabled, try pressing Enter on the
+    // focused editor. LinkedIn's DM composer submits on Enter (not Shift+Enter).
+    if (!sendSuccessful) {
+      emit('warn', 'Send button not found / still disabled — trying keyboard Enter fallback...');
+      
+      // First ensure focus is inside the editor
+      await activateDmEditor(page, activeEditorLocator);
+      await humanDelay(150, 200);
+      
+      // Press Ctrl+Enter and Enter (LinkedIn supports both depending on user settings)
+      await page.keyboard.press('Control+Enter').catch(() => {});
+      await humanDelay(100, 150);
+      await page.keyboard.press('Enter');
+      await humanDelay(600, 1000);
+      sendSuccessful = true; // optimistic — verification below confirms
+    }
 
-    for (const strategy of sendButtonStrategies) {
-      if (await strategy()) {
-        await humanDelay(800, 1200);
-        if (await verifySentLocally()) {
-          sendSuccessful = true;
-          break;
-        } else {
-          emit("info", "Strategy executed but editor did not clear. Retrying next strategy...");
-        }
+    // ── 7b. DOM direct click last-resort ────────────────────────────────────
+    // This fires btn.click() bypassing Playwright's actionability checks.
+    if (!sendSuccessful) {
+      emit('warn', 'Enter fallback also failed — trying direct DOM click last-resort...');
+      const clicked = await page.evaluate(() => {
+        const btn = document.querySelector('button.msg-form__send-button');
+        if (!btn) return false;
+        btn.removeAttribute('disabled');
+        btn.click();
+        return true;
+      }).catch(() => false);
+      if (clicked) {
+        await humanDelay(600, 1000);
+        sendSuccessful = true;
       }
     }
 
-    // Wait for LinkedIn to process the send before verification.
-    await humanDelay(1000, 1200);
+    await humanDelay(800, 1200);
 
     // ── 8. Verification — check error banner AND that editor cleared ─────────
     const verification = await verifyDmSent(page, activeEditorLocator, message);
