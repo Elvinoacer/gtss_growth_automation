@@ -1556,6 +1556,41 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
   }
 }
 
+async function findSendButtonForEditor(page, editor) {
+  const button = await editor.evaluateHandle(el => {
+    let container =
+      el.closest(".msg-form") ||
+      el.closest(".msg-overlay-conversation-bubble") ||
+      el.closest('[role="dialog"]');
+
+    if (!container) return null;
+
+    const buttons = [...container.querySelectorAll('button')];
+
+    return buttons.find(btn => {
+      const text = (btn.innerText || btn.getAttribute("aria-label") || "").toLowerCase();
+      const rect = btn.getBoundingClientRect();
+
+      return (
+        text.includes("send") &&
+        rect.width > 0 &&
+        rect.height > 0 &&
+        btn.getAttribute("aria-disabled") !== "true" &&
+        !btn.disabled
+      );
+    }) || null;
+  });
+
+  if (!button) return null;
+
+  return page.locator(
+    await button.evaluate(b => {
+      b.setAttribute("data-gtss-send", Date.now());
+      return `[data-gtss-send="${b.getAttribute("data-gtss-send")}"]`;
+    })
+  );
+}
+
 /**
  * Send a Direct Message on LinkedIn to a 1st-degree connection.
  *
@@ -1566,7 +1601,7 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
  *             ↓ no
  *           find editor (1 attempt) → not found → skip
  *             ↓ found
- *           typeFast (fill) → find send button → click / keyboard shortcut
+ *           typeFast (fill) → find send button → click
  *             ↓
  *           wait 500 ms → error banner? → fail / assume sent → next profile
  *
@@ -1830,32 +1865,34 @@ async function sendDirectMessage(
 
     let sendSuccessful = false;
     
-    // Check function: Returns true if editor is clear (message sent)
+    // Check function: Verify the conversation changed.
+    // A React editor can clear visually but message fails.
     const verifySentLocally = async () => {
-      const text = await getEditableText(activeEditorLocator).catch(() => "");
-      if (!text) return true;
-      const normalizeWS = (s) => String(s).replace(/\s+/g, ' ').trim();
-      return !normalizeWS(text).includes(normalizeWS(message.substring(0, 15)));
+      const messageExists = await page.evaluate((msg) => {
+        const nodes = [...document.querySelectorAll(".msg-s-message-list__event")];
+        return nodes.some(n => n.innerText.includes(msg.substring(0, 20)));
+      }, message).catch(() => false);
+      return messageExists;
     };
 
     const sendButtonStrategies = [
-      // 1. Best: Stable selector + force + retry
+      // 1. Best: Stable selector inside same tree + retry
       async () => {
-        const sendMatch = await firstVisible(page, SELECTORS.dmSend, 1800);
+        const sendMatch = await findSendButtonForEditor(page, activeEditorLocator);
         if (!sendMatch) return false;
         
-        emit("info", `Strategy 1: Found Send button via selector (${sendMatch.selector})...`);
+        emit("info", "Strategy 1: Found Send button inside same tree...");
         
         // Critical: Wait for button to be enabled
         let attempts = 0;
         while (attempts < 4) {
-          const isDisabled = await sendMatch.locator.isDisabled().catch(() => true);
+          const isDisabled = await sendMatch.isDisabled().catch(() => true);
           if (!isDisabled) break;
           await humanDelay(150, 250);
           attempts++;
         }
 
-        await sendMatch.locator.click({ force: true, timeout: 2000 }).catch(() => {});
+        await sendMatch.click({ timeout: 3000 }).catch(() => {});
         return true;
       },
       
@@ -1874,15 +1911,6 @@ async function sendDirectMessage(
           btn.dispatchEvent(evt);
           return true;
         }).catch(() => false);
-      },
-      
-      // 3. Keyboard fallback (only if everything else fails)
-      async () => {
-        emit("info", "Strategy 3: Trying keyboard shortcuts...");
-        await activeEditorLocator.click({ force: true }).catch(() => {});
-        await humanDelay(100, 200);
-        await page.keyboard.press(process.platform === "darwin" ? "Meta+Enter" : "Control+Enter");
-        return true;
       }
     ];
 
