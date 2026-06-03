@@ -1044,30 +1044,56 @@ async function typeFast(page, locator, text) {
       el.focus({ preventScroll: false });
 
       if (tagName === "textarea" || tagName === "input") {
+        // Native input/textarea: value assignment + manual events is sufficient.
         el.value = "";
         el.dispatchEvent(new InputEvent("input", { bubbles: true, data: "" }));
         el.value = message;
+        el.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            inputType: "insertText",
+            data: message,
+          }),
+        );
+        el.dispatchEvent(new Event("change", { bubbles: true }));
       } else {
-        el.textContent = "";
-        el.dispatchEvent(new InputEvent("input", { bubbles: true, data: "" }));
-        el.textContent = message;
-
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        range.collapse(false);
-        const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(range);
+        // contenteditable (LinkedIn's React DM composer) — MUST use execCommand so
+        // React's synthetic event system receives a proper beforeinput + input event
+        // pair with inputType:"insertText".
+        //
+        // Setting el.textContent directly bypasses beforeinput entirely: React's
+        // internal editor state stays empty, the placeholder layer is never removed,
+        // and the Send button stays disabled even though the DOM visually shows the
+        // message text. execCommand('insertText') fires the full native event
+        // sequence (beforeinput → DOM mutation → input) that React listens to.
+        if (typeof document.execCommand === "function") {
+          document.execCommand("selectAll", false, undefined);
+          document.execCommand("insertText", false, message);
+          // execCommand fires beforeinput + input natively — no manual dispatch needed.
+        } else {
+          // Absolute fallback for environments without execCommand (very rare).
+          // This path will not reliably enable the Send button on React editors,
+          // but allows the outer typeLikeHuman fallback in sendDirectMessage to
+          // catch and recover.
+          el.textContent = "";
+          el.textContent = message;
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          range.collapse(false);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          el.dispatchEvent(
+            new InputEvent("input", {
+              bubbles: true,
+              inputType: "insertText",
+              data: message,
+            }),
+          );
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        }
       }
 
-      el.dispatchEvent(
-        new InputEvent("input", {
-          bubbles: true,
-          inputType: "insertText",
-          data: message,
-        }),
-      );
-      el.dispatchEvent(new Event("change", { bubbles: true }));
       return true;
     }, value)
     .catch(() => false);
@@ -1086,7 +1112,8 @@ async function typeFast(page, locator, text) {
 
   const activeIsEditor = await locator
     .evaluate(
-      (el) => document.activeElement === el || el.contains(document.activeElement),
+      (el) =>
+        document.activeElement === el || el.contains(document.activeElement),
     )
     .catch(() => false);
 
@@ -1562,6 +1589,34 @@ async function sendDirectMessage(
       return { outcome: "failed", reason: "Text entry failed" };
     }
     await humanDelay(100, 200);
+
+    // ── 6b. Verify Send button activated; fall back to typeLikeHuman if not ─
+    // typeFast uses execCommand('insertText') which fires the beforeinput + input
+    // events that React needs. On some LinkedIn overlay variants (e.g. the Free
+    // Message modal shown in the screenshot) the Send button may still be disabled
+    // if the execCommand path didn't reach the active React fiber. We detect this
+    // cheaply and re-type via pressSequentially — real keyboard events that React's
+    // contenteditable always accepts — rather than silently falling through to the
+    // Ctrl+Enter shortcut which also fails when React still believes the editor
+    // is empty.
+    const sendCheckMatch = await firstVisible(page, SELECTORS.dmSend, 500);
+    const sendAlreadyEnabled = sendCheckMatch
+      ? !(await sendCheckMatch.locator.isDisabled().catch(() => true))
+      : false;
+
+    if (!sendAlreadyEnabled) {
+      emit(
+        "info",
+        "Send button not enabled after fast fill — retrying with human typing...",
+      );
+      try {
+        await typeLikeHuman(page, activeEditorLocator, message);
+        await humanDelay(80, 150);
+      } catch (retypeErr) {
+        emit("warn", `typeLikeHuman fallback failed: ${retypeErr.message}`);
+        return { outcome: "failed", reason: "Text entry failed (both paths)" };
+      }
+    }
 
     // ── 7. Send ──────────────────────────────────────────────────────────────
     const sendMatch = await firstVisible(page, SELECTORS.dmSend, 700);
