@@ -94,11 +94,29 @@ const SELECTORS = {
     ".artdeco-modal--type-is-messaging",
   ],
   dmSend: [
+    // ── High-confidence: LinkedIn's own stable classes ──
+    "button.msg-form__send-button:not([disabled])",
     "button.msg-form__send-button[aria-label]",
-    'button[aria-label="Send"][type="submit"]',
-    '.msg-form__send-btn-container button[type="submit"]',
     "button.msg-form__send-button",
+    // ── Submit buttons scoped to the message form ──
+    '.msg-form__send-btn-container button[type="submit"]',
+    '.msg-form button[type="submit"]',
+    '.msg-form__right-actions button[type="submit"]',
+    // ── aria-label based (covers icon-only send buttons) ──
+    'button[aria-label="Send"][type="submit"]',
+    'button[aria-label="Send"]',
+    'button[aria-label="Send message"]',
+    'button[aria-label*="Send" i][type="submit"]',
+    // ── Scoped to messaging containers ──
     '.msg-overlay-conversation-bubble button[aria-label*="Send" i]',
+    '[role="dialog"] button[aria-label*="Send" i]',
+    '.msg-form button[aria-label*="Send" i]',
+    '[role="dialog"] .msg-form button',
+    // ── Text-based (broad fallbacks) ──
+    '.msg-form button:has-text("Send")',
+    '.msg-overlay-conversation-bubble button:has-text("Send")',
+    '[role="dialog"] button:has-text("Send")',
+    // ── Very broad fallbacks (last resort) ──
     'button:has-text("Send")',
     "button.artdeco-button--primary",
   ],
@@ -116,28 +134,27 @@ async function firstVisible(page, selectors, timeout = 1500) {
 async function firstVisibleIn(scope, selectors, timeout = 1500) {
   const deadline = Date.now() + timeout;
 
-  for (const selector of selectors) {
-    const locator = scope.locator(selector);
-    const count = await locator.count().catch(() => 0);
+  while (Date.now() < deadline) {
+    for (const selector of selectors) {
+      // Find the first element matching this selector that is currently visible
+      const locator = scope.locator(selector);
+      const count = await locator.count().catch(() => 0);
 
-    for (let index = 0; index < count; index++) {
-      const candidate = locator.nth(index);
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) return null;
-
-      try {
-        await candidate.waitFor({
-          state: "visible",
-          timeout: Math.min(300, remaining),
-        });
-        return {
-          locator: candidate,
-          selector: count > 1 ? `${selector} >> nth=${index}` : selector,
-        };
-      } catch (_) {
-        // Try the next matching candidate.
+      for (let index = 0; index < count; index++) {
+        const candidate = locator.nth(index);
+        const isVisible = await candidate
+          .isVisible({ timeout: 50 })
+          .catch(() => false);
+        if (isVisible) {
+          return {
+            locator: candidate,
+            selector: count > 1 ? `${selector} >> nth=${index}` : selector,
+          };
+        }
       }
     }
+    // Briefly pause before polling all selectors again
+    await humanDelay(100, 150);
   }
 
   return null;
@@ -720,24 +737,43 @@ async function waitForEditorInteractive(page, timeout = 2500) {
   while (Date.now() < deadline) {
     const interactive = await page
       .evaluate(() => {
+        // Broad selector set — covers the standard DM overlay (.msg-form__contenteditable),
+        // the "New message" compose modal (which may lack .msg-form__contenteditable),
+        // and conversation overlays with existing message history.
         const editors = document.querySelectorAll(
           '.msg-form__contenteditable[contenteditable="true"],' +
-            '.msg-form [contenteditable="true"]',
+            '.msg-form [contenteditable="true"],' +
+            '.msg-form textarea,' +
+            '[role="dialog"] [contenteditable="true"],' +
+            '[role="dialog"] textarea,' +
+            '[role="dialog"] [role="textbox"],' +
+            '.msg-overlay-conversation-bubble [contenteditable="true"],' +
+            '.msg-overlay-conversation-bubble textarea',
         );
+        const rejectHint = /\b(subject|recipient|recipients|to:|search|people|name|email)\b/i;
         for (const el of editors) {
           const style = window.getComputedStyle(el);
           const rect = el.getBoundingClientRect();
+          // Skip non-visible or non-interactive elements
           if (
-            rect.width > 20 &&
-            rect.height > 20 &&
-            style.display !== "none" &&
-            style.visibility !== "hidden" &&
-            style.pointerEvents !== "none" &&
-            Number(style.opacity || "1") > 0.5 &&
-            !el.disabled &&
-            el.getAttribute("aria-disabled") !== "true"
+            rect.width <= 20 ||
+            rect.height <= 20 ||
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            style.pointerEvents === "none" ||
+            Number(style.opacity || "1") <= 0.5 ||
+            el.disabled ||
+            el.getAttribute("aria-disabled") === "true"
           )
-            return true;
+            continue;
+          // Skip Subject/recipient-like fields
+          const hint = [
+            el.placeholder, el.getAttribute('aria-label'),
+            el.getAttribute('data-placeholder'), el.name, el.id,
+          ].filter(Boolean).join(' ');
+          if (rejectHint.test(hint) && !/message|write|reply/i.test(hint))
+            continue;
+          return true;
         }
         return false;
       })
@@ -852,20 +888,72 @@ function messageSnippet(message) {
 }
 
 /**
- * Fast post-send verification.
+ * Post-send verification.
  *
- * After clicking Send we wait 500 ms and look for an explicit LinkedIn error
- * banner.  If none appears we assume success and move on.  The old approach
- * polled for up to 8 seconds (10 × 800 ms) waiting for the message to appear
- * in the thread — that was a large unnecessary cost per profile.
+ * After clicking Send we:
+ *   1. Wait for the UI to settle.
+ *   2. Check for explicit LinkedIn error banners.
+ *   3. Verify the editor no longer contains the message text we typed.
+ *
+ * Previously this function only checked for error banners and assumed
+ * success if none appeared — causing messages to be marked as "sent" even
+ * when the Send click silently failed.
+ *
+ * @param {object} page               - Playwright page instance
+ * @param {object} [editorLocator]     - Locator for the DM editor
+ * @param {string} [originalMessage]   - The message that was typed
  */
-async function verifyDmSent(page) {
-  await humanDelay(500, 600);
+async function verifyDmSent(page, editorLocator, originalMessage) {
+  await humanDelay(1200, 1500);
+
+  // Check 1: explicit LinkedIn error banner.
   const warning = await detectActionWarning(page);
   if (warning) {
     return { verified: false, reason: `LinkedIn warning: ${warning}` };
   }
-  return { verified: true, reason: "No error banner — assumed sent" };
+
+  // Check 2: verify the editor was cleared by the successful send.
+  // LinkedIn empties the compose box after a message is delivered.
+  if (editorLocator && originalMessage) {
+    try {
+      const remainingText = await getEditableText(editorLocator);
+      // Compare the first 20 chars to handle minor whitespace differences.
+      const snippet = originalMessage.substring(0, 20);
+      if (remainingText && snippet && remainingText.includes(snippet)) {
+        return {
+          verified: false,
+          reason: "Message still present in editor after send attempt",
+        };
+      }
+    } catch (_) {
+      // Editor may have been detached (which actually indicates success —
+      // LinkedIn sometimes tears down the overlay on send). Continue.
+    }
+  }
+
+  // Check 3: see if the Send button became disabled or disappeared
+  // (LinkedIn disables it after a successful send).
+  try {
+    const postSendBtn = await firstVisible(page, SELECTORS.dmSend, 300);
+    if (postSendBtn) {
+      const stillEnabled = !(await postSendBtn.locator.isDisabled().catch(() => true));
+      // If the button is still enabled AND the editor still has content,
+      // that's a strong signal the send didn't go through.
+      if (stillEnabled && editorLocator) {
+        const textAfter = await getEditableText(editorLocator).catch(() => "");
+        if (textAfter && textAfter.trim().length > 5) {
+          return {
+            verified: false,
+            reason: "Send button still enabled and editor not empty",
+          };
+        }
+      }
+    }
+  } catch (_) {
+    // Send button not found — likely detached after successful send.
+  }
+
+  return { verified: true, reason: "Editor cleared after send" };
 }
 
 async function getEditableText(locator) {
@@ -900,7 +988,7 @@ async function getEditableText(locator) {
  *   6. The entire sequence retries up to MAX_FOCUS_ATTEMPTS times.
  */
 async function activateDmEditor(page, locator) {
-  const MAX_FOCUS_ATTEMPTS = 1;
+  const MAX_FOCUS_ATTEMPTS = 3;
 
   for (let attempt = 1; attempt <= MAX_FOCUS_ATTEMPTS; attempt++) {
     await locator.scrollIntoViewIfNeeded().catch(() => {});
@@ -1021,6 +1109,40 @@ async function activateDmEditor(page, locator) {
   await humanDelay(80, 150);
   await locator.evaluate((el) => el.focus()).catch(() => {});
   await humanDelay(150, 250); // let React finish its focus handler
+
+  // ─── Subject field guard ──────────────────────────────────────────────
+  // LinkedIn's "New message" compose modal (used for Free messages, InMail,
+  // and non-1st-degree connections) opens with focus trapped on the Subject
+  // input.  ONLY Tab forward when focus is SPECIFICALLY on a Subject or
+  // recipient <input>/<select> — NOT for buttons, divs, or other elements,
+  // because blind tabbing navigates through the overlay toolbar (GIF, attach,
+  // emoji, Send) and moves focus past the Send button.
+  for (let tabGuard = 0; tabGuard < 3; tabGuard++) {
+    const isOnSubjectInput = await page
+      .evaluate(() => {
+        const el = document.activeElement;
+        if (!el || el === document.body) return false;
+        const tag = el.tagName.toLowerCase();
+        // Only Tab past <input> or <select> elements that look like Subject/recipient
+        if (tag !== "input" && tag !== "select") return false;
+        const hint = [
+          el.placeholder || "",
+          el.getAttribute("aria-label") || "",
+          el.name || "",
+          el.id || "",
+          el.className || "",
+        ]
+          .join(" ")
+          .toLowerCase();
+        return /subject|recipient|\bto\b|people/.test(hint);
+      })
+      .catch(() => false);
+
+    if (!isOnSubjectInput) break; // Focus is not on Subject — stop tabbing
+
+    await page.keyboard.press("Tab");
+    await humanDelay(120, 220);
+  }
 }
 
 /**
@@ -1108,7 +1230,8 @@ async function typeFast(page, locator, text) {
   await humanDelay(80, 140);
 
   const actual = (await getEditableText(locator)).trim();
-  if (!actual.includes(value)) return false;
+  const normalizeWS = (s) => String(s).replace(/\s+/g, ' ').trim();
+  if (!normalizeWS(actual).includes(normalizeWS(value))) return false;
 
   const activeIsEditor = await locator
     .evaluate(
@@ -1191,7 +1314,8 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
 
   // Step 4: Verify text landed; fall back to execCommand if not
   let actual = (await getEditableText(locator)).trim();
-  if (!actual.includes(expected)) {
+  const normalizeWS = (s) => String(s).replace(/\s+/g, ' ').trim();
+  if (!normalizeWS(actual).includes(normalizeWS(expected))) {
     // Re-activate so focus is clean before the fallback
     await activateDmEditor(page, locator);
     await page.keyboard
@@ -1468,64 +1592,87 @@ async function sendDirectMessage(
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
     await humanDelay(80, 200);
 
-    // ── 0. Profile identity verification ─────────────────────────────────────
-    // When a leadName is provided, scrape the visible <h1> on the profile page
-    // and compare first names.  A mismatch means the browser landed on the wrong
-    // profile — stale tab state, a redirect, or a URL stored with a different
-    // person's path.  We abort before typing a single character to prevent the
-    // wrong person from receiving this DM.
-    if (leadName) {
+    // ── 0. Profile identity & message-content verification ─────────────────
+    // Two safety checks before we type a single character:
+    //   A. If leadName was passed, verify the profile page h1 matches it.
+    //   B. ALWAYS check the message body for a greeting name (e.g. "Hi Peter,")
+    //      and verify it matches the profile page. This catches the critical bug
+    //      where the message was generated/queued for the wrong person.
+    {
+      const normalise = (name) =>
+        String(name || "")
+          .trim()
+          .split(/\s+/)[0]
+          .toLowerCase()
+          .replace(/[^a-z]/g, "");
+
+      let pageProfileName = null;
       try {
-        const pageH1 = await page
+        pageProfileName = await page
           .locator("h1.text-heading-xlarge, main h1")
           .first()
           .textContent({ timeout: 2500 })
           .catch(() => null);
+      } catch (_) {}
 
-        if (pageH1) {
-          // Normalise: lowercase, keep only letters (handles accents, hyphens)
-          const normalise = (name) =>
-            String(name || "")
-              .trim()
-              .split(/\s+/)[0]
-              .toLowerCase()
-              .replace(/[^a-z]/g, "");
+      const pageFirst = normalise(pageProfileName);
 
-          const pageFirst = normalise(pageH1);
-          const expectedFirst = normalise(leadName);
+      // Check A: leadName vs profile page name
+      if (leadName && pageFirst) {
+        const expectedFirst = normalise(leadName);
+        if (expectedFirst && pageFirst !== expectedFirst) {
+          emit(
+            "error",
+            `Profile identity mismatch: page shows "${(pageProfileName || "").trim()}" ` +
+              `but expected "${leadName}". Aborting to prevent wrong-person DM.`,
+          );
+          logger.error("LinkedIn DM Safety Block", {
+            profileUrl,
+            expectedLeadName: leadName,
+            pageProfileName: (pageProfileName || "").trim(),
+          });
+          return {
+            outcome: "failed",
+            reason:
+              `Profile name mismatch: page="${(pageProfileName || "").trim()}" vs expected="${leadName}". ` +
+              `Send aborted by identity guard.`,
+          };
+        }
+        emit(
+          "info",
+          `Profile identity verified: "${(pageProfileName || "").trim()}" matches lead "${leadName}".`,
+        );
+      }
 
-          if (pageFirst && expectedFirst && pageFirst !== expectedFirst) {
+      // Check B: message greeting name vs profile page name
+      // Catches "Hi Peter," being sent to Amelia Kate's profile.
+      if (pageFirst && message) {
+        const greetingMatch = message.match(
+          /^(?:hi|hey|hello|dear|good\s+(?:morning|afternoon|evening))\s*,?\s+([a-z]+)/i,
+        );
+        if (greetingMatch) {
+          const greetingName = normalise(greetingMatch[1]);
+          if (greetingName && greetingName !== pageFirst) {
             emit(
               "error",
-              `Profile identity mismatch: page shows "${pageH1.trim()}" ` +
-                `but expected "${leadName}". Aborting to prevent wrong-person DM.`,
+              `Message content mismatch: message greets "${greetingMatch[1]}" ` +
+                `but profile is "${(pageProfileName || "").trim()}". ` +
+                `Aborting to prevent sending wrong message to wrong person.`,
             );
-            logger.error("LinkedIn DM Safety Block", {
+            logger.error("LinkedIn DM Content Safety Block", {
               profileUrl,
-              expectedLeadName: leadName,
-              pageProfileName: pageH1.trim(),
+              greetingName: greetingMatch[1],
+              pageProfileName: (pageProfileName || "").trim(),
+              messageSnippet: messageSnippet(message),
             });
             return {
               outcome: "failed",
               reason:
-                `Profile name mismatch: page="${pageH1.trim()}" vs expected="${leadName}". ` +
-                `Send aborted by identity guard.`,
+                `Message content mismatch: greeting="${greetingMatch[1]}" vs profile="${(pageProfileName || "").trim()}". ` +
+                `Send aborted by content guard.`,
             };
           }
-
-          emit(
-            "info",
-            `Profile identity verified: "${pageH1.trim()}" matches lead "${leadName}".`,
-          );
         }
-      } catch (verifyErr) {
-        // Non-fatal: the name check in dmQueue.js is the primary safety gate.
-        // If we can't read the page h1 (network hiccup, selector change, etc.)
-        // we warn and continue rather than blocking every send.
-        emit(
-          "warn",
-          `Could not verify profile name from page — proceeding. (${verifyErr.message})`,
-        );
       }
     }
 
@@ -1552,10 +1699,10 @@ async function sendDirectMessage(
       return blockedImmediately;
     }
 
-    // ── 4. Wait for editor to be interactive — short ceiling, then move on ──
-    // If the animation has not finished quickly, check one more time for a
-    // premium/blocking dialog and skip instead of spending minutes on one lead.
-    const editorInteractive = await waitForEditorInteractive(page, 900);
+    // ── 4. Wait for editor to be interactive — generous ceiling ──────────────
+    // LinkedIn's compose modal and conversation overlay can take 1-2s to
+    // mount the editor, especially with existing message history.
+    const editorInteractive = await waitForEditorInteractive(page, 1800);
     if (!editorInteractive) {
       const blockedAfterWait = await detectMessagingBlocked(page, 500);
       if (blockedAfterWait) {
@@ -1571,22 +1718,73 @@ async function sendDirectMessage(
       return { outcome: "failed", reason: "DM editor not found" };
     }
 
-    // Prefer LinkedIn's own stable class over the token-based locator —
+    // Prefer a stable CSS-class locator over the token-based locator —
     // it survives React re-renders between discovery and interaction.
-    const stableLocator = page
-      .locator('.msg-form__contenteditable[contenteditable="true"]')
-      .last();
-    const useStable = await stableLocator
+    // Try multiple selectors to cover both the standard DM overlay and
+    // the "New message" compose modal (which may lack .msg-form__contenteditable).
+    const stableCandidates = [
+      '.msg-form__contenteditable[contenteditable="true"]',
+      '.msg-form [contenteditable="true"]:not([class*="subject"])',
+      '[role="dialog"] [contenteditable="true"][aria-label*="message" i]',
+      '[role="dialog"] [contenteditable="true"][aria-label*="Write" i]',
+      '[role="dialog"] [contenteditable="true"][data-placeholder*="message" i]',
+      '.msg-overlay-conversation-bubble [contenteditable="true"]',
+      '.msg-form [role="textbox"]',
+    ];
+    let activeEditorLocator = editorMatch.locator;
+    for (const sel of stableCandidates) {
+      const candidate = page.locator(sel).last();
+      const vis = await candidate.isVisible({ timeout: 200 }).catch(() => false);
+      if (vis) {
+        activeEditorLocator = candidate;
+        break;
+      }
+    }
+
+    // ── 5b. Handle compose modals with Subject field ────────────────────────
+    // LinkedIn's "New message" compose dialog has a Subject input that traps
+    // focus on modal open.  Detect it and ensure focus moves to the body.
+    const hasSubject = await page
+      .locator('input[placeholder*="Subject" i], input[aria-label*="Subject" i]')
+      .first()
       .isVisible({ timeout: 300 })
       .catch(() => false);
-    const activeEditorLocator = useStable ? stableLocator : editorMatch.locator;
+    if (hasSubject) {
+      emit("info", "Compose modal with Subject field detected — focusing message body...");
+      await activeEditorLocator.scrollIntoViewIfNeeded().catch(() => {});
+      await activeEditorLocator.click({ force: true }).catch(() => {});
+      await humanDelay(150, 300);
+    }
 
     // ── 6. Type message — fast fill, not per-character simulation ───────────
     emit("info", "Typing message (fast fill)...");
-    const textLanded = await typeFast(page, activeEditorLocator, message);
+    let textLanded = await typeFast(page, activeEditorLocator, message);
+
+    // ── 6a. Retry: re-focus editor + typeLikeHuman ──────────────────────────
+    // If typeFast failed (focus didn't land, locator stale, etc.), try clicking
+    // the editor directly and use the slower but more reliable typeLikeHuman
+    // which fires real keyboard events.
     if (!textLanded) {
-      emit("warn", "Message text did not land in editor — skipping profile.");
-      return { outcome: "failed", reason: "Text entry failed" };
+      emit(
+        "info",
+        "Fast fill failed — retrying with direct click and human typing...",
+      );
+      // Only Tab if we know there's a Subject field trapping focus
+      if (hasSubject) {
+        await page.keyboard.press("Tab");
+        await humanDelay(100, 200);
+      }
+      // Re-click the editor directly
+      await activeEditorLocator.scrollIntoViewIfNeeded().catch(() => {});
+      await activeEditorLocator.click({ force: true }).catch(() => {});
+      await humanDelay(200, 350);
+      try {
+        await typeLikeHuman(page, activeEditorLocator, message);
+        textLanded = true;
+      } catch (retypeErr) {
+        emit("warn", `Human typing retry also failed: ${retypeErr.message}`);
+        return { outcome: "failed", reason: "Text entry failed (all methods)" };
+      }
     }
     await humanDelay(100, 200);
 
@@ -1619,23 +1817,121 @@ async function sendDirectMessage(
     }
 
     // ── 7. Send ──────────────────────────────────────────────────────────────
-    const sendMatch = await firstVisible(page, SELECTORS.dmSend, 700);
-    if (
-      sendMatch &&
-      !(await sendMatch.locator.isDisabled().catch(() => false))
-    ) {
-      emit("info", `Clicking Send (${sendMatch.selector})...`);
-      await sendMatch.locator.click();
-    } else {
-      // Keyboard shortcut fallback — no extra activateDmEditor round-trip.
-      const sendShortcut =
-        process.platform === "darwin" ? "Meta+Enter" : "Control+Enter";
-      emit("info", `Send button not ready — using ${sendShortcut}...`);
-      await page.keyboard.press(sendShortcut);
+    // We attempt multiple clicking strategies. After each attempt, we check if
+    // the editor cleared. This is the only reliable way to know if the click worked.
+    let sendSuccessful = false;
+    
+    // Check function: Returns true if editor is clear (message sent)
+    const verifySentLocally = async () => {
+      const text = await getEditableText(activeEditorLocator).catch(() => "");
+      if (!text) return true;
+      const normalizeWS = (s) => String(s).replace(/\s+/g, ' ').trim();
+      return !normalizeWS(text).includes(normalizeWS(message.substring(0, 15)));
+    };
+
+    // Strategy A: Use the selector list
+    const sendMatch = await firstVisible(page, SELECTORS.dmSend, 2500);
+    if (sendMatch) {
+      emit("info", `Trying selector-based Send click (${sendMatch.selector})...`);
+      // Force click bypasses Playwright's actionability checks (like aria-disabled)
+      await sendMatch.locator.click({ force: true }).catch(() => {});
+      await humanDelay(600, 800);
+      
+      if (await verifySentLocally()) {
+        sendSuccessful = true;
+      } else {
+        emit("info", "Selector-based click executed, but editor did not clear. Trying next strategy...");
+      }
     }
 
-    // ── 8. Fast verification — 500 ms wait + single error banner check ───────
-    const verification = await verifyDmSent(page);
+    // Strategy B: DOM-based smart search & coordinate click
+    if (!sendSuccessful) {
+      emit("info", "Trying DOM-based smart search and coordinate click...");
+      const domSendResult = await page
+        .evaluate(() => {
+          const normalize = (s) => String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
+          const visible = (el) => {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return (
+              rect.width >= 8 && rect.height >= 8 && rect.bottom > 0 && rect.right > 0 &&
+              style.visibility !== "hidden" && style.display !== "none"
+            );
+          };
+
+          const candidates = [];
+          const buttons = document.querySelectorAll('button, [role="button"], input[type="submit"]');
+          for (const btn of buttons) {
+            if (!visible(btn)) continue;
+            const label = normalize(
+              [btn.getAttribute("aria-label"), btn.getAttribute("title"), btn.textContent].filter(Boolean).join(" ")
+            );
+            if (!label.includes("send")) continue;
+            if (label.includes("connection") || label.includes("inmail") || label.includes("invitation")) continue;
+
+            const rect = btn.getBoundingClientRect();
+            let score = 0;
+            if (btn.closest(".msg-form")) score += 500;
+            if (btn.closest(".msg-overlay-conversation-bubble")) score += 300;
+            if (btn.closest('[role="dialog"]')) score += 200;
+            if (!(btn.disabled || btn.getAttribute("aria-disabled") === "true")) score += 400;
+            if (label === "send" || label === "send message") score += 300;
+            score += Math.min(200, rect.y / 5);
+
+            candidates.push({ score, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } });
+          }
+
+          candidates.sort((a, b) => b.score - a.score);
+          return candidates[0] || null;
+        })
+        .catch(() => null);
+
+      if (domSendResult && domSendResult.rect) {
+        const r = domSendResult.rect;
+        const cx = r.x + r.width / 2;
+        const cy = r.y + r.height / 2;
+        
+        emit("info", `Clicking Send button via coordinates (${Math.round(cx)}, ${Math.round(cy)})...`);
+        await page.mouse.click(cx, cy);
+        await humanDelay(600, 800);
+
+        if (await verifySentLocally()) {
+          sendSuccessful = true;
+        } else {
+          emit("info", "Coordinate click executed, but editor did not clear. Trying next strategy...");
+        }
+      }
+    }
+
+    // Strategy C: Keyboard shortcuts
+    if (!sendSuccessful) {
+      emit("info", "Mouse clicks failed or not found. Trying keyboard shortcuts...");
+      await activeEditorLocator.click({ force: true }).catch(() => {});
+      await humanDelay(100, 200);
+
+      emit("info", "Trying Enter key...");
+      await page.keyboard.press("Enter");
+      await humanDelay(600, 800);
+
+      if (await verifySentLocally()) {
+        sendSuccessful = true;
+      } else {
+        const sendShortcut = process.platform === "darwin" ? "Meta+Enter" : "Control+Enter";
+        emit("info", `Enter didn't send — trying ${sendShortcut}...`);
+        await page.keyboard.press(sendShortcut);
+        await humanDelay(600, 800);
+        
+        if (await verifySentLocally()) {
+          sendSuccessful = true;
+        }
+      }
+    }
+
+    // Wait for LinkedIn to process the send before verification.
+    await humanDelay(1000, 1200);
+
+    // ── 8. Verification — check error banner AND that editor cleared ─────────
+    const verification = await verifyDmSent(page, activeEditorLocator, message);
     if (!verification.verified) {
       emit("error", `DM send failed: ${verification.reason}`);
       return { outcome: "failed", reason: verification.reason };

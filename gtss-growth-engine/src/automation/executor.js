@@ -343,6 +343,7 @@ async function runAutomationAction(action, browserState, emit) {
       action.profile_url,
       action.body,
       emit,
+      action.lead_name || null,
     );
   } else {
     emit("error", `Action ${actionType} not supported for ${platform}.`);
