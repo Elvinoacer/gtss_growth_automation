@@ -41,6 +41,48 @@ try {
   );
 }
 
+// ── PROFILE URL NORMALIZATION HELPERS ────────────────────────────────────────
+/**
+ * Normalises a social profile URL to a canonical, lowercase, protocol-free,
+ * trailing-slash-free, query-param-free string used for cross-lead deduplication.
+ *
+ * Examples that all collapse to the same value:
+ *   https://www.linkedin.com/in/brian/
+ *   https://linkedin.com/in/brian?trk=abc
+ *   HTTPS://WWW.LINKEDIN.COM/IN/BRIAN
+ *
+ * @param {string} url
+ * @returns {string} Normalised URL or '' if input is falsy
+ */
+function normalizeProfileUrl(url) {
+  if (!url) return "";
+  return String(url)
+    .toLowerCase()
+    .trim()
+    .split("?")[0] // drop query params (trk=, originalSubdomain=, etc.)
+    .replace(/\/+$/, "") // drop trailing slashes
+    .replace(/^https?:\/\/(www\.)?/, ""); // drop protocol + optional www
+}
+
+/**
+ * Returns every realistic stored form of a normalised profile URL so we can
+ * match across leads whose URLs were saved with or without https/www/slash.
+ *
+ * @param {string} normalized - Output of normalizeProfileUrl()
+ * @returns {string[]}
+ */
+function buildProfileUrlVariants(normalized) {
+  const base = normalized.replace(/\/+$/, "");
+  return [
+    base,
+    base + "/",
+    "https://" + base,
+    "https://" + base + "/",
+    "https://www." + base,
+    "https://www." + base + "/",
+  ];
+}
+
 /**
  * Checks if current hour is within target platform policy operational window.
  *
@@ -286,7 +328,7 @@ async function processDmQueue(page, options = {}) {
       // ── 4. ANTI-DUPLICATION SPAM PROTECTION ───────────────────────────────
       let isDuplicate = false;
       try {
-        // Query touchpoints history for messages sent to this lead
+        // Query touchpoints history for messages sent to this lead (by lead_id)
         const existingTouchpoint = db
           .prepare(
             `
@@ -311,6 +353,65 @@ async function processDmQueue(page, options = {}) {
 
         if (existingTouchpoint || existingSuccessfulJob) {
           isDuplicate = true;
+        }
+
+        // ── URL-BASED CROSS-LEAD DEDUPLICATION ──────────────────────────
+        // The lead_id checks above can miss cases where the SAME LinkedIn
+        // person exists under multiple lead records with slightly different
+        // profile_url formatting (trailing slash, query params, www prefix,
+        // etc.).  We normalise the URL and scan across ALL leads so we never
+        // message the same physical person twice, even if they somehow appear
+        // in the database under more than one lead_id.
+        if (!isDuplicate && job.profile_url) {
+          const normalizedUrl = normalizeProfileUrl(job.profile_url);
+          if (normalizedUrl) {
+            const urlVariants = buildProfileUrlVariants(normalizedUrl);
+            const variantPlaceholders = urlVariants.map(() => "?").join(",");
+
+            // Find any OTHER lead records whose stored URL normalises to the
+            // same person.  LOWER + TRIM(url, '/') in SQLite removes trailing
+            // slashes and case differences; the IN clause covers protocol and
+            // www variants.
+            const duplicateLeads = db
+              .prepare(
+                `
+                SELECT id FROM leads
+                WHERE id != ?
+                  AND LOWER(TRIM(profile_url, '/')) IN (${variantPlaceholders})
+              `,
+              )
+              .all(job.lead_id, ...urlVariants);
+
+            if (duplicateLeads.length > 0) {
+              const dupIds = duplicateLeads.map((l) => l.id);
+              const idPlaceholders = dupIds.map(() => "?").join(",");
+
+              // Were any of those duplicate-person lead records already DM'd?
+              const alreadyMessaged = db
+                .prepare(
+                  `
+                  SELECT id FROM touchpoints
+                  WHERE lead_id IN (${idPlaceholders})
+                    AND platform = ?
+                    AND type = 'dm'
+                    AND outcome = 'sent'
+                `,
+                )
+                .get(...dupIds, normPlatform);
+
+              if (alreadyMessaged) {
+                isDuplicate = true;
+                queueLog(
+                  "warn",
+                  "dm_queue",
+                  job.id,
+                  `Cross-lead duplicate blocked: profile URL "${job.profile_url}" ` +
+                    `was already messaged under a different lead record. ` +
+                    `Duplicate lead IDs found: [${dupIds.join(", ")}].`,
+                );
+              }
+            }
+          }
         }
       } catch (err) {
         queueLog(
@@ -450,33 +551,130 @@ async function processDmQueue(page, options = {}) {
       // ── 7. TEXT Outreach / MESSAGE BODY GENERATOR ───────────────────────────
       let messageBody = null;
       let messageId = job.message_id;
+      let skipJob = false;
 
       try {
         const firstName =
           String(job.lead_name || "there")
             .trim()
             .split(/\s+/)[0] || "there";
-        // Query approved templates from messages table
-        const approvedMessage = db
-          .prepare(
-            `
-          SELECT id, body FROM messages 
-          WHERE lead_id = ? AND platform = ? AND status = 'approved' 
-          ORDER BY approved_at DESC LIMIT 1
-        `,
-          )
-          .get(job.lead_id, normPlatform);
 
-        if (approvedMessage) {
-          messageBody = approvedMessage.body;
-          messageId = approvedMessage.id;
-          db.prepare("UPDATE dm_jobs SET message_id = ? WHERE id = ?").run(
-            messageId,
-            job.id,
+        // ── FIX A: Honour the pinned message_id ──────────────────────────
+        // When a dm_job already has a message_id, use THAT specific message.
+        // The old code always re-queried for the "latest approved" message,
+        // which caused message drift: if lead B's message was approved after
+        // lead A's job was queued, lead A's job would silently pick up lead
+        // B's message and send it.  Pinning prevents this entirely.
+        if (job.message_id) {
+          const pinnedMessage = db
+            .prepare("SELECT id, body, lead_id FROM messages WHERE id = ?")
+            .get(job.message_id);
+
+          if (pinnedMessage) {
+            // ── FIX B: Cross-lead ownership validation ─────────────────
+            // A pinned message must belong to the SAME lead as the job.
+            // If it doesn't, the message was mis-assigned and sending it
+            // would deliver content written for a completely different person.
+            if (pinnedMessage.lead_id !== job.lead_id) {
+              queueLog(
+                "error",
+                "dm_queue",
+                job.id,
+                `SAFETY BLOCK: Pinned message #${job.message_id} belongs to lead ` +
+                  `#${pinnedMessage.lead_id}, not the current lead #${job.lead_id} ` +
+                  `("${job.lead_name}"). Job failed to prevent a wrong-person send.`,
+              );
+              db.prepare(
+                `UPDATE dm_jobs
+                 SET status = 'failed',
+                     error_message = ?,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?`,
+              ).run(
+                `Safety: message #${job.message_id} is owned by lead #${pinnedMessage.lead_id}, not lead #${job.lead_id}`,
+                job.id,
+              );
+              report.failed++;
+              skipJob = true;
+            } else {
+              // Ownership confirmed — use this exact message body
+              messageBody = pinnedMessage.body;
+              messageId = pinnedMessage.id;
+            }
+          }
+        }
+
+        // Only search for an approved message if nothing is pinned yet
+        if (!skipJob && !messageBody) {
+          const approvedMessage = db
+            .prepare(
+              `
+            SELECT id, body FROM messages 
+            WHERE lead_id = ? AND platform = ? AND status = 'approved' 
+            ORDER BY approved_at DESC LIMIT 1
+          `,
+            )
+            .get(job.lead_id, normPlatform);
+
+          if (approvedMessage) {
+            messageBody = approvedMessage.body;
+            messageId = approvedMessage.id;
+            // Pin this message to the job so retries never drift to a
+            // different approved message that appears later.
+            db.prepare("UPDATE dm_jobs SET message_id = ? WHERE id = ?").run(
+              messageId,
+              job.id,
+            );
+          } else {
+            // Last-resort generic fallback — always uses THIS lead's name,
+            // never a name from another lead's message body.
+            messageBody = `Hi ${firstName}, I wanted to reach out and say hi! Hope you are doing great.`;
+          }
+        }
+
+        // ── FIX C: Greeting-name mismatch guard ──────────────────────────
+        // This catches the "Hi Lilian → Brian" bug at the last possible
+        // moment before the browser send: if the message body's opening
+        // greeting names someone other than this job's lead, we abort
+        // rather than humiliate the user with a misaddressed DM.
+        //
+        // Pattern covers: "Hi Brian," / "Hi Brian!" / "Hi Brian\n" / "Hi Brian "
+        // It intentionally skips "Hi there" (generic fallback) to avoid
+        // false-positives on template messages without a personalised name.
+        if (!skipJob && messageBody) {
+          const greetingMatch = messageBody.match(
+            /^Hi\s+([A-Za-zÀ-ÖØ-öø-ÿ''-]+)/i,
           );
-        } else {
-          // Generic human outreach template
-          messageBody = `Hi ${firstName}, I wanted to reach out and say hi! Hope you are doing great.`;
+          if (greetingMatch) {
+            const messageFirstName = greetingMatch[1].toLowerCase();
+            const leadFirstName = firstName.toLowerCase();
+
+            if (
+              messageFirstName !== leadFirstName &&
+              messageFirstName !== "there"
+            ) {
+              queueLog(
+                "error",
+                "dm_queue",
+                job.id,
+                `SAFETY BLOCK: Message opens with "Hi ${greetingMatch[1]}" ` +
+                  `but the lead is "${job.lead_name}" (lead #${job.lead_id}). ` +
+                  `This is a wrong-person message. Job failed to prevent sending.`,
+              );
+              db.prepare(
+                `UPDATE dm_jobs
+                 SET status = 'failed',
+                     error_message = ?,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?`,
+              ).run(
+                `Safety: name mismatch — message says "Hi ${greetingMatch[1]}" but lead is "${firstName}"`,
+                job.id,
+              );
+              report.failed++;
+              skipJob = true;
+            }
+          }
         }
       } catch (err) {
         queueLog(
@@ -491,6 +689,9 @@ async function processDmQueue(page, options = {}) {
             .split(/\s+/)[0] || "there";
         messageBody = `Hi ${firstName}, I wanted to reach out and say hi! Hope you are doing great.`;
       }
+
+      // Skip this job if any safety guard triggered above
+      if (skipJob) continue;
 
       report.processed++;
       queueLog(

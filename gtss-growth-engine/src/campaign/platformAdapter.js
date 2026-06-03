@@ -334,6 +334,7 @@ async function runDmAction(platform, page, lead, message, emitter) {
         lead.profile_url,
         message,
         emit,
+        lead.lead_name || lead.name || null, // passed for browser-side identity verification
       );
       if (res.outcome === "sent") {
         return { outcome: "sent", error: null, metadata: {}, retryable: false };

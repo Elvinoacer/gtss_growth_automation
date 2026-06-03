@@ -1305,7 +1305,7 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
  * Send a Direct Message on LinkedIn to a 1st-degree connection.
  *
  * Throughput-optimised flow:
- *   navigate → message button? no → skip
+ *   navigate → [profile name verify] → message button? no → skip
  *             ↓ yes
  *           click → premium popup? yes → skip
  *             ↓ no
@@ -1316,14 +1316,87 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
  *           wait 500 ms → error banner? → fail / assume sent → next profile
  *
  * No recovery loops, no multi-attempt focus, no 8-second verification polling.
+ *
+ * @param {object} page         - Playwright page instance
+ * @param {string} profileUrl   - LinkedIn profile URL to navigate to
+ * @param {string} message      - Message body to send
+ * @param {function} emit       - Logging callback
+ * @param {string|null} leadName - Expected lead name for identity verification (optional)
  */
-async function sendDirectMessage(page, profileUrl, message, emit) {
+async function sendDirectMessage(
+  page,
+  profileUrl,
+  message,
+  emit,
+  leadName = null,
+) {
   try {
     emit("info", `Navigating to ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
     await humanDelay(300, 600);
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
     await humanDelay(80, 200);
+
+    // ── 0. Profile identity verification ─────────────────────────────────────
+    // When a leadName is provided, scrape the visible <h1> on the profile page
+    // and compare first names.  A mismatch means the browser landed on the wrong
+    // profile — stale tab state, a redirect, or a URL stored with a different
+    // person's path.  We abort before typing a single character to prevent the
+    // wrong person from receiving this DM.
+    if (leadName) {
+      try {
+        const pageH1 = await page
+          .locator("h1.text-heading-xlarge, main h1")
+          .first()
+          .textContent({ timeout: 2500 })
+          .catch(() => null);
+
+        if (pageH1) {
+          // Normalise: lowercase, keep only letters (handles accents, hyphens)
+          const normalise = (name) =>
+            String(name || "")
+              .trim()
+              .split(/\s+/)[0]
+              .toLowerCase()
+              .replace(/[^a-z]/g, "");
+
+          const pageFirst = normalise(pageH1);
+          const expectedFirst = normalise(leadName);
+
+          if (pageFirst && expectedFirst && pageFirst !== expectedFirst) {
+            emit(
+              "error",
+              `Profile identity mismatch: page shows "${pageH1.trim()}" ` +
+                `but expected "${leadName}". Aborting to prevent wrong-person DM.`,
+            );
+            logger.error("LinkedIn DM Safety Block", {
+              profileUrl,
+              expectedLeadName: leadName,
+              pageProfileName: pageH1.trim(),
+            });
+            return {
+              outcome: "failed",
+              reason:
+                `Profile name mismatch: page="${pageH1.trim()}" vs expected="${leadName}". ` +
+                `Send aborted by identity guard.`,
+            };
+          }
+
+          emit(
+            "info",
+            `Profile identity verified: "${pageH1.trim()}" matches lead "${leadName}".`,
+          );
+        }
+      } catch (verifyErr) {
+        // Non-fatal: the name check in dmQueue.js is the primary safety gate.
+        // If we can't read the page h1 (network hiccup, selector change, etc.)
+        // we warn and continue rather than blocking every send.
+        emit(
+          "warn",
+          `Could not verify profile name from page — proceeding. (${verifyErr.message})`,
+        );
+      }
+    }
 
     // ── 1. Message button — no button means not connected; skip immediately ──
     const messageMatch = await findProfileAction(
