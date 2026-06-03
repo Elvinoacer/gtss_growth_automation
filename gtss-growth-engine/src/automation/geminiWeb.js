@@ -84,7 +84,11 @@ async function readModelTurnTexts(page) {
             element.querySelector?.(
               '.model-response-text, [data-test-id="response-text"], message-content, markdown',
             ) || element;
-          const text = (modelText.innerText || modelText.textContent || "").trim();
+          const text = (
+            modelText.innerText ||
+            modelText.textContent ||
+            ""
+          ).trim();
           const hasCopyAction = Array.from(
             element.querySelectorAll?.(copySelector) || [],
           ).some((button) =>
@@ -118,7 +122,9 @@ async function readResponseTexts(page) {
     .locator(SELECTORS.responseText)
     .evaluateAll((elements) =>
       elements
-        .map((element) => (element.innerText || element.textContent || "").trim())
+        .map((element) =>
+          (element.innerText || element.textContent || "").trim(),
+        )
         .filter(Boolean),
     )
     .catch(() => []);
@@ -159,7 +165,11 @@ async function tryCopyLatestGeminiResponse(page, emit) {
     for (const selector of SELECTORS.copyButtons) {
       const buttons = turn.locator(selector);
       const buttonCount = await buttons.count().catch(() => 0);
-      for (let buttonIndex = buttonCount - 1; buttonIndex >= 0; buttonIndex -= 1) {
+      for (
+        let buttonIndex = buttonCount - 1;
+        buttonIndex >= 0;
+        buttonIndex -= 1
+      ) {
         const button = buttons.nth(buttonIndex);
         if (!(await button.isVisible().catch(() => false))) continue;
 
@@ -231,7 +241,12 @@ async function firstVisibleLocator(page, selectors, timeoutMs = 5000) {
   return null;
 }
 
-async function waitForGeminiResponseText(page, responsesBefore, emit, timeoutMs = 180_000) {
+async function waitForGeminiResponseText(
+  page,
+  responsesBefore,
+  emit,
+  timeoutMs = 180_000,
+) {
   const deadline = Date.now() + timeoutMs;
   let lastText = "";
   let stableSince = null;
@@ -249,7 +264,11 @@ async function waitForGeminiResponseText(page, responsesBefore, emit, timeoutMs 
       lastText = cleaned;
       stableSince = Date.now();
     } else if (cleaned && stableSince && Date.now() - stableSince >= stableMs) {
-      const stopVisible = await firstVisibleLocator(page, [SELECTORS.stopButton], 250);
+      const stopVisible = await firstVisibleLocator(
+        page,
+        [SELECTORS.stopButton],
+        250,
+      );
       if (!stopVisible) {
         const copied = await tryCopyLatestGeminiResponse(page, emit);
         if (copied) return copied;
@@ -263,14 +282,23 @@ async function waitForGeminiResponseText(page, responsesBefore, emit, timeoutMs 
   }
 
   if (lastText) {
-    emit("warn", "Gemini text response timed out, using the latest visible response text.");
+    emit(
+      "warn",
+      "Gemini text response timed out, using the latest visible response text.",
+    );
     return lastText;
   }
 
   throw new Error("Timed out waiting for Gemini Web text response");
 }
 
-async function waitForNewGeminiImage(page, imgLocator, imagesBefore, emit, timeoutMs = 180_000) {
+async function waitForNewGeminiImage(
+  page,
+  imgLocator,
+  imagesBefore,
+  emit,
+  timeoutMs = 180_000,
+) {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
@@ -496,7 +524,10 @@ async function generateTextViaGeminiWeb(prompt, emit = () => {}) {
     emit("prompt_typing", "Typing prompt into Gemini Web...");
     await typeGeminiPrompt(page, inputLocator, prompt);
     await humanDelay(800, 1500);
-    emit("prompt_typed", "Prompt typed; submitting and waiting for Gemini to finish.");
+    emit(
+      "prompt_typed",
+      "Prompt typed; submitting and waiting for Gemini to finish.",
+    );
 
     const sendBtn = page.locator(SELECTORS.sendBtn).first();
     if (await sendBtn.isVisible().catch(() => false)) {
