@@ -40,7 +40,11 @@ const SELECTORS = {
   premiumDialog: [
     '[role="dialog"]:has-text("Grow Your Business with Premium")',
     '[role="dialog"]:has-text("With Premium, you can message anyone")',
+    '[role="dialog"]:has-text("Get Premium")',
+    '[role="dialog"]:has-text("Premium")',
+    '[role="dialog"]:has-text("InMail")',
     '.artdeco-modal:has-text("Premium")',
+    '.artdeco-modal:has-text("InMail")',
   ],
   modalClose: [
     'button[aria-label="Dismiss"]',
@@ -349,6 +353,38 @@ async function findProfileAction(page, selectors, actionName, timeout = 1200) {
   );
   if (quick) return quick;
   return firstVisibleOnProfile(page, selectors, timeout);
+}
+
+async function findProfileMessageAction(page, timeout = 2200) {
+  const direct = await findProfileAction(
+    page,
+    SELECTORS.message,
+    "Message",
+    Math.min(timeout, 1400),
+  );
+  if (direct) return direct;
+
+  const moreMatch = await findProfileAction(page, SELECTORS.more, "More", 700);
+  if (!moreMatch) return null;
+
+  await moreMatch.locator.click({ force: true }).catch(() => {});
+  await humanDelay(180, 320);
+
+  const fromMenu = await firstVisibleOverlay(
+    page,
+    SELECTORS.actionDropdown,
+    SELECTORS.message,
+    Math.max(700, timeout - 700),
+  );
+
+  if (fromMenu) {
+    return {
+      ...fromMenu,
+      selector: `More menu >> ${fromMenu.selector}`,
+    };
+  }
+
+  return null;
 }
 
 async function firstVisibleOverlay(
@@ -737,6 +773,43 @@ async function detectPremiumRequired(page) {
   };
 }
 
+async function detectMessagingBlocked(page, timeout = 700) {
+  const deadline = Date.now() + timeout;
+  const phrases = [
+    "with premium, you can message anyone",
+    "grow your business with premium",
+    "get premium",
+    "premium required",
+    "inmail credits",
+    "you need premium",
+    "cannot message",
+    "can't message",
+    "unable to message",
+  ];
+
+  while (Date.now() < deadline) {
+    const premium = await detectPremiumRequired(page);
+    if (premium) return premium;
+
+    const bodyText = await page
+      .locator("body")
+      .innerText({ timeout: 250 })
+      .catch(() => "");
+    const normalized = bodyText.toLowerCase();
+    const matched = phrases.find((phrase) => normalized.includes(phrase));
+    if (matched) {
+      return {
+        outcome: "premium_required",
+        reason: `LinkedIn messaging blocked (${matched})`,
+      };
+    }
+
+    await humanDelay(80, 130);
+  }
+
+  return null;
+}
+
 async function isAnyVisible(page, selectors) {
   const match = await firstVisible(page, selectors, 500);
   return Boolean(match);
@@ -961,32 +1034,63 @@ async function activateDmEditor(page, locator) {
  */
 async function typeFast(page, locator, text) {
   const value = String(text || "").trim();
+  if (!value) return false;
 
-  // One click to land focus — no event flooding, no pointer-event sequence.
-  await locator.click({ force: true }).catch(() => {});
-  await humanDelay(60, 100);
+  await activateDmEditor(page, locator);
 
-  // fill() is a single atomic DOM operation and fires the input/change events
-  // that React's synthetic event system needs to enable the Send button.
-  const filled = await locator
-    .fill(value)
-    .then(() => true)
+  const wroteExactEditor = await locator
+    .evaluate((el, message) => {
+      const tagName = String(el.tagName || "").toLowerCase();
+      el.focus({ preventScroll: false });
+
+      if (tagName === "textarea" || tagName === "input") {
+        el.value = "";
+        el.dispatchEvent(new InputEvent("input", { bubbles: true, data: "" }));
+        el.value = message;
+      } else {
+        el.textContent = "";
+        el.dispatchEvent(new InputEvent("input", { bubbles: true, data: "" }));
+        el.textContent = message;
+
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+
+      el.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertText",
+          data: message,
+        }),
+      );
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    }, value)
     .catch(() => false);
 
-  if (!filled) {
-    // insertText fires a proper InputEvent (bubbles: true, inputType: insertText)
-    // which React can observe — works on contenteditable nodes that reject fill().
-    await page.keyboard.insertText(value).catch(() => {});
+  if (!wroteExactEditor) {
+    await locator.fill(value).catch(async () => {
+      await activateDmEditor(page, locator);
+      await page.keyboard.insertText(value).catch(() => {});
+    });
   }
 
-  await humanDelay(60, 100);
+  await humanDelay(80, 140);
 
-  // Quick sanity check — did any text land?
-  const landed = await getEditableText(locator)
-    .then((t) => t.trim().length > 0)
+  const actual = (await getEditableText(locator)).trim();
+  if (!actual.includes(value)) return false;
+
+  const activeIsEditor = await locator
+    .evaluate(
+      (el) => document.activeElement === el || el.contains(document.activeElement),
+    )
     .catch(() => false);
 
-  return landed;
+  return activeIsEditor;
 }
 
 /**
@@ -1399,12 +1503,7 @@ async function sendDirectMessage(
     }
 
     // ── 1. Message button — no button means not connected; skip immediately ──
-    const messageMatch = await findProfileAction(
-      page,
-      SELECTORS.message,
-      "Message",
-      1200,
-    );
+    const messageMatch = await findProfileMessageAction(page, 2200);
     if (!messageMatch) {
       emit("warn", "No Message button — skipping profile.");
       return {
@@ -1419,17 +1518,24 @@ async function sendDirectMessage(
     // Reduced from 700–1200 ms: 400–600 ms is enough for the overlay to mount.
     await humanDelay(400, 600);
 
-    // ── 3. Premium popup — detected within 800 ms, skip immediately ─────────
-    const premiumRequired = await detectPremiumRequired(page);
-    if (premiumRequired) {
-      emit("warn", premiumRequired.reason);
-      return premiumRequired;
+    // ── 3. Premium / blocked popup — detect quickly, skip permanently ───────
+    const blockedImmediately = await detectMessagingBlocked(page, 900);
+    if (blockedImmediately) {
+      emit("warn", blockedImmediately.reason);
+      return blockedImmediately;
     }
 
     // ── 4. Wait for editor to be interactive — short ceiling, then move on ──
-    // Reduced from 2500 ms to 800 ms.  If the animation hasn't finished by
-    // then the profile is unusually slow and we skip rather than babysit it.
-    await waitForEditorInteractive(page, 800);
+    // If the animation has not finished quickly, check one more time for a
+    // premium/blocking dialog and skip instead of spending minutes on one lead.
+    const editorInteractive = await waitForEditorInteractive(page, 900);
+    if (!editorInteractive) {
+      const blockedAfterWait = await detectMessagingBlocked(page, 500);
+      if (blockedAfterWait) {
+        emit("warn", blockedAfterWait.reason);
+        return blockedAfterWait;
+      }
+    }
 
     // ── 5. Locate DM editor — single attempt ────────────────────────────────
     const editorMatch = await waitForDmEditor(page, null, 1);
@@ -1540,6 +1646,7 @@ module.exports = {
   sendDirectMessage,
   likeRecentPost,
   __private: {
+    findProfileMessageAction,
     findBestDmEditor,
     findBestDmOverlay,
     activateDmEditor,
@@ -1547,5 +1654,6 @@ module.exports = {
     typeLikeHuman,
     waitForEditorInteractive,
     waitForDmEditor,
+    detectMessagingBlocked,
   },
 };

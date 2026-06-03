@@ -333,3 +333,100 @@ test(
     }
   },
 );
+
+// ─── test 7: fast typing still targets body, not subject ─────────────────────
+
+test(
+  "typeFast writes the DM body into the message editor and leaves subject blank",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({ viewport: { width: 1366, height: 768 } });
+
+    try {
+      await page.setContent(dmOverlayHtml());
+      process.env.TEST_SPEEDUP = "true";
+
+      const editor = await __private.findBestDmEditor(page, 1000);
+      assert.ok(editor, "expected a message editor to be found");
+
+      const ok = await __private.typeFast(
+        page,
+        editor.locator,
+        "Hi Lilian, this belongs in the body.",
+      );
+      assert.equal(ok, true, "typeFast should confirm focus and text landing");
+
+      assert.equal(
+        await editor.locator.textContent(),
+        "Hi Lilian, this belongs in the body.",
+      );
+      assert.equal(
+        await page.locator('[aria-label="Subject"]').inputValue(),
+        "",
+        "subject field must stay empty",
+      );
+    } finally {
+      delete process.env.TEST_SPEEDUP;
+      await browser.close();
+    }
+  },
+);
+
+// ─── test 8: profile Message action can be hidden in More menu ───────────────
+
+test(
+  "findProfileMessageAction locates Message from the profile More menu",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({ viewport: { width: 1366, height: 768 } });
+
+    try {
+      await page.setContent(`
+        <main>
+          <section class="pv-top-card" style="position:relative;margin-top:90px;width:700px;height:260px;">
+            <h1 class="text-heading-xlarge">Lilian Otieno</h1>
+            <button aria-label="More actions" style="width:120px;height:40px;">More</button>
+          </section>
+        </main>
+        <div class="artdeco-dropdown__content" role="menu" style="display:block;position:absolute;top:170px;left:20px;width:220px;height:160px;">
+          <button aria-label="Message Lilian Otieno" style="width:180px;height:36px;">Message</button>
+        </div>
+      `);
+
+      const message = await __private.findProfileMessageAction(page, 1200);
+      assert.ok(message, "message action should be found inside More menu");
+      assert.match(message.selector, /More menu/);
+    } finally {
+      await browser.close();
+    }
+  },
+);
+
+// ─── test 9: blocked messaging dialog is classified quickly ──────────────────
+
+test(
+  "detectMessagingBlocked classifies LinkedIn premium messaging blocks",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({ viewport: { width: 1366, height: 768 } });
+
+    try {
+      await page.setContent(`
+        <main></main>
+        <div role="dialog" style="display:block;width:420px;height:240px;">
+          <h2>With Premium, you can message anyone</h2>
+          <button>Get Premium</button>
+        </div>
+      `);
+
+      const blocked = await __private.detectMessagingBlocked(page, 300);
+      assert.ok(blocked, "premium dialog should be detected");
+      assert.equal(blocked.outcome, "premium_required");
+    } finally {
+      await browser.close();
+    }
+  },
+);
