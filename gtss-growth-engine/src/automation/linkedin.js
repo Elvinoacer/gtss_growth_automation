@@ -1556,50 +1556,106 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
   }
 }
 
-async function findSendButtonForEditor(page, editor) {
+async function findSendButtonForEditor(page, editor, emit) {
+  const log = emit || (() => {});
+
+  // Step 1: Try to find the send button scoped to the editor's form container
   const selector = await editor.evaluate(el => {
     const container =
       el.closest(".msg-form") ||
       el.closest(".msg-overlay-conversation-bubble") ||
-      el.closest('[role="dialog"]');
+      el.closest('[role="dialog"]') ||
+      el.closest(".msg-overlay-list-bubble");
 
-    if (!container) return null;
+    if (!container) return { selector: null, debug: "No container found from editor" };
 
-    const buttons = [...container.querySelectorAll("button")];
+    const allButtons = [...container.querySelectorAll("button")];
+    
+    // Diagnostic: capture what buttons exist
+    const debugInfo = allButtons.map(btn => {
+      const rect = btn.getBoundingClientRect();
+      return {
+        classes: btn.className,
+        ariaLabel: btn.getAttribute("aria-label") || "",
+        text: (btn.innerText || "").substring(0, 30),
+        type: btn.type || "",
+        disabled: btn.disabled,
+        ariaDisabled: btn.getAttribute("aria-disabled"),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height),
+        y: Math.round(rect.y),
+        htmlSnippet: btn.outerHTML.substring(0, 120),
+      };
+    });
 
-    const candidates = buttons.filter(btn => {
+    const visible = allButtons.filter(btn => {
       const rect = btn.getBoundingClientRect();
       const style = window.getComputedStyle(btn);
-
       return (
-        rect.width > 0 &&
-        rect.height > 0 &&
-        style.visibility !== "hidden" &&
-        style.display !== "none" &&
-        !btn.disabled &&
-        btn.getAttribute("aria-disabled") !== "true"
+        rect.width > 0 && rect.height > 0 &&
+        style.visibility !== "hidden" && style.display !== "none"
       );
     });
 
-    // LinkedIn usually has only one active footer action after the editor is active
-    const send = candidates.find(btn => {
+    // Strategy A: match by outerHTML keywords
+    let send = visible.find(btn => {
       const html = btn.outerHTML.toLowerCase();
       return (
-        html.includes("send") ||
-        html.includes("paper-plane") ||
-        html.includes("msg-form__send")
+        html.includes("msg-form__send") ||
+        html.includes("send-privately") ||
+        html.includes("paper-plane")
       );
     });
 
-    if (!send) return null;
+    // Strategy B: match by class, aria-label, text, or type=submit
+    if (!send) {
+      send = visible.find(btn => {
+        const label = (btn.getAttribute("aria-label") || "").toLowerCase();
+        const text = (btn.innerText || "").toLowerCase().trim();
+        const type = (btn.type || "").toLowerCase();
+        return (
+          label.includes("send") ||
+          text === "send" ||
+          type === "submit" ||
+          btn.className.toLowerCase().includes("send")
+        );
+      });
+    }
 
-    send.setAttribute("data-gtss-send", Date.now());
-    return `[data-gtss-send="${send.getAttribute("data-gtss-send")}"]`;
-  });
+    // Strategy C: last visible button at the bottom of the form footer
+    // LinkedIn places the Send button at the bottom-right of the form.
+    if (!send && visible.length > 0) {
+      const sorted = visible.slice().sort((a, b) => {
+        const ra = a.getBoundingClientRect();
+        const rb = b.getBoundingClientRect();
+        return rb.y - ra.y || rb.x - ra.x; // bottom-most, then right-most
+      });
+      // Pick the bottom-right button only if it's in the footer area
+      const candidate = sorted[0];
+      const cRect = candidate.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      // If the button is in the bottom 60px of the container, it's likely Send
+      if (cRect.y > containerRect.bottom - 60) {
+        send = candidate;
+      }
+    }
 
-  if (!selector) return null;
+    if (!send) return { selector: null, debug: JSON.stringify(debugInfo) };
 
-  return page.locator(selector);
+    const token = "gtss-" + Date.now();
+    send.setAttribute("data-gtss-send", token);
+    return { selector: `[data-gtss-send="${token}"]`, debug: JSON.stringify(debugInfo) };
+  }).catch(() => ({ selector: null, debug: "evaluate threw" }));
+
+  log("info", `findSendButtonForEditor: debug=${selector.debug}`);
+
+  if (!selector.selector) {
+    log("warn", "findSendButtonForEditor: No send button found in editor's container");
+    return null;
+  }
+
+  log("info", `findSendButtonForEditor: found selector=${selector.selector}`);
+  return page.locator(selector.selector);
 }
 
 /**
@@ -1840,33 +1896,8 @@ async function sendDirectMessage(
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }).catch(() => {});
 
-    // ── 6b. Verify Send button activated; fall back to typeLikeHuman if not ─
-    // typeFast uses execCommand('insertText') which fires the beforeinput + input
-    // events that React needs. On some LinkedIn overlay variants (e.g. the Free
-    // Message modal shown in the screenshot) the Send button may still be disabled
-    // if the execCommand path didn't reach the active React fiber. We detect this
-    // cheaply and re-type via pressSequentially — real keyboard events that React's
-    // contenteditable always accepts — rather than silently falling through to the
-    // Ctrl+Enter shortcut which also fails when React still believes the editor
-    // is empty.
-    const sendCheckMatch = await firstVisible(page, SELECTORS.dmSend, 500);
-    const sendAlreadyEnabled = sendCheckMatch
-      ? !(await sendCheckMatch.locator.isDisabled().catch(() => true))
-      : false;
-
-    if (!sendAlreadyEnabled) {
-      emit(
-        "info",
-        "Send button not enabled after fast fill — retrying with human typing...",
-      );
-      try {
-        await typeLikeHuman(page, activeEditorLocator, message);
-        await humanDelay(80, 150);
-      } catch (retypeErr) {
-        emit("warn", `typeLikeHuman fallback failed: ${retypeErr.message}`);
-        return { outcome: "failed", reason: "Text entry failed (both paths)" };
-      }
-    }
+    // ── 6b. Short settle for React to process the input event ─────────────
+    await humanDelay(300, 500);
 
     // ── 7. Send (ROBUST) ─────────────────────────────────────────────────────
     emit("info", "Attempting to send message...");
@@ -1887,34 +1918,71 @@ async function sendDirectMessage(
     };
 
     const sendButtonStrategies = [
-      // 1. Best: Stable selector inside same tree + retry
+      // 1. Best: Scoped to same form tree as the editor
       async () => {
-        const sendMatch = await findSendButtonForEditor(page, activeEditorLocator);
+        const sendMatch = await findSendButtonForEditor(page, activeEditorLocator, emit);
         if (!sendMatch) return false;
         
-        emit("info", "Strategy 1: Found Send button inside same tree...");
+        emit("info", "Strategy 1: Found Send button inside same tree — clicking...");
         
         await sendMatch.scrollIntoViewIfNeeded().catch(() => {});
         await sendMatch.hover().catch(() => {});
         
         const box = await sendMatch.boundingBox().catch(() => null);
         if (box) {
-          await page.mouse.click(box.x + 10, box.y + 10);
+          emit("info", `Strategy 1: Clicking at (${Math.round(box.x + box.width/2)}, ${Math.round(box.y + box.height/2)})`);
+          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
         } else {
+          emit("info", "Strategy 1: No bounding box, using locator.click()");
           await sendMatch.click().catch(() => {});
         }
         return true;
       },
       
-      // 2. DOM fallback
+      // 2. Direct DOM .click() on msg-form__send-button
       async () => {
-        emit("info", "Strategy 2: Trying standard DOM click fallback...");
+        emit("info", "Strategy 2: Direct DOM click on .msg-form__send-button...");
         return page.evaluate(() => {
           const btn = document.querySelector(".msg-form__send-button");
           if (!btn) return false;
           btn.click();
           return true;
         }).catch(() => false);
+      },
+
+      // 3. Brute force: find ANY visible button with send-like traits in any msg container
+      async () => {
+        emit("info", "Strategy 3: Brute-force search for any send button...");
+        const result = await page.evaluate(() => {
+          // Search all message forms and overlays
+          const containers = document.querySelectorAll(
+            '.msg-form, .msg-overlay-conversation-bubble, [role="dialog"]'
+          );
+          for (const container of containers) {
+            const buttons = [...container.querySelectorAll("button")];
+            for (const btn of buttons) {
+              const rect = btn.getBoundingClientRect();
+              if (rect.width <= 0 || rect.height <= 0) continue;
+              const html = btn.outerHTML.toLowerCase();
+              if (
+                html.includes("send") ||
+                html.includes("msg-form__send") ||
+                html.includes("paper-plane") ||
+                html.includes("submit")
+              ) {
+                btn.click();
+                return { clicked: true, x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
+              }
+            }
+          }
+          return { clicked: false };
+        }).catch(() => ({ clicked: false }));
+
+        if (result.clicked) {
+          emit("info", `Strategy 3: Clicked send at (${Math.round(result.x)}, ${Math.round(result.y)})`);
+          return true;
+        }
+        return false;
       }
     ];
 
