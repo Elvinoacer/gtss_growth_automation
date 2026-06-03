@@ -610,8 +610,8 @@ async function findBestDmOverlay(page, timeout = 1500) {
   return null;
 }
 
-async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 3) {
-  const PER_ATTEMPT_TIMEOUT = 1800;
+async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 1) {
+  const PER_ATTEMPT_TIMEOUT = 1500;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const best = await findBestDmEditor(page, PER_ATTEMPT_TIMEOUT);
@@ -726,19 +726,14 @@ async function closeOverlay(page, overlayMatch) {
 
 async function detectPremiumRequired(page) {
   // 800 ms is enough — the dialog is already rendered by the time we check.
-  // The old 1500 ms timeout was burning time on every non-premium profile.
+  // Skip innerText() and closeOverlay() — we are navigating away immediately,
+  // so there is no point spending another ~1 s cleaning up the popup.
   const premiumMatch = await firstVisible(page, SELECTORS.premiumDialog, 800);
   if (!premiumMatch) return null;
 
-  const text = await premiumMatch.locator
-    .innerText({ timeout: 800 })
-    .catch(() => "");
-  await closeOverlay(page, premiumMatch);
   return {
     outcome: "premium_required",
-    reason: text.includes("message anyone")
-      ? "LinkedIn Premium required to message this profile"
-      : "LinkedIn Premium upsell shown instead of message composer",
+    reason: "LinkedIn Premium required to message this profile",
   };
 }
 
@@ -783,64 +778,21 @@ function messageSnippet(message) {
     .slice(0, 80);
 }
 
-async function verifyDmSent(page, editorTarget, message) {
-  const snippet = messageSnippet(message);
-  const editorLocator =
-    typeof editorTarget === "string"
-      ? page.locator(editorTarget).first()
-      : editorTarget;
-
-  // Poll up to 8 seconds for the message to appear or the composer to clear
-  const POLL_INTERVAL = 800;
-  const MAX_POLLS = 10;
-
-  for (let i = 0; i < MAX_POLLS; i++) {
-    await humanDelay(POLL_INTERVAL, POLL_INTERVAL + 200);
-
-    const visibleInThread = snippet
-      ? await page
-          .getByText(snippet, { exact: false })
-          .last()
-          .isVisible({ timeout: 1000 })
-          .catch(() => false)
-      : false;
-
-    if (visibleInThread) {
-      return { verified: true, reason: "Message visible in thread" };
-    }
-
-    const editorText = await editorLocator
-      .evaluate(
-        (el) => {
-          const tagName = String(el.tagName || "").toLowerCase();
-
-          if (tagName === "textarea" || tagName === "input") {
-            return String(el.value || "").trim();
-          }
-
-          return String(el.textContent || el.innerText || "").trim();
-        },
-        undefined,
-        { timeout: 1000 },
-      )
-      .catch(() => "");
-
-    if (!editorText) {
-      return { verified: true, reason: "Composer cleared" };
-    }
-
-    // Check for visible warning before giving up
-    const warning = await detectActionWarning(page);
-    if (warning)
-      return { verified: false, reason: `LinkedIn warning: ${warning}` };
+/**
+ * Fast post-send verification.
+ *
+ * After clicking Send we wait 500 ms and look for an explicit LinkedIn error
+ * banner.  If none appears we assume success and move on.  The old approach
+ * polled for up to 8 seconds (10 × 800 ms) waiting for the message to appear
+ * in the thread — that was a large unnecessary cost per profile.
+ */
+async function verifyDmSent(page) {
+  await humanDelay(500, 600);
+  const warning = await detectActionWarning(page);
+  if (warning) {
+    return { verified: false, reason: `LinkedIn warning: ${warning}` };
   }
-
-  return {
-    verified: false,
-    unknown: true,
-    reason:
-      "Send verification ambiguous - message not visible and composer did not clear",
-  };
+  return { verified: true, reason: "No error banner — assumed sent" };
 }
 
 async function getEditableText(locator) {
@@ -875,7 +827,7 @@ async function getEditableText(locator) {
  *   6. The entire sequence retries up to MAX_FOCUS_ATTEMPTS times.
  */
 async function activateDmEditor(page, locator) {
-  const MAX_FOCUS_ATTEMPTS = 3;
+  const MAX_FOCUS_ATTEMPTS = 1;
 
   for (let attempt = 1; attempt <= MAX_FOCUS_ATTEMPTS; attempt++) {
     await locator.scrollIntoViewIfNeeded().catch(() => {});
@@ -996,6 +948,45 @@ async function activateDmEditor(page, locator) {
   await humanDelay(80, 150);
   await locator.evaluate((el) => el.focus()).catch(() => {});
   await humanDelay(150, 250); // let React finish its focus handler
+}
+
+/**
+ * Fast message entry for LinkedIn's DM composer.
+ *
+ * Replaces typeLikeHuman() for throughput-optimised runs.
+ * Uses locator.fill() — a single DOM write that triggers React's onChange —
+ * rather than per-character key events.  Falls back to page.keyboard.insertText()
+ * if fill() rejects (e.g. on a contenteditable).  No retries: if the editor
+ * won't accept text, we return false and the caller skips the profile.
+ */
+async function typeFast(page, locator, text) {
+  const value = String(text || "").trim();
+
+  // One click to land focus — no event flooding, no pointer-event sequence.
+  await locator.click({ force: true }).catch(() => {});
+  await humanDelay(60, 100);
+
+  // fill() is a single atomic DOM operation and fires the input/change events
+  // that React's synthetic event system needs to enable the Send button.
+  const filled = await locator
+    .fill(value)
+    .then(() => true)
+    .catch(() => false);
+
+  if (!filled) {
+    // insertText fires a proper InputEvent (bubbles: true, inputType: insertText)
+    // which React can observe — works on contenteditable nodes that reject fill().
+    await page.keyboard.insertText(value).catch(() => {});
+  }
+
+  await humanDelay(60, 100);
+
+  // Quick sanity check — did any text land?
+  const landed = await getEditableText(locator)
+    .then((t) => t.trim().length > 0)
+    .catch(() => false);
+
+  return landed;
 }
 
 /**
@@ -1312,6 +1303,19 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
 
 /**
  * Send a Direct Message on LinkedIn to a 1st-degree connection.
+ *
+ * Throughput-optimised flow:
+ *   navigate → message button? no → skip
+ *             ↓ yes
+ *           click → premium popup? yes → skip
+ *             ↓ no
+ *           find editor (1 attempt) → not found → skip
+ *             ↓ found
+ *           typeFast (fill) → find send button → click / keyboard shortcut
+ *             ↓
+ *           wait 500 ms → error banner? → fail / assume sent → next profile
+ *
+ * No recovery loops, no multi-attempt focus, no 8-second verification polling.
  */
 async function sendDirectMessage(page, profileUrl, message, emit) {
   try {
@@ -1321,6 +1325,7 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
     await humanDelay(80, 200);
 
+    // ── 1. Message button — no button means not connected; skip immediately ──
     const messageMatch = await findProfileAction(
       page,
       SELECTORS.message,
@@ -1328,153 +1333,82 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
       1200,
     );
     if (!messageMatch) {
-      emit(
-        "warn",
-        'Could not find "Message" button. Ensure you are connected 1st-degree.',
-      );
+      emit("warn", "No Message button — skipping profile.");
       return {
         outcome: "not_connected",
-        reason:
-          "Message button not visible - connection may not be accepted yet",
+        reason: "Message button not visible — not a 1st-degree connection",
       };
     }
 
+    // ── 2. Click Message ─────────────────────────────────────────────────────
     emit("info", `Clicking Message (${messageMatch.selector})...`);
     await messageMatch.locator.click();
-    // Give LinkedIn's React overlay time to mount and finish its animation
-    // before we try to locate or interact with the DM composer.
-    await humanDelay(700, 1200);
+    // Reduced from 700–1200 ms: 400–600 ms is enough for the overlay to mount.
+    await humanDelay(400, 600);
 
-    // ── Check for Premium upsell BEFORE looking for the DM overlay ──────────
-    // Doing this early avoids burning 3-4 extra seconds looking for an overlay
-    // that will never appear on 3rd-degree profiles that require Premium.
+    // ── 3. Premium popup — detected within 800 ms, skip immediately ─────────
     const premiumRequired = await detectPremiumRequired(page);
     if (premiumRequired) {
       emit("warn", premiumRequired.reason);
       return premiumRequired;
     }
 
-    // Reduce overlay discovery timeout: 2000 ms is plenty after the 700-1200 ms
-    // post-click delay above — the old 3500 ms was wasting time on every send.
-    const dmOverlayMatch = await findBestDmOverlay(page, 2000);
-    if (!dmOverlayMatch) {
-      emit(
-        "warn",
-        "DM overlay container not detected — trying editor directly.",
-      );
-    }
+    // ── 4. Wait for editor to be interactive — short ceiling, then move on ──
+    // Reduced from 2500 ms to 800 ms.  If the animation hasn't finished by
+    // then the profile is unusually slow and we skip rather than babysit it.
+    await waitForEditorInteractive(page, 800);
 
-    // ── Wait for LinkedIn's modal animation to finish ─────────────────────────
-    // LinkedIn's message overlay uses CSS transitions (opacity, transform) that
-    // temporarily set pointer-events:none on child nodes. Attempting to focus
-    // during the animation results in silent failure — the click or CDP focus
-    // command is accepted but immediately stolen back by the animation guard.
-    // waitForEditorInteractive() polls until the contenteditable is interactive.
-    emit("info", "Waiting for DM editor to become interactive...");
-    await waitForEditorInteractive(page, 2500);
-
-    emit("info", "Waiting for DM editor to become available...");
-    const editorMatch = await waitForDmEditor(page, dmOverlayMatch, 3);
-
+    // ── 5. Locate DM editor — single attempt ────────────────────────────────
+    const editorMatch = await waitForDmEditor(page, null, 1);
     if (!editorMatch) {
-      emit("error", "Could not find message textarea after fast retry.");
-      return {
-        outcome: "failed",
-        reason: "Textarea not found after fast retry",
-      };
+      emit("warn", "DM editor not found — skipping profile.");
+      return { outcome: "failed", reason: "DM editor not found" };
     }
 
-    // ── Use a STABLE CSS selector instead of the token-based locator ─────────
-    // findBestDmEditor tags the element with a data-gtss-dm-editor attribute to
-    // return a unique locator.  However, if React re-renders the editor between
-    // discovery and interaction (which LinkedIn does frequently), that attribute
-    // is gone and the token-based locator silently matches nothing — causing
-    // focus and typing to land on the wrong element (or nowhere at all).
-    //
-    // .msg-form__contenteditable[contenteditable="true"] is LinkedIn's own stable
-    // class that survives re-renders; fall back to the token locator only when
-    // the stable one isn't visible.
+    // Prefer LinkedIn's own stable class over the token-based locator —
+    // it survives React re-renders between discovery and interaction.
     const stableLocator = page
       .locator('.msg-form__contenteditable[contenteditable="true"]')
       .last();
     const useStable = await stableLocator
-      .isVisible({ timeout: 500 })
+      .isVisible({ timeout: 300 })
       .catch(() => false);
     const activeEditorLocator = useStable ? stableLocator : editorMatch.locator;
 
-    emit("info", "Activating DM editor...");
-    await activateDmEditor(page, activeEditorLocator);
+    // ── 6. Type message — fast fill, not per-character simulation ───────────
+    emit("info", "Typing message (fast fill)...");
+    const textLanded = await typeFast(page, activeEditorLocator, message);
+    if (!textLanded) {
+      emit("warn", "Message text did not land in editor — skipping profile.");
+      return { outcome: "failed", reason: "Text entry failed" };
+    }
+    await humanDelay(100, 200);
 
-    emit(
-      "info",
-      `Typing DM using ${useStable ? "stable-css" : editorMatch.selector}...`,
-    );
-    await typeLikeHuman(page, activeEditorLocator, message);
-    await humanDelay(200, 400);
-
-    // ── Find the Send button ─────────────────────────────────────────────────
-    const freshOverlayMatch =
-      (await firstVisible(page, SELECTORS.dmOverlay, 700)) || dmOverlayMatch;
-    const sendMatch = freshOverlayMatch
-      ? (await firstVisibleIn(
-          freshOverlayMatch.locator,
-          SELECTORS.dmSend,
-          700,
-        )) || (await firstVisible(page, SELECTORS.dmSend, 500))
-      : await firstVisible(page, SELECTORS.dmSend, 700);
-
+    // ── 7. Send ──────────────────────────────────────────────────────────────
+    const sendMatch = await firstVisible(page, SELECTORS.dmSend, 700);
     if (
       sendMatch &&
       !(await sendMatch.locator.isDisabled().catch(() => false))
     ) {
       emit("info", `Clicking Send (${sendMatch.selector})...`);
       await sendMatch.locator.click();
-      const verification = await verifyDmSent(
-        page,
-        activeEditorLocator,
-        message,
-      );
-      if (!verification.verified) {
-        emit("error", `DM send could not be verified: ${verification.reason}`);
-        return {
-          outcome: verification.unknown ? "unknown" : "failed",
-          reason: verification.reason,
-        };
-      }
-      emit("info", `DM sent successfully (${verification.reason}).`);
-      return { outcome: "sent" };
     } else {
-      // Send button is disabled or not found — keyboard shortcut fallback.
-      // CRITICAL: re-activate the editor first so focus is back on it before
-      // firing the shortcut; otherwise the shortcut fires on the wrong element.
-      emit(
-        "info",
-        "Send button disabled or not found — re-focusing editor before keyboard shortcut...",
-      );
-      await activateDmEditor(page, activeEditorLocator);
-      await humanDelay(80, 150);
+      // Keyboard shortcut fallback — no extra activateDmEditor round-trip.
       const sendShortcut =
         process.platform === "darwin" ? "Meta+Enter" : "Control+Enter";
-      emit("info", `Pressing ${sendShortcut}...`);
+      emit("info", `Send button not ready — using ${sendShortcut}...`);
       await page.keyboard.press(sendShortcut);
-      const verification = await verifyDmSent(
-        page,
-        activeEditorLocator,
-        message,
-      );
-      if (!verification.verified) {
-        emit(
-          "error",
-          `DM send via Enter could not be verified: ${verification.reason}`,
-        );
-        return {
-          outcome: verification.unknown ? "unknown" : "failed",
-          reason: verification.reason,
-        };
-      }
-      emit("info", `DM sent via keyboard shortcut (${verification.reason}).`);
-      return { outcome: "sent" };
     }
+
+    // ── 8. Fast verification — 500 ms wait + single error banner check ───────
+    const verification = await verifyDmSent(page);
+    if (!verification.verified) {
+      emit("error", `DM send failed: ${verification.reason}`);
+      return { outcome: "failed", reason: verification.reason };
+    }
+
+    emit("info", `DM sent (${verification.reason}) — moving to next profile.`);
+    return { outcome: "sent" };
   } catch (err) {
     logger.error("LinkedIn DM Failed", { profileUrl, error: err.message });
     emit("error", `DM failed: ${err.message}`);
@@ -1536,6 +1470,7 @@ module.exports = {
     findBestDmEditor,
     findBestDmOverlay,
     activateDmEditor,
+    typeFast,
     typeLikeHuman,
     waitForEditorInteractive,
     waitForDmEditor,
