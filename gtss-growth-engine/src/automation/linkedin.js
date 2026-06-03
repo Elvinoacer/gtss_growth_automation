@@ -1788,6 +1788,12 @@ async function sendDirectMessage(
     }
     await humanDelay(100, 200);
 
+    // Force React to recognize the content change
+    await activeEditorLocator.evaluate(el => {
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }).catch(() => {});
+
     // ── 6b. Verify Send button activated; fall back to typeLikeHuman if not ─
     // typeFast uses execCommand('insertText') which fires the beforeinput + input
     // events that React needs. On some LinkedIn overlay variants (e.g. the Free
@@ -1816,9 +1822,12 @@ async function sendDirectMessage(
       }
     }
 
-    // ── 7. Send ──────────────────────────────────────────────────────────────
-    // We attempt multiple clicking strategies. After each attempt, we check if
-    // the editor cleared. This is the only reliable way to know if the click worked.
+    // ── 7. Send (ROBUST) ─────────────────────────────────────────────────────
+    emit("info", "Attempting to send message...");
+
+    // Strategy 0: Ensure Send button is ready (critical)
+    await humanDelay(400, 700); // Let React fully process the input event
+
     let sendSuccessful = false;
     
     // Check function: Returns true if editor is clear (message sent)
@@ -1829,100 +1838,62 @@ async function sendDirectMessage(
       return !normalizeWS(text).includes(normalizeWS(message.substring(0, 15)));
     };
 
-    // Strategy A: Use the selector list
-    const sendMatch = await firstVisible(page, SELECTORS.dmSend, 2500);
-    if (sendMatch) {
-      emit("info", `Trying selector-based Send click (${sendMatch.selector})...`);
-      // Force click bypasses Playwright's actionability checks (like aria-disabled)
-      await sendMatch.locator.click({ force: true }).catch(() => {});
-      await humanDelay(600, 800);
-      
-      if (await verifySentLocally()) {
-        sendSuccessful = true;
-      } else {
-        emit("info", "Selector-based click executed, but editor did not clear. Trying next strategy...");
-      }
-    }
-
-    // Strategy B: DOM-based smart search & coordinate click
-    if (!sendSuccessful) {
-      emit("info", "Trying DOM-based smart search and coordinate click...");
-      const domSendResult = await page
-        .evaluate(() => {
-          const normalize = (s) => String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
-          const visible = (el) => {
-            const rect = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return (
-              rect.width >= 8 && rect.height >= 8 && rect.bottom > 0 && rect.right > 0 &&
-              style.visibility !== "hidden" && style.display !== "none"
-            );
-          };
-
-          const candidates = [];
-          const buttons = document.querySelectorAll('button, [role="button"], input[type="submit"]');
-          for (const btn of buttons) {
-            if (!visible(btn)) continue;
-            const label = normalize(
-              [btn.getAttribute("aria-label"), btn.getAttribute("title"), btn.textContent].filter(Boolean).join(" ")
-            );
-            if (!label.includes("send")) continue;
-            if (label.includes("connection") || label.includes("inmail") || label.includes("invitation")) continue;
-
-            const rect = btn.getBoundingClientRect();
-            let score = 0;
-            if (btn.closest(".msg-form")) score += 500;
-            if (btn.closest(".msg-overlay-conversation-bubble")) score += 300;
-            if (btn.closest('[role="dialog"]')) score += 200;
-            if (!(btn.disabled || btn.getAttribute("aria-disabled") === "true")) score += 400;
-            if (label === "send" || label === "send message") score += 300;
-            score += Math.min(200, rect.y / 5);
-
-            candidates.push({ score, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } });
-          }
-
-          candidates.sort((a, b) => b.score - a.score);
-          return candidates[0] || null;
-        })
-        .catch(() => null);
-
-      if (domSendResult && domSendResult.rect) {
-        const r = domSendResult.rect;
-        const cx = r.x + r.width / 2;
-        const cy = r.y + r.height / 2;
+    const sendButtonStrategies = [
+      // 1. Best: Stable selector + force + retry
+      async () => {
+        const sendMatch = await firstVisible(page, SELECTORS.dmSend, 1800);
+        if (!sendMatch) return false;
         
-        emit("info", `Clicking Send button via coordinates (${Math.round(cx)}, ${Math.round(cy)})...`);
-        await page.mouse.click(cx, cy);
-        await humanDelay(600, 800);
-
-        if (await verifySentLocally()) {
-          sendSuccessful = true;
-        } else {
-          emit("info", "Coordinate click executed, but editor did not clear. Trying next strategy...");
+        emit("info", `Strategy 1: Found Send button via selector (${sendMatch.selector})...`);
+        
+        // Critical: Wait for button to be enabled
+        let attempts = 0;
+        while (attempts < 4) {
+          const isDisabled = await sendMatch.locator.isDisabled().catch(() => true);
+          if (!isDisabled) break;
+          await humanDelay(150, 250);
+          attempts++;
         }
+
+        await sendMatch.locator.click({ force: true, timeout: 2000 }).catch(() => {});
+        return true;
+      },
+      
+      // 2. DOM coordinate click (bypasses all Playwright actionability)
+      async () => {
+        emit("info", "Strategy 2: Trying DOM coordinate click fallback...");
+        return page.evaluate(() => {
+          const btn = document.querySelector('button.msg-form__send-button:not([disabled]), button[aria-label*="Send"]:not([disabled])');
+          if (!btn) return false;
+          
+          const rect = btn.getBoundingBox ? btn.getBoundingBox() : btn.getBoundingClientRect();
+          const x = rect.left + rect.width / 2;
+          const y = rect.top + rect.height / 2;
+          
+          const evt = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y });
+          btn.dispatchEvent(evt);
+          return true;
+        }).catch(() => false);
+      },
+      
+      // 3. Keyboard fallback (only if everything else fails)
+      async () => {
+        emit("info", "Strategy 3: Trying keyboard shortcuts...");
+        await activeEditorLocator.click({ force: true }).catch(() => {});
+        await humanDelay(100, 200);
+        await page.keyboard.press(process.platform === "darwin" ? "Meta+Enter" : "Control+Enter");
+        return true;
       }
-    }
+    ];
 
-    // Strategy C: Keyboard shortcuts
-    if (!sendSuccessful) {
-      emit("info", "Mouse clicks failed or not found. Trying keyboard shortcuts...");
-      await activeEditorLocator.click({ force: true }).catch(() => {});
-      await humanDelay(100, 200);
-
-      emit("info", "Trying Enter key...");
-      await page.keyboard.press("Enter");
-      await humanDelay(600, 800);
-
-      if (await verifySentLocally()) {
-        sendSuccessful = true;
-      } else {
-        const sendShortcut = process.platform === "darwin" ? "Meta+Enter" : "Control+Enter";
-        emit("info", `Enter didn't send — trying ${sendShortcut}...`);
-        await page.keyboard.press(sendShortcut);
-        await humanDelay(600, 800);
-        
+    for (const strategy of sendButtonStrategies) {
+      if (await strategy()) {
+        await humanDelay(800, 1200);
         if (await verifySentLocally()) {
           sendSuccessful = true;
+          break;
+        } else {
+          emit("info", "Strategy executed but editor did not clear. Retrying next strategy...");
         }
       }
     }
