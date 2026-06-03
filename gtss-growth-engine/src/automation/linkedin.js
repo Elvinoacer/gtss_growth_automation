@@ -1557,38 +1557,49 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
 }
 
 async function findSendButtonForEditor(page, editor) {
-  const button = await editor.evaluateHandle(el => {
-    let container =
+  const selector = await editor.evaluate(el => {
+    const container =
       el.closest(".msg-form") ||
       el.closest(".msg-overlay-conversation-bubble") ||
       el.closest('[role="dialog"]');
 
     if (!container) return null;
 
-    const buttons = [...container.querySelectorAll('button')];
+    const buttons = [...container.querySelectorAll("button")];
 
-    return buttons.find(btn => {
-      const text = (btn.innerText || btn.getAttribute("aria-label") || "").toLowerCase();
+    const candidates = buttons.filter(btn => {
       const rect = btn.getBoundingClientRect();
+      const style = window.getComputedStyle(btn);
 
       return (
-        text.includes("send") &&
         rect.width > 0 &&
         rect.height > 0 &&
-        btn.getAttribute("aria-disabled") !== "true" &&
-        !btn.disabled
+        style.visibility !== "hidden" &&
+        style.display !== "none" &&
+        !btn.disabled &&
+        btn.getAttribute("aria-disabled") !== "true"
       );
-    }) || null;
+    });
+
+    // LinkedIn usually has only one active footer action after the editor is active
+    const send = candidates.find(btn => {
+      const html = btn.outerHTML.toLowerCase();
+      return (
+        html.includes("send") ||
+        html.includes("paper-plane") ||
+        html.includes("msg-form__send")
+      );
+    });
+
+    if (!send) return null;
+
+    send.setAttribute("data-gtss-send", Date.now());
+    return `[data-gtss-send="${send.getAttribute("data-gtss-send")}"]`;
   });
 
-  if (!button) return null;
+  if (!selector) return null;
 
-  return page.locator(
-    await button.evaluate(b => {
-      b.setAttribute("data-gtss-send", Date.now());
-      return `[data-gtss-send="${b.getAttribute("data-gtss-send")}"]`;
-    })
-  );
+  return page.locator(selector);
 }
 
 /**
@@ -1883,32 +1894,25 @@ async function sendDirectMessage(
         
         emit("info", "Strategy 1: Found Send button inside same tree...");
         
-        // Critical: Wait for button to be enabled
-        let attempts = 0;
-        while (attempts < 4) {
-          const isDisabled = await sendMatch.isDisabled().catch(() => true);
-          if (!isDisabled) break;
-          await humanDelay(150, 250);
-          attempts++;
+        await sendMatch.scrollIntoViewIfNeeded().catch(() => {});
+        await sendMatch.hover().catch(() => {});
+        
+        const box = await sendMatch.boundingBox().catch(() => null);
+        if (box) {
+          await page.mouse.click(box.x + 10, box.y + 10);
+        } else {
+          await sendMatch.click().catch(() => {});
         }
-
-        await sendMatch.click({ timeout: 3000 }).catch(() => {});
         return true;
       },
       
-      // 2. DOM coordinate click (bypasses all Playwright actionability)
+      // 2. DOM fallback
       async () => {
-        emit("info", "Strategy 2: Trying DOM coordinate click fallback...");
+        emit("info", "Strategy 2: Trying standard DOM click fallback...");
         return page.evaluate(() => {
-          const btn = document.querySelector('button.msg-form__send-button:not([disabled]), button[aria-label*="Send"]:not([disabled])');
+          const btn = document.querySelector(".msg-form__send-button");
           if (!btn) return false;
-          
-          const rect = btn.getBoundingBox ? btn.getBoundingBox() : btn.getBoundingClientRect();
-          const x = rect.left + rect.width / 2;
-          const y = rect.top + rect.height / 2;
-          
-          const evt = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y });
-          btn.dispatchEvent(evt);
+          btn.click();
           return true;
         }).catch(() => false);
       }
