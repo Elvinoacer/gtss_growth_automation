@@ -1054,6 +1054,182 @@ async function getEditableText(locator) {
     .catch(() => "");
 }
 
+async function waitForEditorText(locator, expected, timeout = 700) {
+  const expectedText = normalizeEditableText(expected);
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const actual = normalizeEditableText(await getEditableText(locator));
+    if (actual.includes(expectedText)) return true;
+    await humanDelay(60, 100);
+  }
+
+  return false;
+}
+
+async function pasteTextViaClipboard(page, locator, text) {
+  const value = String(text || "");
+  if (!value) return false;
+
+  await activateDmEditor(page, locator);
+  await ensureSelectionInEditor(locator);
+
+  try {
+    const origin = new URL(page.url()).origin;
+    await page
+      .context()
+      .grantPermissions(["clipboard-read", "clipboard-write"], { origin })
+      .catch(() => {});
+  } catch (_) {
+    // Some test/data URLs do not have a grantable origin. The following
+    // clipboard write or keyboard paste path will simply fail and fall through.
+  }
+
+  let clipboardLoaded = false;
+  try {
+    clipboardLoaded = await page.evaluate(async (message) => {
+      if (!navigator.clipboard?.writeText) return false;
+      await navigator.clipboard.writeText(message);
+      return true;
+    }, value);
+  } catch (_) {
+    clipboardLoaded = false;
+  }
+
+  if (clipboardLoaded) {
+    await page.keyboard
+      .press(process.platform === "darwin" ? "Meta+V" : "Control+V")
+      .catch(() => {});
+    if (await waitForEditorText(locator, value, 900)) return true;
+  }
+
+  // Synthetic paste fallback. LinkedIn's React composer listens to paste/input
+  // on the contenteditable; dispatching both gives it the same state update it
+  // expects from a native paste, even when OS clipboard access is unavailable.
+  await locator
+    .evaluate((el, message) => {
+      el.focus({ preventScroll: false });
+
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount === 0) {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        selection.addRange(range);
+      }
+
+      let pasteDefaultPrevented = false;
+      try {
+        const data = new DataTransfer();
+        data.setData("text/plain", message);
+        const pasteEvent = new ClipboardEvent("paste", {
+          bubbles: true,
+          cancelable: true,
+          clipboardData: data,
+        });
+        pasteDefaultPrevented = !el.dispatchEvent(pasteEvent);
+      } catch (_) {
+        pasteDefaultPrevented = false;
+      }
+
+      if (!pasteDefaultPrevented) {
+        if (typeof document.execCommand === "function") {
+          document.execCommand("selectAll", false, undefined);
+          document.execCommand("insertText", false, message);
+        } else {
+          const tagName = String(el.tagName || "").toLowerCase();
+          if (tagName === "textarea" || tagName === "input") {
+            el.value = message;
+          } else {
+            el.textContent = message;
+          }
+        }
+      }
+
+      el.dispatchEvent(
+        new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertFromPaste",
+          data: message,
+        }),
+      );
+      el.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertFromPaste",
+          data: message,
+        }),
+      );
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value)
+    .catch(() => {});
+
+  return waitForEditorText(locator, value, 700);
+}
+
+async function setEditorTextWithDomEvents(locator, text) {
+  const value = String(text || "");
+  if (!value) return false;
+
+  await locator
+    .evaluate((el, message) => {
+      const tagName = String(el.tagName || "").toLowerCase();
+      const isTextControl = tagName === "textarea" || tagName === "input";
+
+      el.focus({ preventScroll: false });
+
+      if (isTextControl) {
+        const prototype =
+          tagName === "textarea"
+            ? HTMLTextAreaElement.prototype
+            : HTMLInputElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(
+          prototype,
+          "value",
+        );
+        if (descriptor?.set) descriptor.set.call(el, message);
+        else el.value = message;
+      } else {
+        const lines = message.split(/\r?\n/);
+        el.innerHTML = "";
+        lines.forEach((line, index) => {
+          if (index > 0) el.appendChild(document.createElement("br"));
+          el.appendChild(document.createTextNode(line));
+        });
+
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+
+      el.dispatchEvent(
+        new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertText",
+          data: message,
+        }),
+      );
+      el.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertText",
+          data: message,
+        }),
+      );
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
+      el.dispatchEvent(new Event("focus", { bubbles: true }));
+    }, value)
+    .catch(() => {});
+
+  return waitForEditorText(locator, value, 700);
+}
+
 async function getEditorState(locator) {
   return locator
     .evaluate((el) => {
@@ -1386,32 +1562,14 @@ async function typeFast(page, locator, text) {
   await page.keyboard.insertText(value);
   await humanDelay(80, 140);
 
-  const actual = (await getEditableText(locator)).trim();
+  let actual = (await getEditableText(locator)).trim();
   const normalizeWS = (s) => String(s).replace(/\s+/g, " ").trim();
   if (!normalizeWS(actual).includes(normalizeWS(value))) {
-    // Fallback: programmatic document.execCommand in evaluate
-    await ensureSelectionInEditor(locator);
-    await locator.evaluate((el, msg) => {
-      if (typeof document.execCommand === "function") {
-        document.execCommand("selectAll", false, undefined);
-        document.execCommand("insertText", false, msg);
-      } else {
-        const tagName = String(el.tagName || "").toLowerCase();
-        if (tagName === "textarea" || tagName === "input") {
-          el.value = msg;
-        } else {
-          el.textContent = msg;
-        }
-      }
-      el.dispatchEvent(
-        new InputEvent("input", {
-          bubbles: true,
-          inputType: "insertText",
-          data: msg,
-        }),
-      );
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-    }, value).catch(() => {});
+    await pasteTextViaClipboard(page, locator, value);
+    actual = (await getEditableText(locator)).trim();
+  }
+  if (!normalizeWS(actual).includes(normalizeWS(value))) {
+    await setEditorTextWithDomEvents(locator, value);
     await humanDelay(80, 140);
   }
 
@@ -1489,58 +1647,24 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
   await typeMessageWithKeyboard(page, locator, text, charDelay);
   await humanDelay(60, 120); // brief settle before verification
 
-  // Step 4: Verify text landed; fall back to execCommand if not
+  // Step 4: Verify text landed. If normal keyboard input was swallowed,
+  // recover with a native paste path before falling back to direct DOM updates.
+  // Paste is the most reliable fallback for LinkedIn because it triggers the
+  // same beforeinput/input sequence their React composer uses to enable Send.
   let actual = (await getEditableText(locator)).trim();
   if (
     !normalizeEditableText(actual).includes(normalizeEditableText(expected))
   ) {
-    // Re-activate so focus is clean before the fallback
     await activateDmEditor(page, locator);
-    const fallbackText = (await getEditableText(locator)).trim();
-    if (fallbackText) {
-      await ensureSelectionInEditor(locator);
-      await page.keyboard
-        .press(process.platform === "darwin" ? "Meta+A" : "Control+A")
-        .catch(() => {});
-      await page.keyboard.press("Delete").catch(() => {});
-      await humanDelay(40, 80);
-    }
+    await pasteTextViaClipboard(page, locator, text);
+    actual = (await getEditableText(locator)).trim();
+  }
 
-    await locator.evaluate((el, value) => {
-      el.focus({ preventScroll: false });
-      if (
-        document.activeElement !== el &&
-        !el.contains(document.activeElement)
-      ) {
-        return; // outer code will re-verify and throw if text didn't land
-      }
-      if (typeof document.execCommand === "function") {
-        document.execCommand("selectAll", false, undefined);
-        document.execCommand("insertText", false, value);
-      } else {
-        const tagName = String(el.tagName || "").toLowerCase();
-        if (tagName === "textarea" || tagName === "input") {
-          el.value = value;
-        } else {
-          el.textContent = value;
-          const range = document.createRange();
-          range.selectNodeContents(el);
-          range.collapse(false);
-          const sel = window.getSelection();
-          sel.removeAllRanges();
-          sel.addRange(range);
-        }
-      }
-      el.dispatchEvent(
-        new InputEvent("input", {
-          bubbles: true,
-          inputType: "insertText",
-          data: value,
-        }),
-      );
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-    }, text);
-
+  if (
+    !normalizeEditableText(actual).includes(normalizeEditableText(expected))
+  ) {
+    await activateDmEditor(page, locator);
+    await setEditorTextWithDomEvents(locator, text);
     actual = (await getEditableText(locator)).trim();
   }
 
@@ -2301,12 +2425,20 @@ async function sendDirectMessage(
       await activateDmEditor(page, activeEditorLocator);
       await humanDelay(150, 200);
 
-      // Press Ctrl+Enter and Enter (LinkedIn supports both depending on user settings)
+      // Press Ctrl+Enter and Enter (LinkedIn supports both depending on user settings).
+      // Do not mark this as successful unless the editor actually clears; this
+      // preserves the final DOM-click fallback for cases where Enter is ignored.
       await page.keyboard.press("Control+Enter").catch(() => {});
       await humanDelay(100, 150);
-      await page.keyboard.press("Enter");
+      await page.keyboard.press("Enter").catch(() => {});
       await humanDelay(600, 1000);
-      sendSuccessful = true; // optimistic — verification below confirms
+
+      const afterEnterText = normalizeEditableText(
+        await getEditableText(activeEditorLocator),
+      );
+      sendSuccessful = !afterEnterText.includes(
+        normalizeEditableText(message).substring(0, 20),
+      );
     }
 
     // ── 7b. DOM direct click last-resort ────────────────────────────────────
@@ -2316,12 +2448,38 @@ async function sendDirectMessage(
         "warn",
         "Enter fallback also failed — trying direct DOM click last-resort...",
       );
-      const clicked = await page
-        .evaluate(() => {
-          const btn = document.querySelector("button.msg-form__send-button");
+      const clicked = await activeEditorLocator
+        .evaluate((editor) => {
+          const container =
+            editor.closest(".msg-form") ||
+            editor.closest(".msg-overlay-conversation-bubble") ||
+            editor.closest('[role="dialog"]') ||
+            editor.closest(".msg-convo-wrapper") ||
+            document;
+          const buttons = [...container.querySelectorAll("button")];
+          const btn =
+            buttons.find((candidate) =>
+              /msg-form__send|\bsend\b/i.test(
+                [
+                  candidate.className,
+                  candidate.getAttribute("aria-label"),
+                  candidate.getAttribute("title"),
+                  candidate.innerText,
+                  candidate.textContent,
+                ]
+                  .filter(Boolean)
+                  .join(" "),
+              ),
+            ) || document.querySelector("button.msg-form__send-button");
           if (!btn) return false;
+          btn.disabled = false;
           btn.removeAttribute("disabled");
-          btn.click();
+          btn.setAttribute("aria-disabled", "false");
+          btn.classList.remove("artdeco-button--disabled", "disabled");
+          const eventOptions = { bubbles: true, cancelable: true, view: window };
+          btn.dispatchEvent(new MouseEvent("mousedown", eventOptions));
+          btn.dispatchEvent(new MouseEvent("mouseup", eventOptions));
+          btn.dispatchEvent(new MouseEvent("click", eventOptions));
           return true;
         })
         .catch(() => false);
@@ -2412,6 +2570,9 @@ module.exports = {
     activateDmEditor,
     typeFast,
     typeLikeHuman,
+    pasteTextViaClipboard,
+    setEditorTextWithDomEvents,
+    waitForEditorText,
     findSendButtonForEditor,
     waitForEditorInteractive,
     waitForDmEditor,

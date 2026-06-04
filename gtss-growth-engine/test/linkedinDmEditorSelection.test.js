@@ -643,3 +643,114 @@ test(
     }
   },
 );
+
+// ─── test 13: robust paste fallback ─────────────────────────────────────────
+
+test(
+  "pasteTextViaClipboard updates the editor and fires React-style paste/input events",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({
+      viewport: { width: 1366, height: 768 },
+    });
+
+    try {
+      await page.setContent(dmOverlayHtml());
+      process.env.TEST_SPEEDUP = "true";
+
+      await page.evaluate(() => {
+        window.__gtssInputEvents = [];
+        const editor = document.querySelector(".msg-form__contenteditable");
+        const send = document.querySelector(".msg-form__send-button");
+        send.disabled = true;
+        send.setAttribute("aria-disabled", "true");
+
+        editor.addEventListener("paste", () => {
+          window.__gtssInputEvents.push("paste");
+        });
+        editor.addEventListener("input", (event) => {
+          window.__gtssInputEvents.push(event.inputType || "input");
+          if ((editor.innerText || editor.textContent || "").trim()) {
+            send.disabled = false;
+            send.setAttribute("aria-disabled", "false");
+          }
+        });
+      });
+
+      const editor = await __private.findBestDmEditor(page, 1000);
+      assert.ok(editor, "expected a message editor to be found");
+
+      const ok = await __private.pasteTextViaClipboard(
+        page,
+        editor.locator,
+        "Paste fallback should enable Send.",
+      );
+
+      assert.equal(ok, true, "paste fallback should confirm text landed");
+      assert.equal(
+        await editor.locator.textContent(),
+        "Paste fallback should enable Send.",
+      );
+      const inputEvents = await page.evaluate(() => window.__gtssInputEvents);
+      assert.ok(
+        inputEvents.includes("insertFromPaste"),
+        `paste fallback should fire insertFromPaste input — got ${JSON.stringify(inputEvents)}`,
+      );
+      assert.equal(
+        await page.locator(".msg-form__send-button").isDisabled(),
+        false,
+        "input event should let React-style handlers enable the Send button",
+      );
+    } finally {
+      delete process.env.TEST_SPEEDUP;
+      await browser.close();
+    }
+  },
+);
+
+// ─── test 14: robust DOM fallback ───────────────────────────────────────────
+
+test(
+  "setEditorTextWithDomEvents writes text and dispatches input when keyboard input is ignored",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({
+      viewport: { width: 1366, height: 768 },
+    });
+
+    try {
+      await page.setContent(dmOverlayHtml());
+      process.env.TEST_SPEEDUP = "true";
+
+      await page.evaluate(() => {
+        window.__gtssDomInputTypes = [];
+        const editor = document.querySelector(".msg-form__contenteditable");
+        editor.addEventListener("input", (event) => {
+          window.__gtssDomInputTypes.push(event.inputType || "input");
+        });
+      });
+
+      const editor = await __private.findBestDmEditor(page, 1000);
+      assert.ok(editor, "expected a message editor to be found");
+
+      const ok = await __private.setEditorTextWithDomEvents(
+        editor.locator,
+        "DOM event fallback should land.",
+      );
+
+      assert.equal(ok, true, "DOM fallback should confirm text landed");
+      assert.equal(
+        await editor.locator.textContent(),
+        "DOM event fallback should land.",
+      );
+      assert.deepEqual(await page.evaluate(() => window.__gtssDomInputTypes), [
+        "insertText",
+      ]);
+    } finally {
+      delete process.env.TEST_SPEEDUP;
+      await browser.close();
+    }
+  },
+);
