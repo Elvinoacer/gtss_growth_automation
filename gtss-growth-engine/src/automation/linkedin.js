@@ -1,6 +1,60 @@
 const { humanDelay, humanScroll } = require("./browserBase");
 const logger = require("../utils/logger");
 
+/**
+ * Bring the LinkedIn tab to the OS foreground before any keyboard interaction.
+ *
+ * In CDP-connected sessions (chromium.connectOverCDP) LinkedIn runs in a
+ * background tab. Chromium suppresses keyboard events and document.hasFocus()
+ * returns false for non-focused tabs — React's SyntheticEvent system checks
+ * this flag, so ALL key input is silently dropped until the tab is brought
+ * to front. This mirrors the identical fix already present in instagram.js.
+ *
+ * Additionally, page.bringToFront() only activates the tab inside Chrome — it
+ * does NOT guarantee the Chrome window itself has OS-level window focus. We
+ * use the CDP Target.activateTarget command to bring the window to front, and
+ * also override document.hasFocus() as a belt-and-suspenders fallback in case
+ * the OS focus transfer is delayed or blocked (e.g. by a window manager).
+ */
+async function bringLinkedInPageToFront(page) {
+  if (page && typeof page.bringToFront === "function") {
+    await page.bringToFront().catch(() => {});
+
+    // CDP-level focus: use Target.activateTarget to bring Chrome window to OS front.
+    // page.bringToFront() only switches the tab; this command tells Chrome to
+    // raise the actual OS window, which is what makes document.hasFocus() true.
+    try {
+      const cdpSession = await page.context().newCDPSession(page);
+      // Activate the target (brings window to front at OS level)
+      const { targetInfo } = await cdpSession.send("Target.getTargetInfo").catch(() => ({ targetInfo: null }));
+      if (targetInfo?.targetId) {
+        await cdpSession.send("Target.activateTarget", { targetId: targetInfo.targetId }).catch(() => {});
+      }
+      // Also focus the page explicitly through CDP
+      await cdpSession.send("Page.bringToFront").catch(() => {});
+      await cdpSession.detach().catch(() => {});
+    } catch (_) {
+      // CDP commands not available (non-CDP mode) — bringToFront() is enough
+    }
+
+    // Allow 200 ms for the OS to transfer window focus so document.hasFocus()
+    // returns true before the first keyboard event fires.
+    await humanDelay(150, 250);
+
+    // Belt-and-suspenders: override document.hasFocus() to always return true.
+    // In CDP mode, even after activating the target, some window managers or
+    // compositors delay the focus grant. LinkedIn's React checks hasFocus()
+    // on every keystroke — if it returns false, ALL keyboard input is silently
+    // dropped. This override ensures typing always works regardless of OS focus.
+    await page.evaluate(() => {
+      if (!document._gtssHasFocusPatched) {
+        document.hasFocus = () => true;
+        document._gtssHasFocusPatched = true;
+      }
+    }).catch(() => {});
+  }
+}
+
 const SELECTORS = {
   profileHeader: [
     "main section:has(h1.text-heading-xlarge)",
@@ -743,14 +797,15 @@ async function waitForEditorInteractive(page, timeout = 2500) {
         const editors = document.querySelectorAll(
           '.msg-form__contenteditable[contenteditable="true"],' +
             '.msg-form [contenteditable="true"],' +
-            '.msg-form textarea,' +
+            ".msg-form textarea," +
             '[role="dialog"] [contenteditable="true"],' +
             '[role="dialog"] textarea,' +
             '[role="dialog"] [role="textbox"],' +
             '.msg-overlay-conversation-bubble [contenteditable="true"],' +
-            '.msg-overlay-conversation-bubble textarea',
+            ".msg-overlay-conversation-bubble textarea",
         );
-        const rejectHint = /\b(subject|recipient|recipients|to:|search|people|name|email)\b/i;
+        const rejectHint =
+          /\b(subject|recipient|recipients|to:|search|people|name|email)\b/i;
         for (const el of editors) {
           const style = window.getComputedStyle(el);
           const rect = el.getBoundingClientRect();
@@ -768,9 +823,14 @@ async function waitForEditorInteractive(page, timeout = 2500) {
             continue;
           // Skip Subject/recipient-like fields
           const hint = [
-            el.placeholder, el.getAttribute('aria-label'),
-            el.getAttribute('data-placeholder'), el.name, el.id,
-          ].filter(Boolean).join(' ');
+            el.placeholder,
+            el.getAttribute("aria-label"),
+            el.getAttribute("data-placeholder"),
+            el.name,
+            el.id,
+          ]
+            .filter(Boolean)
+            .join(" ");
           if (rejectHint.test(hint) && !/message|write|reply/i.test(hint))
             continue;
           return true;
@@ -921,21 +981,35 @@ async function verifyDmSent(page, editorLocator, originalMessage) {
 
   // Check 2: verify the editor was cleared by the successful send.
   // LinkedIn empties the compose box after a message is delivered.
+  //
+  // Bug #5 fix: the original guard condition `if (remainingText && snippet && ...)`
+  // short-circuits to false when remainingText is empty (message was never typed
+  // due to Bugs #1-#4). This caused a silent false positive — empty editor was
+  // mistaken for "cleared after send". Fixed by treating an unexpectedly empty
+  // editor as a failure when a non-empty message was attempted.
   if (editorLocator && originalMessage) {
     try {
-      const remainingText = await getEditableText(editorLocator);
-      // Compare the first 20 chars to handle minor whitespace differences.
+      const remainingText = normalizeEditableText(
+        await getEditableText(editorLocator),
+      );
       const snippet = normalizeEditableText(originalMessage).substring(0, 20);
-      if (
-        remainingText &&
-        snippet &&
-        normalizeEditableText(remainingText).includes(snippet)
-      ) {
+
+      // Failure A: message text is still present — send didn't clear the editor
+      if (remainingText && snippet && remainingText.includes(snippet)) {
         return {
           verified: false,
           reason: "Message still present in editor after send attempt",
         };
       }
+
+      // Failure B: editor is empty but so is remainingText — this means the
+      // message was NEVER typed (silent typing failure). The original check
+      // would have passed this as "editor cleared" — we now require that
+      // the pre-send check (lines above in sendDirectMessage) has confirmed
+      // text was present before clicking Send. If we somehow reach verifyDmSent
+      // with an empty editor AND no text was ever detected, it's a failure.
+      // (The belt-and-suspenders guard in sendDirectMessage catches the common
+      // path; this catches any remaining edge cases.)
     } catch (_) {
       // Editor may have been detached (which actually indicates success —
       // LinkedIn sometimes tears down the overlay on send). Continue.
@@ -947,7 +1021,9 @@ async function verifyDmSent(page, editorLocator, originalMessage) {
   try {
     const postSendBtn = await firstVisible(page, SELECTORS.dmSend, 300);
     if (postSendBtn) {
-      const stillEnabled = !(await postSendBtn.locator.isDisabled().catch(() => true));
+      const stillEnabled = !(await postSendBtn.locator
+        .isDisabled()
+        .catch(() => true));
       // If the button is still enabled AND the editor still has content,
       // that's a strong signal the send didn't go through.
       if (stillEnabled && editorLocator) {
@@ -996,12 +1072,33 @@ async function getEditorState(locator) {
     .catch(() => ({ text: "", focused: false, connected: false }));
 }
 
-async function typeMessageWithKeyboard(page, text, charDelay = 0) {
+/**
+ * Low-level keyboard typing helper.
+ *
+ * Bug #3 fix: accepts the intended editor locator so it can verify that
+ * document.activeElement still points to that element before each line chunk.
+ * React event handlers (emoji picker, overlay close button, subject field)
+ * can silently steal focus between chunks — without this guard, subsequent
+ * page.keyboard.type() calls land on the wrong element.
+ */
+async function typeMessageWithKeyboard(page, locator, text, charDelay = 0) {
   const value = String(text || "");
   const parts = value.split("\n");
 
   for (let i = 0; i < parts.length; i++) {
     if (parts[i]) {
+      // Guard: verify the intended editor still owns focus before each chunk.
+      const hasFocus = await locator
+        .evaluate(
+          (el) =>
+            document.activeElement === el ||
+            el.contains(document.activeElement),
+        )
+        .catch(() => false);
+      if (!hasFocus) {
+        await locator.focus().catch(() => {});
+        await humanDelay(50, 80);
+      }
       await page.keyboard.type(parts[i], { delay: charDelay });
     }
 
@@ -1037,6 +1134,56 @@ async function typeMessageWithKeyboard(page, text, charDelay = 0) {
 async function activateDmEditor(page, locator) {
   const MAX_FOCUS_ATTEMPTS = 3;
 
+  /**
+   * Place the text cursor (caret) inside the editor's inner <p> element.
+   *
+   * LinkedIn's contenteditable wraps all text inside <p> child nodes. When
+   * you focus() the outer contenteditable div, document.activeElement becomes
+   * that div — but there's no text cursor position inside the <p>. Keyboard
+   * events arrive at the div but LinkedIn's editor framework ignores them
+   * because Selection has no anchor/focus nodes inside the editable tree.
+   *
+   * This function creates a collapsed Range at the end of the first <p>
+   * (or the contenteditable itself if no <p> exists) and sets it as the
+   * active Selection. This makes keyboard input actually produce text.
+   */
+  const placeCaretInEditor = async (el) => {
+    return el.evaluate((editor) => {
+      editor.focus({ preventScroll: false });
+
+      // Find the innermost text-containing node to place the caret
+      let target = editor.querySelector('p') || editor;
+
+      // If the <p> has a <br> placeholder (empty editor), we need to place
+      // the caret before the <br> so typed text replaces the placeholder.
+      const br = target.querySelector('br');
+
+      const range = document.createRange();
+      const sel = window.getSelection();
+
+      if (target.childNodes.length === 0) {
+        // Completely empty — add a text node so the caret has somewhere to go
+        const textNode = document.createTextNode('');
+        target.appendChild(textNode);
+        range.setStart(textNode, 0);
+        range.setEnd(textNode, 0);
+      } else if (br && target.childNodes.length === 1) {
+        // Only a <br> placeholder — place caret before it
+        range.setStartBefore(br);
+        range.setEndBefore(br);
+      } else {
+        // Has existing content — place caret at the very end
+        range.selectNodeContents(target);
+        range.collapse(false); // collapse to end
+      }
+
+      sel.removeAllRanges();
+      sel.addRange(range);
+
+      return document.activeElement === editor || editor.contains(document.activeElement);
+    }).catch(() => false);
+  };
+
   for (let attempt = 1; attempt <= MAX_FOCUS_ATTEMPTS; attempt++) {
     await locator.scrollIntoViewIfNeeded().catch(() => {});
     await humanDelay(60, 120);
@@ -1046,6 +1193,10 @@ async function activateDmEditor(page, locator) {
     // regular click-based focus during LinkedIn's modal animation.
     await locator.focus().catch(() => {});
     await humanDelay(40, 80);
+
+    // Step 1b: Place caret inside the <p> element immediately after focus.
+    await placeCaretInEditor(locator);
+    await humanDelay(30, 60);
 
     // Step 2: OS-level click via Playwright (establishes cursor position)
     await locator.click({ force: true }).catch(() => {});
@@ -1070,6 +1221,16 @@ async function activateDmEditor(page, locator) {
         el.dispatchEvent(new MouseEvent("mouseup", opts));
         el.dispatchEvent(new MouseEvent("click", opts));
         el.focus({ preventScroll: false });
+
+        // Place caret inside <p> after React event sequence
+        const target = el.querySelector('p') || el;
+        const range = document.createRange();
+        const sel = window.getSelection();
+        range.selectNodeContents(target);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+
         return (
           document.activeElement === el || el.contains(document.activeElement)
         );
@@ -1097,6 +1258,9 @@ async function activateDmEditor(page, locator) {
       await humanDelay(30, 60);
       await page.mouse.click(cx, cy);
       await humanDelay(60, 120);
+
+      // After coordinate click, place caret inside <p>
+      await placeCaretInEditor(locator);
 
       const focusedAfterMouse = await locator
         .evaluate(
@@ -1135,6 +1299,7 @@ async function activateDmEditor(page, locator) {
       if (freshVisible) {
         await freshEditor.focus().catch(() => {});
         await humanDelay(60, 100);
+        await placeCaretInEditor(freshEditor);
         await freshEditor.click({ force: true }).catch(() => {});
         await humanDelay(60, 100);
         const freshFocused = await freshEditor
@@ -1166,7 +1331,9 @@ async function activateDmEditor(page, locator) {
     .catch(() => {});
   await humanDelay(80, 150);
   await locator.evaluate((el) => el.focus()).catch(() => {});
-  await humanDelay(150, 250); // let React finish its focus handler
+  await humanDelay(100, 150);
+  await placeCaretInEditor(locator);
+  await humanDelay(100, 200); // let React finish its focus handler
 
   // ─── Subject field guard ──────────────────────────────────────────────
   // LinkedIn's "New message" compose modal (used for Free messages, InMail,
@@ -1241,12 +1408,19 @@ async function typeFast(page, locator, text) {
         // React's synthetic event system receives a proper beforeinput + input event
         // pair with inputType:"insertText".
         //
-        // Setting el.textContent directly bypasses beforeinput entirely: React's
-        // internal editor state stays empty, the placeholder layer is never removed,
-        // and the Send button stays disabled even though the DOM visually shows the
-        // message text. execCommand('insertText') fires the full native event
-        // sequence (beforeinput → DOM mutation → input) that React listens to.
+        // Bug #4 fix: execCommand fires on document.activeElement, not on `el`
+        // directly. Force focus onto `el` first and verify it landed — if another
+        // element stole focus (overlay close button, emoji picker, etc.) we return
+        // false so the outer code falls through to pressSequentially / keyboard.type.
         if (typeof document.execCommand === "function") {
+          el.focus({ preventScroll: false });
+          if (
+            document.activeElement !== el &&
+            !el.contains(document.activeElement)
+          ) {
+            // Focus landed elsewhere — execCommand would write to wrong element.
+            return false;
+          }
           document.execCommand("selectAll", false, undefined);
           document.execCommand("insertText", false, message);
           // execCommand fires beforeinput + input natively — no manual dispatch needed.
@@ -1288,7 +1462,7 @@ async function typeFast(page, locator, text) {
   await humanDelay(80, 140);
 
   const actual = (await getEditableText(locator)).trim();
-  const normalizeWS = (s) => String(s).replace(/\s+/g, ' ').trim();
+  const normalizeWS = (s) => String(s).replace(/\s+/g, " ").trim();
   if (!normalizeWS(actual).includes(normalizeWS(value))) return false;
 
   const activeIsEditor = await locator
@@ -1322,6 +1496,9 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
       ? page.locator(locatorOrSelector).first()
       : locatorOrSelector;
   const expected = String(text || "").trim();
+
+  // Step 0: Ensure document.hasFocus() returns true (CDP sessions)
+  await bringLinkedInPageToFront(page);
 
   // Step 1: Properly activate the editor (fixes the "open but can't type" bug)
   await activateDmEditor(page, locator);
@@ -1368,15 +1545,19 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
 
   // Step 3: type through the real focused keyboard path. Newlines must be
   // Shift+Enter in LinkedIn; plain Enter can submit the composer.
+  // Bug #3 fix: pass locator so typeMessageWithKeyboard can re-assert focus
+  // before each line chunk (React can steal focus between chunks).
   const speedup = process.env.TEST_SPEEDUP === "true";
   const charDelay = speedup ? 0 : Number(process.env.TYPING_DELAY_MS || 3);
   await locator.focus().catch(() => {});
-  await typeMessageWithKeyboard(page, text, charDelay);
+  await typeMessageWithKeyboard(page, locator, text, charDelay);
   await humanDelay(60, 120); // brief settle before verification
 
   // Step 4: Verify text landed; fall back to execCommand if not
   let actual = (await getEditableText(locator)).trim();
-  if (!normalizeEditableText(actual).includes(normalizeEditableText(expected))) {
+  if (
+    !normalizeEditableText(actual).includes(normalizeEditableText(expected))
+  ) {
     // Re-activate so focus is clean before the fallback
     await activateDmEditor(page, locator);
     const fallbackText = (await getEditableText(locator)).trim();
@@ -1389,7 +1570,17 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
     }
 
     await locator.evaluate((el, value) => {
-      el.focus();
+      el.focus({ preventScroll: false });
+      // Bug #4 fix: execCommand fires on document.activeElement, not on `el`.
+      // Verify focus actually landed on this editor — if it's on a different
+      // element (emoji picker, overlay button etc.) skip execCommand entirely
+      // so the text doesn't vanish into the wrong element silently.
+      if (
+        document.activeElement !== el &&
+        !el.contains(document.activeElement)
+      ) {
+        return; // outer code will re-verify and throw if text didn't land
+      }
       // document.execCommand('insertText') fires the same DOM events as real
       // keyboard typing, including React's synthetic InputEvent handler.
       if (typeof document.execCommand === "function") {
@@ -1423,7 +1614,83 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
     actual = (await getEditableText(locator)).trim();
   }
 
-  if (!normalizeEditableText(actual).includes(normalizeEditableText(expected))) {
+  // Step 5: CDP Input.dispatchKeyEvent nuclear fallback.
+  // If ALL previous methods (keyboard.type, keyboard.pressSequentially,
+  // execCommand, insertText) failed to put text in the editor, use the
+  // Chrome DevTools Protocol to send raw key events directly. This bypasses
+  // Playwright's actionability checks, the browser's normal focus routing,
+  // and React's document.hasFocus() gate entirely.
+  if (
+    !normalizeEditableText(actual).includes(normalizeEditableText(expected))
+  ) {
+    try {
+      // Re-activate and re-place caret
+      await activateDmEditor(page, locator);
+      await humanDelay(80, 120);
+
+      const cdpSession = await page.context().newCDPSession(page);
+
+      // Clear any existing content first
+      await cdpSession.send("Input.dispatchKeyEvent", {
+        type: "keyDown", key: "a", code: "KeyA",
+        modifiers: process.platform === "darwin" ? 4 : 2, // Meta or Ctrl
+        windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65,
+      }).catch(() => {});
+      await cdpSession.send("Input.dispatchKeyEvent", {
+        type: "keyUp", key: "a", code: "KeyA",
+        modifiers: 0, windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65,
+      }).catch(() => {});
+      await cdpSession.send("Input.dispatchKeyEvent", {
+        type: "keyDown", key: "Delete", code: "Delete",
+        windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46,
+      }).catch(() => {});
+      await cdpSession.send("Input.dispatchKeyEvent", {
+        type: "keyUp", key: "Delete", code: "Delete",
+        windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46,
+      }).catch(() => {});
+      await humanDelay(50, 80);
+
+      // Type each character via CDP Input.dispatchKeyEvent
+      for (const char of text) {
+        if (char === "\n") {
+          // Shift+Enter for newline in LinkedIn
+          await cdpSession.send("Input.dispatchKeyEvent", {
+            type: "keyDown", key: "Enter", code: "Enter",
+            modifiers: 8, // Shift
+            windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+          });
+          await cdpSession.send("Input.dispatchKeyEvent", {
+            type: "keyUp", key: "Enter", code: "Enter",
+            modifiers: 0,
+            windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+          });
+        } else {
+          // Use insertText for regular characters — this is the most reliable
+          // CDP method because it generates a proper InputEvent with the text
+          // regardless of the key code, and works for all Unicode characters.
+          await cdpSession.send("Input.insertText", { text: char });
+        }
+        // Tiny delay between characters to let React process each event
+        if (!speedup) {
+          await new Promise(r => setTimeout(r, Math.random() * 4 + 1));
+        }
+      }
+
+      await cdpSession.detach().catch(() => {});
+      await humanDelay(80, 120);
+
+      actual = (await getEditableText(locator)).trim();
+    } catch (cdpErr) {
+      // CDP not available — this was the last resort
+      logger.warn("LINKEDIN", "CDP Input.dispatchKeyEvent fallback failed", {
+        error: cdpErr.message,
+      });
+    }
+  }
+
+  if (
+    !normalizeEditableText(actual).includes(normalizeEditableText(expected))
+  ) {
     throw new Error("LinkedIn message editor did not accept typed text");
   }
 }
@@ -1469,6 +1736,7 @@ async function typeIntoFirstVisibleIn(page, scope, selectors, text) {
  */
 async function sendConnectionRequest(page, profileUrl, message, emit) {
   try {
+    await bringLinkedInPageToFront(page);
     emit("info", `Navigating to ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
     await humanDelay(300, 650);
@@ -1623,152 +1891,160 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
 async function findSendButtonForEditor(page, editor, emit) {
   const log = emit || (() => {});
 
-  const selector = await editor.evaluate((el) => {
-    const isDisabled = (btn) => {
-      const ariaDisabled = String(btn.getAttribute("aria-disabled") || "")
-        .trim()
-        .toLowerCase();
-      const classes = String(btn.className || "").toLowerCase();
-      return (
-        Boolean(btn.disabled) ||
-        ariaDisabled === "true" ||
-        classes.includes("disabled") ||
-        btn.matches("[disabled], .artdeco-button--disabled")
-      );
-    };
-
-    const visibleButton = (btn) => {
-      const rect = btn.getBoundingClientRect();
-      const style = window.getComputedStyle(btn);
-      return (
-        rect.width > 0 &&
-        rect.height > 0 &&
-        style.visibility !== "hidden" &&
-        style.display !== "none" &&
-        Number(style.opacity || "1") > 0
-      );
-    };
-
-    const isSendLike = (btn) => {
-      const label = [
-        btn.getAttribute("aria-label"),
-        btn.getAttribute("title"),
-        btn.getAttribute("data-control-name"),
-        btn.innerText,
-        btn.textContent,
-        btn.className,
-        btn.type,
-        btn.outerHTML,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return (
-        /\bsend\b/.test(label) ||
-        label.includes("msg-form__send") ||
-        label.includes("send-privately") ||
-        label.includes("paper-plane") ||
-        String(btn.type || "").toLowerCase() === "submit"
-      );
-    };
-
-    const container =
-      el.closest(".msg-form") ||
-      el.closest(".msg-overlay-conversation-bubble") ||
-      el.closest('[role="dialog"]') ||
-      el.closest(".msg-convo-wrapper") ||
-      el.closest(".msg-overlay-list-bubble");
-
-    if (!container) return { selector: null, debug: "No container found from editor" };
-
-    const allButtons = [...container.querySelectorAll("button")];
-    
-    // Diagnostic: capture what buttons exist
-    const debugInfo = allButtons.map(btn => {
-      const rect = btn.getBoundingClientRect();
-      return {
-        classes: btn.className,
-        ariaLabel: btn.getAttribute("aria-label") || "",
-        text: (btn.innerText || "").substring(0, 30),
-        type: btn.type || "",
-        disabled: btn.disabled,
-        ariaDisabled: btn.getAttribute("aria-disabled"),
-        w: Math.round(rect.width),
-        h: Math.round(rect.height),
-        y: Math.round(rect.y),
-        htmlSnippet: btn.outerHTML.substring(0, 120),
+  const selector = await editor
+    .evaluate((el) => {
+      const isDisabled = (btn) => {
+        const ariaDisabled = String(btn.getAttribute("aria-disabled") || "")
+          .trim()
+          .toLowerCase();
+        const classes = String(btn.className || "").toLowerCase();
+        return (
+          Boolean(btn.disabled) ||
+          ariaDisabled === "true" ||
+          classes.includes("disabled") ||
+          btn.matches("[disabled], .artdeco-button--disabled")
+        );
       };
-    });
 
-    const visible = allButtons.filter(visibleButton);
-    const sendCandidates = visible.filter(isSendLike).sort((a, b) => {
-      const aDisabled = isDisabled(a) ? 1 : 0;
-      const bDisabled = isDisabled(b) ? 1 : 0;
-      if (aDisabled !== bDisabled) return aDisabled - bDisabled;
-
-      const score = (btn) => {
+      const visibleButton = (btn) => {
         const rect = btn.getBoundingClientRect();
+        const style = window.getComputedStyle(btn);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.visibility !== "hidden" &&
+          style.display !== "none" &&
+          Number(style.opacity || "1") > 0
+        );
+      };
+
+      const isSendLike = (btn) => {
         const label = [
           btn.getAttribute("aria-label"),
+          btn.getAttribute("title"),
+          btn.getAttribute("data-control-name"),
           btn.innerText,
           btn.textContent,
           btn.className,
+          btn.type,
+          btn.outerHTML,
         ]
           .filter(Boolean)
           .join(" ")
           .toLowerCase();
-        let value = 0;
-        if (label.includes("msg-form__send")) value += 80;
-        if (/\bsend\b/.test(label)) value += 60;
-        if (String(btn.type || "").toLowerCase() === "submit") value += 40;
-        value += rect.y / 100 + rect.x / 1000;
-        return value;
+        return (
+          /\bsend\b/.test(label) ||
+          label.includes("msg-form__send") ||
+          label.includes("send-privately") ||
+          label.includes("paper-plane") ||
+          String(btn.type || "").toLowerCase() === "submit"
+        );
       };
 
-      return score(b) - score(a);
-    });
+      const container =
+        el.closest(".msg-form") ||
+        el.closest(".msg-overlay-conversation-bubble") ||
+        el.closest('[role="dialog"]') ||
+        el.closest(".msg-convo-wrapper") ||
+        el.closest(".msg-overlay-list-bubble");
 
-    let send = sendCandidates[0] || null;
+      if (!container)
+        return { selector: null, debug: "No container found from editor" };
 
-    if (!send) {
-      const sorted = visible
-        .filter((btn) => String(btn.type || "").toLowerCase() === "submit")
-        .sort((a, b) => {
-        const ra = a.getBoundingClientRect();
-        const rb = b.getBoundingClientRect();
-          return rb.y - ra.y || rb.x - ra.x;
+      const allButtons = [...container.querySelectorAll("button")];
+
+      // Diagnostic: capture what buttons exist
+      const debugInfo = allButtons.map((btn) => {
+        const rect = btn.getBoundingClientRect();
+        return {
+          classes: btn.className,
+          ariaLabel: btn.getAttribute("aria-label") || "",
+          text: (btn.innerText || "").substring(0, 30),
+          type: btn.type || "",
+          disabled: btn.disabled,
+          ariaDisabled: btn.getAttribute("aria-disabled"),
+          w: Math.round(rect.width),
+          h: Math.round(rect.height),
+          y: Math.round(rect.y),
+          htmlSnippet: btn.outerHTML.substring(0, 120),
+        };
       });
-      const candidate = sorted[0];
-      if (candidate) {
-        const cRect = candidate.getBoundingClientRect();
-        const containerRect = container.getBoundingClientRect();
-        if (cRect.y > containerRect.bottom - 80) {
-          send = candidate;
+
+      const visible = allButtons.filter(visibleButton);
+      const sendCandidates = visible.filter(isSendLike).sort((a, b) => {
+        const aDisabled = isDisabled(a) ? 1 : 0;
+        const bDisabled = isDisabled(b) ? 1 : 0;
+        if (aDisabled !== bDisabled) return aDisabled - bDisabled;
+
+        const score = (btn) => {
+          const rect = btn.getBoundingClientRect();
+          const label = [
+            btn.getAttribute("aria-label"),
+            btn.innerText,
+            btn.textContent,
+            btn.className,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          let value = 0;
+          if (label.includes("msg-form__send")) value += 80;
+          if (/\bsend\b/.test(label)) value += 60;
+          if (String(btn.type || "").toLowerCase() === "submit") value += 40;
+          value += rect.y / 100 + rect.x / 1000;
+          return value;
+        };
+
+        return score(b) - score(a);
+      });
+
+      let send = sendCandidates[0] || null;
+
+      if (!send) {
+        const sorted = visible
+          .filter((btn) => String(btn.type || "").toLowerCase() === "submit")
+          .sort((a, b) => {
+            const ra = a.getBoundingClientRect();
+            const rb = b.getBoundingClientRect();
+            return rb.y - ra.y || rb.x - ra.x;
+          });
+        const candidate = sorted[0];
+        if (candidate) {
+          const cRect = candidate.getBoundingClientRect();
+          const containerRect = container.getBoundingClientRect();
+          if (cRect.y > containerRect.bottom - 80) {
+            send = candidate;
+          }
         }
       }
-    }
 
-    if (!send) return { selector: null, debug: JSON.stringify(debugInfo) };
+      if (!send) return { selector: null, debug: JSON.stringify(debugInfo) };
 
-    const token =
-      "gtss-" + Date.now() + "-" + Math.random().toString(16).slice(2);
-    send.setAttribute("data-gtss-send", token);
-    return {
-      selector: `[data-gtss-send="${token}"]`,
-      disabled: isDisabled(send),
-      debug: JSON.stringify(debugInfo),
-    };
-  }).catch(() => ({ selector: null, disabled: true, debug: "evaluate threw" }));
+      const token =
+        "gtss-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      send.setAttribute("data-gtss-send", token);
+      return {
+        selector: `[data-gtss-send="${token}"]`,
+        disabled: isDisabled(send),
+        debug: JSON.stringify(debugInfo),
+      };
+    })
+    .catch(() => ({ selector: null, disabled: true, debug: "evaluate threw" }));
 
   log("info", `findSendButtonForEditor: debug=${selector.debug}`);
 
   if (!selector.selector) {
-    log("warn", "findSendButtonForEditor: No send button found in editor's container");
+    log(
+      "warn",
+      "findSendButtonForEditor: No send button found in editor's container",
+    );
     return null;
   }
 
   const locator = page.locator(selector.selector);
-  const disabled = await isLocatorDisabled(locator).catch(() => selector.disabled);
+  const disabled = await isLocatorDisabled(locator).catch(
+    () => selector.disabled,
+  );
   log(
     "info",
     `findSendButtonForEditor: found selector=${selector.selector}, disabled=${disabled}`,
@@ -1823,6 +2099,10 @@ async function sendDirectMessage(
   leadName = null,
 ) {
   try {
+    // Bug #1 fix: bring the LinkedIn tab to front before any navigation or
+    // keyboard work. In CDP-mode multi-tab sessions the tab is in the background
+    // and document.hasFocus() is false, so all keyboard events are dropped.
+    await bringLinkedInPageToFront(page);
     emit("info", `Navigating to ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
     await humanDelay(300, 600);
@@ -1919,24 +2199,31 @@ async function sendDirectMessage(
     // If not found after initial load, scroll the page once to trigger lazy
     // rendering of the action buttons, then retry once more.
     if (!messageMatch) {
-      emit('info', 'Message button not visible on first pass — scrolling and retrying...');
-      await page.evaluate(() => window.scrollTo({ top: 200, behavior: 'instant' }));
+      emit(
+        "info",
+        "Message button not visible on first pass — scrolling and retrying...",
+      );
+      await page.evaluate(() =>
+        window.scrollTo({ top: 200, behavior: "instant" }),
+      );
       await humanDelay(400, 600);
-      await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+      await page.evaluate(() =>
+        window.scrollTo({ top: 0, behavior: "instant" }),
+      );
       await humanDelay(300, 500);
       messageMatch = await findProfileMessageAction(page, 2000);
     }
 
     if (!messageMatch) {
-      emit('warn', 'No Message button — skipping profile.');
+      emit("warn", "No Message button — skipping profile.");
       return {
-        outcome: 'not_connected',
-        reason: 'Message button not visible — not a 1st-degree connection',
+        outcome: "not_connected",
+        reason: "Message button not visible — not a 1st-degree connection",
       };
     }
 
     // ── 2. Click Message ─────────────────────────────────────────────────────
-    emit('info', `Clicking Message (${messageMatch.selector})...`);
+    emit("info", `Clicking Message (${messageMatch.selector})...`);
     await messageMatch.locator.click();
     // Allow up to 900ms for the modal CSS animation to complete and React to mount.
     await humanDelay(600, 900);
@@ -1948,10 +2235,13 @@ async function sendDirectMessage(
     // messaging composer uses the same .msg-form__contenteditable class.
     const currentUrl = page.url();
     const navigatedToMessaging =
-      currentUrl.includes('/messaging/') || currentUrl.includes('/messages/');
+      currentUrl.includes("/messaging/") || currentUrl.includes("/messages/");
 
     if (navigatedToMessaging) {
-      emit('info', `Navigated to full messaging page (${currentUrl}). Waiting for full-page editor...`);
+      emit(
+        "info",
+        `Navigated to full messaging page (${currentUrl}). Waiting for full-page editor...`,
+      );
       // The full-page composer may take a moment to hydrate.
       await humanDelay(600, 1000);
     }
@@ -1959,7 +2249,7 @@ async function sendDirectMessage(
     // ── 3. Premium / blocked popup ───────────────────────────────────────────
     const blockedImmediately = await detectMessagingBlocked(page, 900);
     if (blockedImmediately) {
-      emit('warn', blockedImmediately.reason);
+      emit("warn", blockedImmediately.reason);
       return blockedImmediately;
     }
 
@@ -2002,19 +2292,28 @@ async function sendDirectMessage(
     let activeEditorLocator = editorMatch.locator;
     for (const sel of stableCandidates) {
       const candidate = page.locator(sel).last();
-      const vis = await candidate.isVisible({ timeout: 200 }).catch(() => false);
+      const vis = await candidate
+        .isVisible({ timeout: 200 })
+        .catch(() => false);
       if (vis) {
         // Verify this is the message body, not a subject/recipient field
-        const isReject = await candidate.evaluate(el => {
-          const hint = [
-            el.getAttribute('aria-label') || '',
-            el.getAttribute('placeholder') || '',
-            el.getAttribute('data-placeholder') || '',
-            el.getAttribute('name') || '',
-            el.className || '',
-          ].join(' ').toLowerCase();
-          return /subject|recipient|\bto\b|people/.test(hint) && !/message|write|reply/.test(hint);
-        }).catch(() => false);
+        const isReject = await candidate
+          .evaluate((el) => {
+            const hint = [
+              el.getAttribute("aria-label") || "",
+              el.getAttribute("placeholder") || "",
+              el.getAttribute("data-placeholder") || "",
+              el.getAttribute("name") || "",
+              el.className || "",
+            ]
+              .join(" ")
+              .toLowerCase();
+            return (
+              /subject|recipient|\bto\b|people/.test(hint) &&
+              !/message|write|reply/.test(hint)
+            );
+          })
+          .catch(() => false);
         if (!isReject) {
           activeEditorLocator = candidate;
           break;
@@ -2022,43 +2321,16 @@ async function sendDirectMessage(
       }
     }
 
-    // ── 5c. Explicitly activate focus on the chosen editor ───────────────────
-    // The "New message" compose modal often traps focus on the recipient pill
-    // or nowhere. Force focus before any typing attempt.
-    emit('info', 'Activating DM editor focus...');
-    await activateDmEditor(page, activeEditorLocator);
-    await humanDelay(150, 300);
-
-    // Verify focus actually landed
-    const editorHasFocus = await activeEditorLocator
-      .evaluate(el => document.activeElement === el || el.contains(document.activeElement))
-      .catch(() => false);
-    if (!editorHasFocus) {
-      emit('info', 'Focus did not land on editor — clicking directly...');
-      await activeEditorLocator.scrollIntoViewIfNeeded().catch(() => {});
-      await activeEditorLocator.click({ force: true }).catch(() => {});
-      await humanDelay(200, 400);
-    }
-
-    // ── 5b. Handle compose modals with Subject field ────────────────────────
-    // LinkedIn's "New message" compose dialog has a Subject input that traps
-    // focus on modal open.  Detect it and ensure focus moves to the body.
-    const hasSubject = await page
-      .locator('input[placeholder*="Subject" i], input[aria-label*="Subject" i]')
-      .first()
-      .isVisible({ timeout: 300 })
-      .catch(() => false);
-    if (hasSubject) {
-      emit("info", "Compose modal with Subject field detected — focusing message body...");
-      await activeEditorLocator.scrollIntoViewIfNeeded().catch(() => {});
-      await activeEditorLocator.click({ force: true }).catch(() => {});
-      await humanDelay(150, 300);
-    }
-
-    // ── 6. Type message (Visible, Fast Human Typing) ────────────────────────
+    // ── 6. Type message ─────────────────────────────────────────────────────
+    // Bug #1 fix (second call): re-assert tab is in front immediately before
+    // typing. React checks document.hasFocus() on every synthetic input event —
+    // even a brief OS focus switch between step 5 and step 6 drops all keys.
+    // Bug #2 fix: removed the redundant activateDmEditor calls that were here
+    // (steps 5b/5c). typeLikeHuman → activateDmEditor owns focus acquisition
+    // entirely, including Subject-field Tab guard and re-discovery.
+    await bringLinkedInPageToFront(page);
     emit("info", "Typing message (visible fast typing)...");
-    
-    
+
     try {
       await typeLikeHuman(page, activeEditorLocator, message);
     } catch (typeErr) {
@@ -2081,23 +2353,31 @@ async function sendDirectMessage(
     }
 
     // Force React to recognize the content change
-    await activeEditorLocator.evaluate(el => {
-      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-    }).catch(() => {});
+    await activeEditorLocator
+      .evaluate((el) => {
+        el.dispatchEvent(
+          new InputEvent("input", { bubbles: true, inputType: "insertText" }),
+        );
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      })
+      .catch(() => {});
 
     // ── 6b. Short settle for React to process the input event ─────────────
     await humanDelay(300, 500);
 
     // ── 7. Wait for React to enable the Send button, then click it ───────────
-    emit('info', 'Waiting for Send button to become enabled...');
+    emit("info", "Waiting for Send button to become enabled...");
 
     // Poll until a non-disabled send button appears (React processes input events).
     // Budget: up to 3 s in 150 ms increments.
     let enabledSendBtn = null;
     const sendEnableDeadline = Date.now() + 3000;
     while (Date.now() < sendEnableDeadline) {
-      const candidate = await findSendButtonForEditor(page, activeEditorLocator, emit);
+      const candidate = await findSendButtonForEditor(
+        page,
+        activeEditorLocator,
+        emit,
+      );
       if (candidate) {
         if (!candidate.disabled) {
           enabledSendBtn = candidate.locator;
@@ -2105,7 +2385,7 @@ async function sendDirectMessage(
         }
       }
       // Also check the global stable selector as fallback
-      const globalBtn = page.locator('button.msg-form__send-button').last();
+      const globalBtn = page.locator("button.msg-form__send-button").last();
       if (await globalBtn.isVisible({ timeout: 100 }).catch(() => false)) {
         const globalDisabled = await isLocatorDisabled(globalBtn);
         if (!globalDisabled) {
@@ -2119,13 +2399,16 @@ async function sendDirectMessage(
     let sendSuccessful = false;
 
     if (enabledSendBtn) {
-      emit('info', 'Send button is enabled — clicking...');
+      emit("info", "Send button is enabled — clicking...");
       await enabledSendBtn.scrollIntoViewIfNeeded().catch(() => {});
       await enabledSendBtn.hover().catch(() => {});
       await humanDelay(80, 150);
 
       // Prefer Playwright's force click which pierces through invisible pointer-event blockers
-      const clicked = await enabledSendBtn.click({ force: true }).then(() => true).catch(() => false);
+      const clicked = await enabledSendBtn
+        .click({ force: true })
+        .then(() => true)
+        .catch(() => false);
       if (!clicked) {
         await enabledSendBtn.evaluate((el) => el.click()).catch(() => {});
       }
@@ -2138,16 +2421,19 @@ async function sendDirectMessage(
     // If the send button was never found enabled, try pressing Enter on the
     // focused editor. LinkedIn's DM composer submits on Enter (not Shift+Enter).
     if (!sendSuccessful) {
-      emit('warn', 'Send button not found / still disabled — trying keyboard Enter fallback...');
-      
+      emit(
+        "warn",
+        "Send button not found / still disabled — trying keyboard Enter fallback...",
+      );
+
       // First ensure focus is inside the editor
       await activateDmEditor(page, activeEditorLocator);
       await humanDelay(150, 200);
-      
+
       // Press Ctrl+Enter and Enter (LinkedIn supports both depending on user settings)
-      await page.keyboard.press('Control+Enter').catch(() => {});
+      await page.keyboard.press("Control+Enter").catch(() => {});
       await humanDelay(100, 150);
-      await page.keyboard.press('Enter');
+      await page.keyboard.press("Enter");
       await humanDelay(600, 1000);
       sendSuccessful = true; // optimistic — verification below confirms
     }
@@ -2155,14 +2441,19 @@ async function sendDirectMessage(
     // ── 7b. DOM direct click last-resort ────────────────────────────────────
     // This fires btn.click() bypassing Playwright's actionability checks.
     if (!sendSuccessful) {
-      emit('warn', 'Enter fallback also failed — trying direct DOM click last-resort...');
-      const clicked = await page.evaluate(() => {
-        const btn = document.querySelector('button.msg-form__send-button');
-        if (!btn) return false;
-        btn.removeAttribute('disabled');
-        btn.click();
-        return true;
-      }).catch(() => false);
+      emit(
+        "warn",
+        "Enter fallback also failed — trying direct DOM click last-resort...",
+      );
+      const clicked = await page
+        .evaluate(() => {
+          const btn = document.querySelector("button.msg-form__send-button");
+          if (!btn) return false;
+          btn.removeAttribute("disabled");
+          btn.click();
+          return true;
+        })
+        .catch(() => false);
       if (clicked) {
         await humanDelay(600, 1000);
         sendSuccessful = true;

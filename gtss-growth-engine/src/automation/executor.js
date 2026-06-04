@@ -103,10 +103,14 @@ function getQueuedActions(options = {}) {
   const includeBlocked = options.includeBlocked === true;
   const includeWaiting = options.includeWaiting === true;
   const platforms = Array.isArray(options.platforms)
-    ? options.platforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean)
+    ? options.platforms
+        .map((platform) => String(platform).trim().toLowerCase())
+        .filter(Boolean)
     : [];
   const platformClause =
-    platforms.length > 0 ? `AND m.platform IN (${platforms.map(() => "?").join(",")})` : "";
+    platforms.length > 0
+      ? `AND m.platform IN (${platforms.map(() => "?").join(",")})`
+      : "";
   return db
     .prepare(
       `
@@ -192,8 +196,7 @@ function getLinkedInOutreachMode() {
 
 function getXOutreachMode() {
   const configured =
-    process.env.X_OUTREACH_MODE ||
-    getSettingValue("x_outreach_mode");
+    process.env.X_OUTREACH_MODE || getSettingValue("x_outreach_mode");
 
   if (configured === "dm_only" || configured === "dm_first") return configured;
   return "follow_first";
@@ -255,7 +258,8 @@ async function runAutomationAction(action, browserState, emit) {
     const limits = require("../config/limits");
 
     const normalized = normalizeActionType(actionType);
-    const hasLimit = (limits.instagram && typeof limits.instagram[normalized] === "number");
+    const hasLimit =
+      limits.instagram && typeof limits.instagram[normalized] === "number";
     if (hasLimit && !isWithinLimit("instagram", actionType)) {
       emit("warn", `Instagram action ${actionType} limit reached. Skipping.`);
       return {
@@ -265,43 +269,53 @@ async function runAutomationAction(action, browserState, emit) {
     }
 
     // Extract username from profile_url
-    const username = action.profile_url ? action.profile_url.replace(/\/$/, '').split('/').pop() : '';
+    const username = action.profile_url
+      ? action.profile_url.replace(/\/$/, "").split("/").pop()
+      : "";
 
     switch (actionType) {
-      case 'instagram_dm': {
-        const result = await instagram.sendDM(page, { username, message: action.body }, emit);
+      case "instagram_dm": {
+        const result = await instagram.sendDM(
+          page,
+          { username, message: action.body },
+          emit,
+        );
         return {
           outcome: result.success ? "sent" : "failed",
           reason: result.error || null,
-          isMessageRequest: result.isMessageRequest
+          isMessageRequest: result.isMessageRequest,
         };
       }
-      case 'instagram_follow': {
+      case "instagram_follow": {
         const result = await instagram.followAccount(page, { username }, emit);
         return {
           outcome: result.success ? "sent" : "failed",
-          reason: result.error || null
+          reason: result.error || null,
         };
       }
-      case 'instagram_like': {
+      case "instagram_like": {
         const result = await instagram.likeRecentPost(page, { username }, emit);
         return {
           outcome: result.success ? "sent" : "failed",
-          reason: result.error || null
+          reason: result.error || null,
         };
       }
-      case 'instagram_story_view': {
+      case "instagram_story_view": {
         const result = await instagram.viewStory(page, { username }, emit);
         return {
           outcome: result.success ? "sent" : "failed",
-          reason: result.error || null
+          reason: result.error || null,
         };
       }
-      case 'instagram_warmup_advance': {
-        const result = await instagramWarmup.advanceWarmupStep(page, { leadId: action.lead_id }, emit);
+      case "instagram_warmup_advance": {
+        const result = await instagramWarmup.advanceWarmupStep(
+          page,
+          { leadId: action.lead_id },
+          emit,
+        );
         return {
           outcome: result.success ? "sent" : "failed",
-          reason: result.error || null
+          reason: result.error || null,
         };
       }
     }
@@ -318,18 +332,17 @@ async function runAutomationAction(action, browserState, emit) {
 
   const { page } = browserState;
 
-  if ((actionType === "connect" || actionType === "follow") && (automationModule.sendConnectionRequest || automationModule.followUser)) {
+  if (
+    (actionType === "connect" || actionType === "follow") &&
+    (automationModule.sendConnectionRequest || automationModule.followUser)
+  ) {
     if (automationModule.likeRecentPost) {
       emit("info", "Warming up: liking a recent post...");
       await automationModule.likeRecentPost(page, action.profile_url, emit);
       await humanDelay(3000, 6000);
     }
     if (actionType === "follow" && automationModule.followUser) {
-      return await automationModule.followUser(
-        page,
-        action.profile_url,
-        emit,
-      );
+      return await automationModule.followUser(page, action.profile_url, emit);
     }
     return await automationModule.sendConnectionRequest(
       page,
@@ -338,6 +351,15 @@ async function runAutomationAction(action, browserState, emit) {
       emit,
     );
   } else if (actionType === "dm" && automationModule.sendDirectMessage) {
+    // Bug #6 fix: bring the automation tab to front at the architecture level
+    // before handing the page to any platform module. This is belt-and-suspenders
+    // for platforms that may not call bringToFront internally — every DM action
+    // gets it for free, so no platform module can forget it.
+    const { page: dmPage } = browserState;
+    if (dmPage && typeof dmPage.bringToFront === "function") {
+      await dmPage.bringToFront().catch(() => {});
+      await new Promise((r) => setTimeout(r, 150));
+    }
     return await automationModule.sendDirectMessage(
       page,
       action.profile_url,
@@ -407,7 +429,10 @@ function recordOutcome(action, actionType, outcomeObj) {
 
     // For LinkedIn connect and X follow actions, queue the DM body as a new pending message
     // so it fires once the connection or follow is complete (on the next queue run)
-    if (normalizedActionType === "connections" || normalizedActionType === "follows") {
+    if (
+      normalizedActionType === "connections" ||
+      normalizedActionType === "follows"
+    ) {
       const originalMessage = db
         .prepare(`SELECT * FROM messages WHERE id = ?`)
         .get(action.message_id);
@@ -424,7 +449,8 @@ function recordOutcome(action, actionType, outcomeObj) {
 
         if (!existing) {
           // Add a 1-hour delay/snooze for X follows to prevent immediate bot-like direct messaging
-          const snoozeDelay = action.platform === "x" ? "datetime('now', '+1 hour')" : "NULL";
+          const snoozeDelay =
+            action.platform === "x" ? "datetime('now', '+1 hour')" : "NULL";
           db.prepare(
             `
             INSERT INTO messages (lead_id, platform, body, variant, is_follow_up, status, snooze_until, generated_at)
@@ -739,7 +765,9 @@ async function processActionQueue(jobId, sseRes, options = {}) {
 
   try {
     const platforms = Array.isArray(options.platforms)
-      ? options.platforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean)
+      ? options.platforms
+          .map((platform) => String(platform).trim().toLowerCase())
+          .filter(Boolean)
       : [];
     const runnableQueue = getQueuedActions({ platforms });
     const fullQueue = getQueuedActions({
@@ -850,8 +878,15 @@ async function processActionQueue(jobId, sseRes, options = {}) {
       const isConnection =
         actionType === "connect" || actionType === "connection";
 
-      if (isDm && typeof maxDmsPerRun === "number" && dmsSentThisRun >= maxDmsPerRun) {
-        emit("info", `Stopping DM actions: hit max_dms_per_run cap of ${maxDmsPerRun}.`);
+      if (
+        isDm &&
+        typeof maxDmsPerRun === "number" &&
+        dmsSentThisRun >= maxDmsPerRun
+      ) {
+        emit(
+          "info",
+          `Stopping DM actions: hit max_dms_per_run cap of ${maxDmsPerRun}.`,
+        );
         break;
       }
       if (
@@ -1068,8 +1103,7 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           if (actionType === "connect" || actionType === "connection") {
             connectionsSentThisRun++;
           }
-        }
-        else if (
+        } else if (
           [
             "skipped",
             "already_connected",
@@ -1146,8 +1180,7 @@ async function processActionQueue(jobId, sseRes, options = {}) {
       failures,
       skipped,
       queueLength: remainingQueue.length,
-      runnableCount: remainingQueue.filter((action) => action.runnable)
-        .length,
+      runnableCount: remainingQueue.filter((action) => action.runnable).length,
       waitingCount: remainingWaiting,
       blockedCount: remainingBlocked,
     };
