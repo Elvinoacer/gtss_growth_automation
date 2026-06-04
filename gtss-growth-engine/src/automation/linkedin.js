@@ -1073,13 +1073,107 @@ async function getEditorState(locator) {
 }
 
 /**
+ * Verifies that the editor is focused and selection (caret) is active and anchored
+ * inside it. If not, places focus and selection range on the editor's innermost <p>.
+ */
+async function ensureSelectionInEditor(locator) {
+  return locator.evaluate((editor) => {
+    const isFocused = document.activeElement === editor || editor.contains(document.activeElement);
+    const sel = window.getSelection();
+    const hasSelectionInEditor = sel && sel.rangeCount > 0 && editor.contains(sel.anchorNode);
+
+    if (isFocused && hasSelectionInEditor) {
+      return true;
+    }
+
+    editor.focus({ preventScroll: false });
+
+    const target = editor.querySelector('p') || editor;
+    const br = target.querySelector('br');
+    const range = document.createRange();
+    const selection = window.getSelection();
+
+    if (target.childNodes.length === 0) {
+      const textNode = document.createTextNode('');
+      target.appendChild(textNode);
+      range.setStart(textNode, 0);
+      range.setEnd(textNode, 0);
+    } else if (br && target.childNodes.length === 1) {
+      range.setStartBefore(br);
+      range.setEndBefore(br);
+    } else {
+      range.selectNodeContents(target);
+      range.collapse(false);
+    }
+
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    const postFocused = document.activeElement === editor || editor.contains(document.activeElement);
+    const postSel = window.getSelection();
+    const postHasSelection = postSel && postSel.rangeCount > 0 && editor.contains(postSel.anchorNode);
+    return postFocused && postHasSelection;
+  }).catch(() => false);
+}
+
+/**
+ * Returns a stable locator for the active editor inside the current conversation overlay.
+ * Scopes selectors inside a temporary tag to avoid targeting hidden/minimized dialogues.
+ */
+async function getActiveEditorLocator(page, editorMatch) {
+  const overlayTagged = await editorMatch.locator.evaluate((editor) => {
+    const overlay = editor.closest(
+      '.msg-overlay-conversation-bubble, .msg-convo-wrapper, [role="dialog"], .artdeco-modal--type-is-messaging, .msg-form'
+    );
+    if (overlay) {
+      overlay.setAttribute('data-gtss-active-overlay', 'true');
+      return true;
+    }
+    return false;
+  }).catch(() => false);
+
+  const scope = overlayTagged ? '[data-gtss-active-overlay="true"]' : '';
+
+  const selectors = [
+    '.msg-form__contenteditable[contenteditable="true"]',
+    '.msg-form [contenteditable="true"]:not([class*="subject"])',
+    '[contenteditable="true"][aria-label*="message" i]',
+    '[contenteditable="true"][aria-label*="Write" i]',
+    '[contenteditable="true"][data-placeholder*="message" i]',
+    '[contenteditable="true"][data-placeholder*="Write" i]',
+    '[contenteditable="true"][aria-placeholder*="message" i]',
+    '[contenteditable="true"]',
+    '[role="textbox"]',
+    'textarea',
+  ];
+
+  for (const sel of selectors) {
+    const fullSelector = scope ? `${scope} ${sel}` : sel;
+    const locator = page.locator(fullSelector).first();
+    const isVisible = await locator.isVisible({ timeout: 100 }).catch(() => false);
+    if (isVisible) {
+      const isSubject = await locator.evaluate((el) => {
+        const hint = [
+          el.getAttribute("aria-label") || "",
+          el.getAttribute("placeholder") || "",
+          el.getAttribute("data-placeholder") || "",
+          el.getAttribute("name") || "",
+          el.className || "",
+        ].join(" ").toLowerCase();
+        return /subject|recipient|\bto\b|people/.test(hint) && !/message|write|reply/.test(hint);
+      }).catch(() => false);
+      
+      if (!isSubject) {
+        return locator;
+      }
+    }
+  }
+
+  return editorMatch.locator;
+}
+
+/**
  * Low-level keyboard typing helper.
- *
- * Bug #3 fix: accepts the intended editor locator so it can verify that
- * document.activeElement still points to that element before each line chunk.
- * React event handlers (emoji picker, overlay close button, subject field)
- * can silently steal focus between chunks — without this guard, subsequent
- * page.keyboard.type() calls land on the wrong element.
  */
 async function typeMessageWithKeyboard(page, locator, text, charDelay = 0) {
   const value = String(text || "");
@@ -1087,22 +1181,16 @@ async function typeMessageWithKeyboard(page, locator, text, charDelay = 0) {
 
   for (let i = 0; i < parts.length; i++) {
     if (parts[i]) {
-      // Guard: verify the intended editor still owns focus before each chunk.
-      const hasFocus = await locator
-        .evaluate(
-          (el) =>
-            document.activeElement === el ||
-            el.contains(document.activeElement),
-        )
-        .catch(() => false);
-      if (!hasFocus) {
-        await locator.focus().catch(() => {});
-        await humanDelay(50, 80);
+      await ensureSelectionInEditor(locator);
+      if (charDelay > 0) {
+        await page.keyboard.type(parts[i], { delay: charDelay });
+      } else {
+        await page.keyboard.insertText(parts[i]);
       }
-      await page.keyboard.type(parts[i], { delay: charDelay });
     }
 
     if (i < parts.length - 1) {
+      await ensureSelectionInEditor(locator);
       await page.keyboard.press("Shift+Enter");
       if (process.env.TEST_SPEEDUP !== "true") {
         await humanDelay(20, 45);
@@ -1134,152 +1222,65 @@ async function typeMessageWithKeyboard(page, locator, text, charDelay = 0) {
 async function activateDmEditor(page, locator) {
   const MAX_FOCUS_ATTEMPTS = 3;
 
-  /**
-   * Place the text cursor (caret) inside the editor's inner <p> element.
-   *
-   * LinkedIn's contenteditable wraps all text inside <p> child nodes. When
-   * you focus() the outer contenteditable div, document.activeElement becomes
-   * that div — but there's no text cursor position inside the <p>. Keyboard
-   * events arrive at the div but LinkedIn's editor framework ignores them
-   * because Selection has no anchor/focus nodes inside the editable tree.
-   *
-   * This function creates a collapsed Range at the end of the first <p>
-   * (or the contenteditable itself if no <p> exists) and sets it as the
-   * active Selection. This makes keyboard input actually produce text.
-   */
-  const placeCaretInEditor = async (el) => {
-    return el.evaluate((editor) => {
-      editor.focus({ preventScroll: false });
-
-      // Find the innermost text-containing node to place the caret
-      let target = editor.querySelector('p') || editor;
-
-      // If the <p> has a <br> placeholder (empty editor), we need to place
-      // the caret before the <br> so typed text replaces the placeholder.
-      const br = target.querySelector('br');
-
-      const range = document.createRange();
-      const sel = window.getSelection();
-
-      if (target.childNodes.length === 0) {
-        // Completely empty — add a text node so the caret has somewhere to go
-        const textNode = document.createTextNode('');
-        target.appendChild(textNode);
-        range.setStart(textNode, 0);
-        range.setEnd(textNode, 0);
-      } else if (br && target.childNodes.length === 1) {
-        // Only a <br> placeholder — place caret before it
-        range.setStartBefore(br);
-        range.setEndBefore(br);
-      } else {
-        // Has existing content — place caret at the very end
-        range.selectNodeContents(target);
-        range.collapse(false); // collapse to end
-      }
-
-      sel.removeAllRanges();
-      sel.addRange(range);
-
-      return document.activeElement === editor || editor.contains(document.activeElement);
-    }).catch(() => false);
-  };
-
   for (let attempt = 1; attempt <= MAX_FOCUS_ATTEMPTS; attempt++) {
     await locator.scrollIntoViewIfNeeded().catch(() => {});
     await humanDelay(60, 120);
 
     // Step 1: Playwright native focus (CDP AccessibilityNode.focus).
-    // This bypasses pointer-event guards and focus-trap JS that may block
-    // regular click-based focus during LinkedIn's modal animation.
+    // Bypasses focus-trap JS and starts activation.
     await locator.focus().catch(() => {});
     await humanDelay(40, 80);
 
-    // Step 1b: Place caret inside the <p> element immediately after focus.
-    await placeCaretInEditor(locator);
-    await humanDelay(30, 60);
-
-    // Step 2: OS-level click via Playwright (establishes cursor position)
+    // Step 2: Native click to trigger React's focus/activation state.
+    // Must be done before placing selection, otherwise click will reset selection!
     await locator.click({ force: true }).catch(() => {});
     await humanDelay(60, 100);
 
-    // Step 3: Full React synthetic event sequence including pointer events.
-    // LinkedIn's DM editor registers onPointerDown before onMouseDown; firing
-    // only mousedown/click is not enough to trigger its internal focus handler.
-    const focusedAfterReact = await locator
-      .evaluate((el) => {
-        const opts = { bubbles: true, cancelable: true, view: window };
-        const pOpts = { ...opts, pointerId: 1, pointerType: "mouse" };
-        el.dispatchEvent(new PointerEvent("pointerover", pOpts));
-        el.dispatchEvent(
-          new PointerEvent("pointerenter", { ...pOpts, bubbles: false }),
-        );
-        el.dispatchEvent(new PointerEvent("pointerdown", pOpts));
-        el.dispatchEvent(new MouseEvent("mousedown", opts));
-        el.dispatchEvent(new FocusEvent("focus", { ...opts, bubbles: false }));
-        el.dispatchEvent(new FocusEvent("focusin", opts));
-        el.dispatchEvent(new PointerEvent("pointerup", pOpts));
-        el.dispatchEvent(new MouseEvent("mouseup", opts));
-        el.dispatchEvent(new MouseEvent("click", opts));
-        el.focus({ preventScroll: false });
+    // Step 3: React synthetic event sequence.
+    // Dispatches pointer and mouse events directly so React registers them.
+    await locator.evaluate((el) => {
+      const opts = { bubbles: true, cancelable: true, view: window };
+      const pOpts = { ...opts, pointerId: 1, pointerType: "mouse" };
+      el.dispatchEvent(new PointerEvent("pointerover", pOpts));
+      el.dispatchEvent(new PointerEvent("pointerenter", { ...pOpts, bubbles: false }));
+      el.dispatchEvent(new PointerEvent("pointerdown", pOpts));
+      el.dispatchEvent(new MouseEvent("mousedown", opts));
+      el.dispatchEvent(new FocusEvent("focus", { ...opts, bubbles: false }));
+      el.dispatchEvent(new FocusEvent("focusin", opts));
+      el.dispatchEvent(new PointerEvent("pointerup", pOpts));
+      el.dispatchEvent(new MouseEvent("mouseup", opts));
+      el.dispatchEvent(new MouseEvent("click", opts));
+    }).catch(() => {});
+    await humanDelay(60, 100);
 
-        // Place caret inside <p> after React event sequence
-        const target = el.querySelector('p') || el;
-        const range = document.createRange();
-        const sel = window.getSelection();
-        range.selectNodeContents(target);
-        range.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(range);
-
-        return (
-          document.activeElement === el || el.contains(document.activeElement)
-        );
-      })
-      .catch(() => false);
-
-    if (focusedAfterReact) {
+    // Step 4: Now place selection inside `<p>` text node and verify.
+    const selectionLanded = await ensureSelectionInEditor(locator);
+    if (selectionLanded) {
       await humanDelay(100, 200);
-      return; // Focus successfully landed — done.
+      return; // Success!
     }
 
-    // Step 4: Coordinate-based fallback.
-    // When the locator's data-gtss-* attribute was wiped by a React re-render,
-    // evaluate() throws (0 matching elements) and is caught above as false.
-    // page.mouse.click() with explicit coordinates still works because it hits
-    // whatever DOM node is visually at that position — including the fresh node.
+    // Step 5: Coordinate-based fallback click.
     const box = await locator.boundingBox().catch(() => null);
     if (box) {
       const cx = box.x + box.width / 2;
-      const cy = box.y + box.height * 0.4; // slightly above centre feels natural
+      const cy = box.y + box.height * 0.4;
       await page.mouse.move(
         cx + (Math.random() - 0.5) * 8,
         cy + (Math.random() - 0.5) * 4,
-      );
+      ).catch(() => {});
       await humanDelay(30, 60);
-      await page.mouse.click(cx, cy);
+      await page.mouse.click(cx, cy).catch(() => {});
       await humanDelay(60, 120);
 
-      // After coordinate click, place caret inside <p>
-      await placeCaretInEditor(locator);
-
-      const focusedAfterMouse = await locator
-        .evaluate(
-          (el) =>
-            document.activeElement === el ||
-            el.contains(document.activeElement),
-        )
-        .catch(() => false);
-
-      if (focusedAfterMouse) {
+      const selectionLandedMouse = await ensureSelectionInEditor(locator);
+      if (selectionLandedMouse) {
         await humanDelay(100, 180);
         return;
       }
     }
 
-    // Step 5: Re-discover a fresh stable editor.
-    // If the original locator is completely stale (zero matching elements,
-    // null bounding box) we re-query using LinkedIn's own stable class name
-    // and focus that fresh element before retrying.
+    // Step 6: Re-discover a fresh stable editor.
     const freshSelectors = [
       '.msg-form__contenteditable[contenteditable="true"]',
       '.msg-form [contenteditable="true"]',
@@ -1299,17 +1300,11 @@ async function activateDmEditor(page, locator) {
       if (freshVisible) {
         await freshEditor.focus().catch(() => {});
         await humanDelay(60, 100);
-        await placeCaretInEditor(freshEditor);
         await freshEditor.click({ force: true }).catch(() => {});
         await humanDelay(60, 100);
-        const freshFocused = await freshEditor
-          .evaluate(
-            (el) =>
-              document.activeElement === el ||
-              el.contains(document.activeElement),
-          )
-          .catch(() => false);
-        if (freshFocused) {
+        
+        const selectionLandedFresh = await ensureSelectionInEditor(freshEditor);
+        if (selectionLandedFresh) {
           await humanDelay(100, 180);
           return;
         }
@@ -1321,34 +1316,25 @@ async function activateDmEditor(page, locator) {
     }
   }
 
-  // Final fallback: click the overlay container to give it OS focus, then
-  // call el.focus() directly. This covers edge cases where all CDP and
-  // coordinate paths are blocked (e.g. overlapping modal shields).
+  // Final fallback
   await page
     .locator(".msg-form, .msg-overlay-conversation-bubble")
     .last()
     .click({ force: true })
     .catch(() => {});
   await humanDelay(80, 150);
-  await locator.evaluate((el) => el.focus()).catch(() => {});
+  await locator.focus().catch(() => {});
   await humanDelay(100, 150);
-  await placeCaretInEditor(locator);
-  await humanDelay(100, 200); // let React finish its focus handler
+  await ensureSelectionInEditor(locator);
+  await humanDelay(100, 200);
 
   // ─── Subject field guard ──────────────────────────────────────────────
-  // LinkedIn's "New message" compose modal (used for Free messages, InMail,
-  // and non-1st-degree connections) opens with focus trapped on the Subject
-  // input.  ONLY Tab forward when focus is SPECIFICALLY on a Subject or
-  // recipient <input>/<select> — NOT for buttons, divs, or other elements,
-  // because blind tabbing navigates through the overlay toolbar (GIF, attach,
-  // emoji, Send) and moves focus past the Send button.
   for (let tabGuard = 0; tabGuard < 3; tabGuard++) {
     const isOnSubjectInput = await page
       .evaluate(() => {
         const el = document.activeElement;
         if (!el || el === document.body) return false;
         const tag = el.tagName.toLowerCase();
-        // Only Tab past <input> or <select> elements that look like Subject/recipient
         if (tag !== "input" && tag !== "select") return false;
         const hint = [
           el.placeholder || "",
@@ -1363,10 +1349,11 @@ async function activateDmEditor(page, locator) {
       })
       .catch(() => false);
 
-    if (!isOnSubjectInput) break; // Focus is not on Subject — stop tabbing
+    if (!isOnSubjectInput) break;
 
     await page.keyboard.press("Tab");
     await humanDelay(120, 220);
+    await ensureSelectionInEditor(locator);
   }
 }
 
@@ -1385,86 +1372,50 @@ async function typeFast(page, locator, text) {
 
   await activateDmEditor(page, locator);
 
-  const wroteExactEditor = await locator
-    .evaluate((el, message) => {
-      const tagName = String(el.tagName || "").toLowerCase();
-      el.focus({ preventScroll: false });
-
-      if (tagName === "textarea" || tagName === "input") {
-        // Native input/textarea: value assignment + manual events is sufficient.
-        el.value = "";
-        el.dispatchEvent(new InputEvent("input", { bubbles: true, data: "" }));
-        el.value = message;
-        el.dispatchEvent(
-          new InputEvent("input", {
-            bubbles: true,
-            inputType: "insertText",
-            data: message,
-          }),
-        );
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-      } else {
-        // contenteditable (LinkedIn's React DM composer) — MUST use execCommand so
-        // React's synthetic event system receives a proper beforeinput + input event
-        // pair with inputType:"insertText".
-        //
-        // Bug #4 fix: execCommand fires on document.activeElement, not on `el`
-        // directly. Force focus onto `el` first and verify it landed — if another
-        // element stole focus (overlay close button, emoji picker, etc.) we return
-        // false so the outer code falls through to pressSequentially / keyboard.type.
-        if (typeof document.execCommand === "function") {
-          el.focus({ preventScroll: false });
-          if (
-            document.activeElement !== el &&
-            !el.contains(document.activeElement)
-          ) {
-            // Focus landed elsewhere — execCommand would write to wrong element.
-            return false;
-          }
-          document.execCommand("selectAll", false, undefined);
-          document.execCommand("insertText", false, message);
-          // execCommand fires beforeinput + input natively — no manual dispatch needed.
-        } else {
-          // Absolute fallback for environments without execCommand (very rare).
-          // This path will not reliably enable the Send button on React editors,
-          // but allows the outer typeLikeHuman fallback in sendDirectMessage to
-          // catch and recover.
-          el.textContent = "";
-          el.textContent = message;
-          const range = document.createRange();
-          range.selectNodeContents(el);
-          range.collapse(false);
-          const selection = window.getSelection();
-          selection.removeAllRanges();
-          selection.addRange(range);
-          el.dispatchEvent(
-            new InputEvent("input", {
-              bubbles: true,
-              inputType: "insertText",
-              data: message,
-            }),
-          );
-          el.dispatchEvent(new Event("change", { bubbles: true }));
-        }
-      }
-
-      return true;
-    }, value)
-    .catch(() => false);
-
-  if (!wroteExactEditor) {
-    await locator.fill(value).catch(async () => {
-      await activateDmEditor(page, locator);
-      await page.keyboard.insertText(value).catch(() => {});
-    });
+  // Clear existing text first
+  const currentText = (await getEditableText(locator)).trim();
+  if (currentText) {
+    await ensureSelectionInEditor(locator);
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+    await page.keyboard.press("Delete").catch(() => {});
+    await humanDelay(40, 80);
   }
 
+  // Type using native remote debugging insertText API
+  await ensureSelectionInEditor(locator);
+  await page.keyboard.insertText(value);
   await humanDelay(80, 140);
 
   const actual = (await getEditableText(locator)).trim();
   const normalizeWS = (s) => String(s).replace(/\s+/g, " ").trim();
-  if (!normalizeWS(actual).includes(normalizeWS(value))) return false;
+  if (!normalizeWS(actual).includes(normalizeWS(value))) {
+    // Fallback: programmatic document.execCommand in evaluate
+    await ensureSelectionInEditor(locator);
+    await locator.evaluate((el, msg) => {
+      if (typeof document.execCommand === "function") {
+        document.execCommand("selectAll", false, undefined);
+        document.execCommand("insertText", false, msg);
+      } else {
+        const tagName = String(el.tagName || "").toLowerCase();
+        if (tagName === "textarea" || tagName === "input") {
+          el.value = msg;
+        } else {
+          el.textContent = msg;
+        }
+      }
+      el.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertText",
+          data: msg,
+        }),
+      );
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value).catch(() => {});
+    await humanDelay(80, 140);
+  }
 
+  const finalActual = (await getEditableText(locator)).trim();
   const activeIsEditor = await locator
     .evaluate(
       (el) =>
@@ -1472,7 +1423,7 @@ async function typeFast(page, locator, text) {
     )
     .catch(() => false);
 
-  return activeIsEditor;
+  return normalizeWS(finalActual).includes(normalizeWS(value)) && activeIsEditor;
 }
 
 /**
@@ -1503,39 +1454,26 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
   // Step 1: Properly activate the editor (fixes the "open but can't type" bug)
   await activateDmEditor(page, locator);
 
-  // Step 1b: Verify focus actually landed on the editor before we start typing.
-  // If focus silently failed (landed on a different element or nowhere),
-  // Control+A and subsequent key presses would operate on the wrong element —
-  // e.g. wiping the recipient field or being swallowed by the page.
-  const focusLanded = await locator
-    .evaluate(
-      (el) =>
-        document.activeElement === el || el.contains(document.activeElement),
-    )
-    .catch(() => false);
+  // Step 1b: Verify selection actually landed on the editor before we start typing.
+  const selectionLanded = await ensureSelectionInEditor(locator);
 
-  if (!focusLanded) {
-    // Make one more direct attempt via the stable selector before giving up.
-    const stableFresh = page
-      .locator('.msg-form__contenteditable[contenteditable="true"]')
-      .last();
-    const freshVisible = await stableFresh
-      .isVisible({ timeout: 600 })
-      .catch(() => false);
-    if (freshVisible) {
+  if (!selectionLanded) {
+    // Make one more direct attempt using findBestDmEditor
+    const freshEditorMatch = await findBestDmEditor(page, 1000);
+    if (freshEditorMatch) {
+      const stableFresh = await getActiveEditorLocator(page, freshEditorMatch);
       await activateDmEditor(page, stableFresh);
-      // Re-point our local reference for the rest of the function.
       return typeLikeHuman(page, stableFresh, text);
     }
     throw new Error(
-      "LinkedIn DM editor focus verification failed — document.activeElement is not the message composer. " +
-        "The editor may have been obscured by a modal overlay or LinkedIn re-rendered the composer tree.",
+      "LinkedIn DM editor focus verification failed — document.activeElement is not the message composer or selection is invalid."
     );
   }
 
   // Step 2: Clear any pre-existing placeholder/text only if not empty
   const currentText = (await getEditableText(locator)).trim();
   if (currentText) {
+    await ensureSelectionInEditor(locator);
     await page.keyboard
       .press(process.platform === "darwin" ? "Meta+A" : "Control+A")
       .catch(() => {});
@@ -1545,11 +1483,9 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
 
   // Step 3: type through the real focused keyboard path. Newlines must be
   // Shift+Enter in LinkedIn; plain Enter can submit the composer.
-  // Bug #3 fix: pass locator so typeMessageWithKeyboard can re-assert focus
-  // before each line chunk (React can steal focus between chunks).
   const speedup = process.env.TEST_SPEEDUP === "true";
   const charDelay = speedup ? 0 : Number(process.env.TYPING_DELAY_MS || 3);
-  await locator.focus().catch(() => {});
+  // REMOVED: Redundant/destructive locator.focus() call here that clears selection range
   await typeMessageWithKeyboard(page, locator, text, charDelay);
   await humanDelay(60, 120); // brief settle before verification
 
@@ -1562,6 +1498,7 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
     await activateDmEditor(page, locator);
     const fallbackText = (await getEditableText(locator)).trim();
     if (fallbackText) {
+      await ensureSelectionInEditor(locator);
       await page.keyboard
         .press(process.platform === "darwin" ? "Meta+A" : "Control+A")
         .catch(() => {});
@@ -1571,23 +1508,16 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
 
     await locator.evaluate((el, value) => {
       el.focus({ preventScroll: false });
-      // Bug #4 fix: execCommand fires on document.activeElement, not on `el`.
-      // Verify focus actually landed on this editor — if it's on a different
-      // element (emoji picker, overlay button etc.) skip execCommand entirely
-      // so the text doesn't vanish into the wrong element silently.
       if (
         document.activeElement !== el &&
         !el.contains(document.activeElement)
       ) {
         return; // outer code will re-verify and throw if text didn't land
       }
-      // document.execCommand('insertText') fires the same DOM events as real
-      // keyboard typing, including React's synthetic InputEvent handler.
       if (typeof document.execCommand === "function") {
         document.execCommand("selectAll", false, undefined);
         document.execCommand("insertText", false, value);
       } else {
-        // Absolute last resort for browsers that dropped execCommand support
         const tagName = String(el.tagName || "").toLowerCase();
         if (tagName === "textarea" || tagName === "input") {
           el.value = value;
@@ -1600,31 +1530,25 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
           sel.removeAllRanges();
           sel.addRange(range);
         }
-        el.dispatchEvent(
-          new InputEvent("input", {
-            bubbles: true,
-            inputType: "insertText",
-            data: value,
-          }),
-        );
-        el.dispatchEvent(new Event("change", { bubbles: true }));
       }
+      el.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertText",
+          data: value,
+        }),
+      );
+      el.dispatchEvent(new Event("change", { bubbles: true }));
     }, text);
 
     actual = (await getEditableText(locator)).trim();
   }
 
   // Step 5: CDP Input.dispatchKeyEvent nuclear fallback.
-  // If ALL previous methods (keyboard.type, keyboard.pressSequentially,
-  // execCommand, insertText) failed to put text in the editor, use the
-  // Chrome DevTools Protocol to send raw key events directly. This bypasses
-  // Playwright's actionability checks, the browser's normal focus routing,
-  // and React's document.hasFocus() gate entirely.
   if (
     !normalizeEditableText(actual).includes(normalizeEditableText(expected))
   ) {
     try {
-      // Re-activate and re-place caret
       await activateDmEditor(page, locator);
       await humanDelay(80, 120);
 
@@ -1653,7 +1577,6 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
       // Type each character via CDP Input.dispatchKeyEvent
       for (const char of text) {
         if (char === "\n") {
-          // Shift+Enter for newline in LinkedIn
           await cdpSession.send("Input.dispatchKeyEvent", {
             type: "keyDown", key: "Enter", code: "Enter",
             modifiers: 8, // Shift
@@ -1665,12 +1588,8 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
             windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
           });
         } else {
-          // Use insertText for regular characters — this is the most reliable
-          // CDP method because it generates a proper InputEvent with the text
-          // regardless of the key code, and works for all Unicode characters.
           await cdpSession.send("Input.insertText", { text: char });
         }
-        // Tiny delay between characters to let React process each event
         if (!speedup) {
           await new Promise(r => setTimeout(r, Math.random() * 4 + 1));
         }
@@ -1681,7 +1600,6 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
 
       actual = (await getEditableText(locator)).trim();
     } catch (cdpErr) {
-      // CDP not available — this was the last resort
       logger.warn("LINKEDIN", "CDP Input.dispatchKeyEvent fallback failed", {
         error: cdpErr.message,
       });
@@ -2272,62 +2190,15 @@ async function sendDirectMessage(
       return { outcome: "failed", reason: "DM editor not found" };
     }
 
-    // Prefer a stable CSS-class locator over the token-based locator —
-    // it survives React re-renders between discovery and interaction.
-    // Try multiple selectors to cover both the standard DM overlay and
-    // the "New message" compose modal (which may lack .msg-form__contenteditable).
-    const stableCandidates = [
-      '.msg-form__contenteditable[contenteditable="true"]',
-      '.msg-form [contenteditable="true"]:not([class*="subject"])',
-      '[role="dialog"] [contenteditable="true"][aria-label*="message" i]',
-      '[role="dialog"] [contenteditable="true"][aria-label*="Write" i]',
-      '[role="dialog"] [contenteditable="true"][data-placeholder*="message" i]',
-      '[role="dialog"] [contenteditable="true"][data-placeholder*="Write" i]',
-      '[role="dialog"] [contenteditable="true"][aria-placeholder*="message" i]',
-      '.msg-overlay-conversation-bubble [contenteditable="true"]',
-      '.msg-form [role="textbox"]',
-      // Broad fallback: any contenteditable inside a dialog (but not subject/recipient)
-      '[role="dialog"] [contenteditable="true"]',
-    ];
+    // Resolve stable active editor locator scoped inside the active overlay wrapper
     let activeEditorLocator = editorMatch.locator;
-    for (const sel of stableCandidates) {
-      const candidate = page.locator(sel).last();
-      const vis = await candidate
-        .isVisible({ timeout: 200 })
-        .catch(() => false);
-      if (vis) {
-        // Verify this is the message body, not a subject/recipient field
-        const isReject = await candidate
-          .evaluate((el) => {
-            const hint = [
-              el.getAttribute("aria-label") || "",
-              el.getAttribute("placeholder") || "",
-              el.getAttribute("data-placeholder") || "",
-              el.getAttribute("name") || "",
-              el.className || "",
-            ]
-              .join(" ")
-              .toLowerCase();
-            return (
-              /subject|recipient|\bto\b|people/.test(hint) &&
-              !/message|write|reply/.test(hint)
-            );
-          })
-          .catch(() => false);
-        if (!isReject) {
-          activeEditorLocator = candidate;
-          break;
-        }
-      }
+    try {
+      activeEditorLocator = await getActiveEditorLocator(page, editorMatch);
+    } catch (err) {
+      emit("warn", `Failed to get stable active editor locator: ${err.message}`);
     }
 
     // ── 6. Type message ─────────────────────────────────────────────────────
-    // Bug #1 fix (second call): re-assert tab is in front immediately before
-    // typing. React checks document.hasFocus() on every synthetic input event —
-    // even a brief OS focus switch between step 5 and step 6 drops all keys.
-    // Bug #2 fix: removed the redundant activateDmEditor calls that were here
-    // (steps 5b/5c). typeLikeHuman → activateDmEditor owns focus acquisition
-    // entirely, including Subject-field Tab guard and re-discovery.
     await bringLinkedInPageToFront(page);
     emit("info", "Typing message (visible fast typing)...");
 
@@ -2475,6 +2346,12 @@ async function sendDirectMessage(
     logger.error("LinkedIn DM Failed", { profileUrl, error: err.message });
     emit("error", `DM failed: ${err.message}`);
     return { outcome: "failed", reason: err.message };
+  } finally {
+    await page.evaluate(() => {
+      document.querySelectorAll('[data-gtss-active-overlay]').forEach((el) => {
+        el.removeAttribute('data-gtss-active-overlay');
+      });
+    }).catch(() => {});
   }
 }
 
