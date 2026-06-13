@@ -2001,53 +2001,10 @@ async function findSendButtonForEditor(page, editor, emit) {
   const log = emit || (() => {});
 
   try {
-    // Strategy 1: Try LinkedIn's stable class selectors first (most reliable)
-    const stableSelectors = [
-      "button.msg-form__send-button",
-      '.msg-form__send-btn-container button[type="submit"]',
-      '.msg-form button[type="submit"]',
-    ];
-
-    for (const selector of stableSelectors) {
-      try {
-        const locator = page.locator(selector).first();
-        if (await locator.isVisible({ timeout: 500 }).catch(() => false)) {
-          const disabled = await isLocatorDisabled(locator);
-          log(
-            `info`,
-            `findSendButtonForEditor: Found stable selector ${selector}, disabled=${disabled}`,
-          );
-          return { locator, disabled };
-        }
-      } catch (err) {
-        // Continue to next selector
-      }
-    }
-
-    // Strategy 2: Try aria-label based selectors
-    const ariaSelectors = [
-      'button[aria-label="Send"]',
-      'button[aria-label="Send message"]',
-      'button[aria-label*="Send" i]',
-    ];
-
-    for (const selector of ariaSelectors) {
-      try {
-        const locator = page.locator(selector).first();
-        if (await locator.isVisible({ timeout: 500 }).catch(() => false)) {
-          const disabled = await isLocatorDisabled(locator);
-          log(
-            `info`,
-            `findSendButtonForEditor: Found aria selector ${selector}, disabled=${disabled}`,
-          );
-          return { locator, disabled };
-        }
-      } catch (err) {
-        // Continue to next selector
-      }
-    }
-
-    // Strategy 3: Search within editor's container (fallback)
+    // Strategy 1: Search inside the same composer/overlay as the editor.
+    // LinkedIn can leave older/minimized conversation bubbles in the DOM. A
+    // global `.first()` often finds a stale disabled Send button from another
+    // bubble, so scoped lookup must come before any page-wide fallback.
     const selector = await editor
       .evaluate((el) => {
         const isDisabled = (btn) => {
@@ -2104,7 +2061,9 @@ async function findSendButtonForEditor(page, editor, emit) {
         if (!container)
           return { selector: null, debug: "No container found from editor" };
 
-        const allButtons = [...container.querySelectorAll("button")];
+        const allButtons = [
+          ...container.querySelectorAll('button, [role="button"]'),
+        ];
         const visible = allButtons.filter(visibleButton);
 
         // Prefer non-disabled send-like buttons
@@ -2162,6 +2121,59 @@ async function findSendButtonForEditor(page, editor, emit) {
       return { locator, disabled };
     }
 
+    // Strategy 2: Try LinkedIn's stable class selectors, but prefer the last
+    // visible match because the active/open composer is usually appended after
+    // minimized bubbles. This is only a fallback after scoped lookup.
+    const stableSelectors = [
+      "button.msg-form__send-button",
+      '.msg-form__send-btn-container button[type="submit"]',
+      '.msg-form button[type="submit"]',
+    ];
+
+    for (const selectorText of stableSelectors) {
+      const candidates = page.locator(selectorText);
+      const count = await candidates.count().catch(() => 0);
+      for (let i = count - 1; i >= 0; i--) {
+        const locator = candidates.nth(i);
+        if (await locator.isVisible({ timeout: 150 }).catch(() => false)) {
+          const disabled = await isLocatorDisabled(locator);
+          log(
+            `info`,
+            `findSendButtonForEditor: Found stable selector ${selectorText}, disabled=${disabled}`,
+          );
+          return { locator, disabled };
+        }
+      }
+    }
+
+    // Strategy 3: aria/text/role fallbacks for icon-only or label-only buttons.
+    const ariaSelectors = [
+      'button[aria-label="Send"]',
+      '[role="button"][aria-label="Send"]',
+      'button[aria-label="Send message"]',
+      '[role="button"][aria-label="Send message"]',
+      'button[aria-label*="Send" i]',
+      '[role="button"][aria-label*="Send" i]',
+      'button:has-text("Send")',
+      '[role="button"]:has-text("Send")',
+    ];
+
+    for (const selectorText of ariaSelectors) {
+      const candidates = page.locator(selectorText);
+      const count = await candidates.count().catch(() => 0);
+      for (let i = count - 1; i >= 0; i--) {
+        const locator = candidates.nth(i);
+        if (await locator.isVisible({ timeout: 150 }).catch(() => false)) {
+          const disabled = await isLocatorDisabled(locator);
+          log(
+            `info`,
+            `findSendButtonForEditor: Found aria/text selector ${selectorText}, disabled=${disabled}`,
+          );
+          return { locator, disabled };
+        }
+      }
+    }
+
     log(
       "warn",
       "findSendButtonForEditor: No send button found with any strategy",
@@ -2174,6 +2186,66 @@ async function findSendButtonForEditor(page, editor, emit) {
     );
     return null;
   }
+}
+
+async function clickSendButtonRobust(page, sendButton, editorLocator) {
+  if (!sendButton) return false;
+
+  const clickAttempts = [
+    async () => {
+      await sendButton.scrollIntoViewIfNeeded().catch(() => {});
+      await sendButton.hover().catch(() => {});
+      await sendButton.click({ force: true, timeout: 1500 });
+      return true;
+    },
+    async () =>
+      sendButton.evaluate((btn) => {
+        btn.click();
+        return true;
+      }),
+    async () =>
+      sendButton.evaluate((btn) => {
+        const opts = { bubbles: true, cancelable: true, view: window };
+        for (const eventName of [
+          "pointerover",
+          "pointerdown",
+          "mousedown",
+          "pointerup",
+          "mouseup",
+          "click",
+        ]) {
+          const EventCtor = eventName.startsWith("pointer")
+            ? PointerEvent
+            : MouseEvent;
+          btn.dispatchEvent(new EventCtor(eventName, opts));
+        }
+        return true;
+      }),
+  ];
+
+  for (const attempt of clickAttempts) {
+    if (await attempt().catch(() => false)) return true;
+  }
+
+  // Final fallback for LinkedIn/React forms where the button is present but the
+  // click handler is attached to the form submit path.
+  if (editorLocator) {
+    return editorLocator
+      .evaluate((editor) => {
+        const form = editor.closest("form");
+        if (!form) return false;
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else {
+          form.dispatchEvent(
+            new SubmitEvent("submit", { bubbles: true, cancelable: true }),
+          );
+        }
+        return true;
+      })
+      .catch(() => false);
+  }
+
+  return false;
 }
 
 async function isLocatorDisabled(locator) {
@@ -2491,19 +2563,19 @@ async function sendDirectMessage(
         await enabledSendBtn.hover().catch(() => {});
         await humanDelay(80, 150);
 
-        // Try multiple click strategies for robustness
-        const clicked = await enabledSendBtn
-          .click({ force: true })
-          .then(() => true)
-          .catch(() => false);
-
-        if (!clicked) {
-          await enabledSendBtn.evaluate((el) => el.click()).catch(() => {});
-        }
+        const clicked = await clickSendButtonRobust(
+          page,
+          enabledSendBtn,
+          activeEditorLocator,
+        );
 
         await humanDelay(800, 1200);
-        sendSuccessful = true; // optimistic — verification below confirms
-        logger.info("LinkedIn DM: Send button clicked successfully");
+        sendSuccessful = clicked; // optimistic — verification below confirms
+        if (clicked) {
+          logger.info("LinkedIn DM: Send button clicked successfully");
+        } else {
+          logger.warn("LinkedIn DM: Send button click strategies all failed");
+        }
       } catch (err) {
         logger.warn(`LinkedIn DM: Send button click failed: ${err.message}`);
         sendSuccessful = false;
@@ -2727,6 +2799,7 @@ module.exports = {
     setEditorTextWithDomEvents,
     waitForEditorText,
     findSendButtonForEditor,
+    clickSendButtonRobust,
     waitForEditorInteractive,
     waitForDmEditor,
     detectMessagingBlocked,
