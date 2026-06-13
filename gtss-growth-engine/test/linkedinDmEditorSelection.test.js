@@ -529,6 +529,94 @@ test(
   },
 );
 
+test(
+  "findSendButtonForEditor scopes Send lookup to the active composer",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({
+      viewport: { width: 1366, height: 768 },
+    });
+
+    try {
+      await page.setContent(`
+        <section class="msg-overlay-conversation-bubble" role="dialog" style="display:block;width:500px;height:260px;">
+          <form class="msg-form">
+            <div class="msg-form__contenteditable" contenteditable="true" aria-label="Old message" style="display:block;width:440px;height:80px;"></div>
+            <button class="msg-form__send-button artdeco-button--disabled" aria-label="Send" aria-disabled="true" type="submit">Send</button>
+          </form>
+        </section>
+        <section class="msg-overlay-conversation-bubble" role="dialog" style="display:block;width:500px;height:260px;">
+          <form class="msg-form">
+            <div id="active-editor" class="msg-form__contenteditable" contenteditable="true" aria-label="Write a message" style="display:block;width:440px;height:80px;"></div>
+            <button id="active-send" class="msg-form__send-button" aria-label="Send message" aria-disabled="false" type="submit">Send</button>
+          </form>
+        </section>
+      `);
+
+      const editor = page.locator("#active-editor");
+      const send = await __private.findSendButtonForEditor(page, editor);
+
+      assert.ok(send, "active composer send button should be found");
+      assert.equal(send.disabled, false);
+      assert.equal(
+        await send.locator.getAttribute("id"),
+        "active-send",
+        "must not return stale disabled send button from another composer",
+      );
+    } finally {
+      await browser.close();
+    }
+  },
+);
+
+test(
+  "clickSendButtonRobust clicks icon-only LinkedIn Send controls",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({
+      viewport: { width: 1366, height: 768 },
+    });
+
+    try {
+      await page.setContent(`
+        <section class="msg-overlay-conversation-bubble" role="dialog" style="display:block;width:500px;height:260px;">
+          <form class="msg-form" onsubmit="event.preventDefault(); window.__gtssSubmitted = true;">
+            <div id="active-editor" class="msg-form__contenteditable" contenteditable="true" aria-label="Write a message" style="display:block;width:440px;height:80px;">Hello</div>
+            <button id="icon-send" aria-label="Send" type="submit" style="display:block;width:40px;height:32px;">
+              <svg aria-hidden="true"></svg>
+            </button>
+          </form>
+        </section>
+        <script>
+          window.__gtssClicked = false;
+          document.querySelector("#icon-send").addEventListener("click", () => {
+            window.__gtssClicked = true;
+          });
+        </script>
+      `);
+
+      const editor = page.locator("#active-editor");
+      const send = await __private.findSendButtonForEditor(page, editor);
+      assert.ok(send, "icon-only send button should be found by aria-label");
+      assert.equal(await send.locator.getAttribute("id"), "icon-send");
+
+      const clicked = await __private.clickSendButtonRobust(
+        page,
+        send.locator,
+        editor,
+      );
+
+      assert.equal(clicked, true);
+      assert.equal(await page.evaluate(() => window.__gtssClicked), true);
+      assert.equal(await page.evaluate(() => window.__gtssSubmitted), true);
+    } finally {
+      await browser.close();
+    }
+  },
+);
+
 // ─── test 11: background-tab document.hasFocus() regression ─────────────────
 //
 // Reproduces the production CDP multi-tab environment that caused all 6 bugs.
