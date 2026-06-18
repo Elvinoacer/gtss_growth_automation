@@ -1018,6 +1018,20 @@ async function processDmQueue(page, options = {}) {
               `Retryable DM failure: ${res.error}. Scheduled retry at: ${backoffTime}`,
             );
             report.failed++;
+
+            // CRITICAL: Force execution tab state disposal so following leads do not
+            // inherit a corrupt DOM view (e.g. a half-open DM overlay from this failed run).
+            if (page && typeof page.reload === "function") {
+              queueLog(
+                "info",
+                "dm_queue",
+                job.id,
+                "Reloading page to purge stale overlay state after failed DM.",
+              );
+              await page
+                .reload({ waitUntil: "domcontentloaded" })
+                .catch(() => {});
+            }
           }
         }
       } catch (err) {

@@ -1,5 +1,6 @@
 const { humanDelay, humanScroll } = require("./browserBase");
 const logger = require("../utils/logger");
+const diag = require("./linkedinDiagnostics");
 
 /**
  * Bring the LinkedIn tab to the OS foreground before any keyboard interaction.
@@ -862,6 +863,98 @@ async function closeOverlay(page, overlayMatch) {
   }
 }
 
+/**
+ * Dismiss ALL open messaging UI — overlays, chat windows, full-page messaging.
+ *
+ * LinkedIn's new UI uses obfuscated class names, so we use broad strategies:
+ * 1. Press Escape repeatedly to dismiss modals/overlays
+ * 2. Click close buttons using broad attribute-based selectors
+ * 3. Clean up any stale data-gtss-* attributes from previous runs
+ *
+ * Called before navigation to a new profile and in the finally block.
+ */
+async function dismissAllMessagingUI(page) {
+  try {
+    // Strategy 1: Press Escape up to 3 times to dismiss modals/overlays
+    for (let i = 0; i < 3; i++) {
+      const hasVisibleOverlay = await page
+        .evaluate(() => {
+          // Check for any visible messaging-like overlay
+          const candidates = document.querySelectorAll(
+            '.msg-overlay-conversation-bubble, .msg-convo-wrapper, .msg-form,' +
+            ' [role="dialog"], .artdeco-modal, [data-gtss-active-overlay],' +
+            ' [class*="msg-overlay"], [class*="messaging"]'
+          );
+          for (const el of candidates) {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            if (
+              rect.width > 100 &&
+              rect.height > 100 &&
+              style.display !== "none" &&
+              style.visibility !== "hidden"
+            ) {
+              return true;
+            }
+          }
+          return false;
+        })
+        .catch(() => false);
+
+      if (!hasVisibleOverlay) break;
+
+      await page.keyboard.press("Escape").catch(() => {});
+      await humanDelay(150, 250);
+    }
+
+    // Strategy 2: Click close buttons using broad selectors
+    const closeSelectors = [
+      // LinkedIn's old class names
+      '.msg-overlay-bubble-header__control--close',
+      '.msg-overlay-conversation-bubble__close-btn',
+      '[data-control-name="close_chat"]',
+      // Broad attribute-based selectors for new UI
+      'button[aria-label="Close"]',
+      'button[aria-label="Dismiss"]',
+      'button[aria-label="Close your conversation"]',
+      'button[aria-label*="close" i]',
+      'button[aria-label*="dismiss" i]',
+    ];
+
+    for (const sel of closeSelectors) {
+      const buttons = page.locator(sel);
+      const count = await buttons.count().catch(() => 0);
+      for (let i = 0; i < Math.min(count, 3); i++) {
+        const btn = buttons.nth(i);
+        if (await btn.isVisible({ timeout: 100 }).catch(() => false)) {
+          await btn.click({ force: true }).catch(() => {});
+          await humanDelay(100, 200);
+        }
+      }
+    }
+
+    // Strategy 3: Clean up stale data-gtss attributes
+    await page
+      .evaluate(() => {
+        const attrs = [
+          "data-gtss-active-overlay",
+          "data-gtss-dm-editor",
+          "data-gtss-dm-overlay",
+          "data-gtss-container",
+          "data-gtss-send",
+        ];
+        for (const attr of attrs) {
+          document.querySelectorAll(`[${attr}]`).forEach((el) => {
+            el.removeAttribute(attr);
+          });
+        }
+      })
+      .catch(() => {});
+  } catch (err) {
+    logger.warn(`dismissAllMessagingUI failed: ${err.message}`);
+  }
+}
+
 async function detectPremiumRequired(page) {
   // 800 ms is enough — the dialog is already rendered by the time we check.
   // Skip innerText() and closeOverlay() — we are navigating away immediately,
@@ -1279,12 +1372,11 @@ async function ensureSelectionInEditor(locator) {
         // Find the best target for selection
         let target = editor.querySelector("p, div, span") || editor;
 
-        // If target is empty, add a text node
-        if (target.childNodes.length === 0) {
-          const textNode = document.createTextNode("\u200B"); // Zero-width space
-          target.appendChild(textNode);
-          target = textNode;
-        } else {
+        // If target has children, find the last text node for cursor placement.
+        // When empty, leave target as the element node — selectNodeContents()
+        // handles it correctly. Do NOT insert zero-width spaces — they corrupt
+        // React's internal empty/non-empty state tracking.
+        if (target.childNodes.length > 0) {
           // Find the last text node for cursor placement
           const textNodes = [];
           const walker = document.createTreeWalker(
@@ -1448,14 +1540,15 @@ async function typeMessageWithKeyboard(page, locator, text, charDelay = 0) {
 /**
  * Activate LinkedIn's DM composer so it truly has keyboard focus.
  *
- * Simplified and robustified version that:
- * 1. Uses a direct, reliable focus sequence
- * 2. Has better error recovery
- * 3. Includes verification at each step
- * 4. Falls back to alternative strategies when needed
+ * Simplified version that avoids flooding React with synthetic events.
+ * Uses Playwright's own click() which dispatches trusted events through
+ * the browser's event system — React handles these correctly.
+ *
+ * Previous version dispatched 12 synthetic pointer/mouse/focus events
+ * that confused React, causing caret jumps and editor re-renders.
  */
 async function activateDmEditor(page, locator) {
-  const MAX_FOCUS_ATTEMPTS = 5;
+  const MAX_FOCUS_ATTEMPTS = 3;
 
   for (let attempt = 1; attempt <= MAX_FOCUS_ATTEMPTS; attempt++) {
     try {
@@ -1475,70 +1568,34 @@ async function activateDmEditor(page, locator) {
         continue;
       }
 
-      // Step 3: Force focus using multiple methods for reliability
-      await locator.focus().catch(() => {});
-      await humanDelay(30, 60);
-
-      // Step 4: Click to ensure React registers the interaction
+      // Step 3: Single click to activate — Playwright's click() dispatches
+      // trusted pointer/mouse/focus events through the browser's event system,
+      // which React handles correctly. No synthetic event dispatch needed.
       await locator.click({ force: true }).catch(() => {});
-      await humanDelay(50, 80);
+      await humanDelay(80, 150);
 
-      // Step 5: Dispatch comprehensive event sequence for React
-      await locator
-        .evaluate((el) => {
-          const opts = { bubbles: true, cancelable: true, view: window };
-          const pOpts = { ...opts, pointerId: 1, pointerType: "mouse" };
-
-          // Pointer events (LinkedIn uses onPointerDown)
-          el.dispatchEvent(new PointerEvent("pointerover", pOpts));
-          el.dispatchEvent(
-            new PointerEvent("pointerenter", { ...pOpts, bubbles: false }),
-          );
-          el.dispatchEvent(new PointerEvent("pointerdown", pOpts));
-          el.dispatchEvent(new PointerEvent("pointerup", pOpts));
-
-          // Mouse events
-          el.dispatchEvent(new MouseEvent("mousedown", opts));
-          el.dispatchEvent(new MouseEvent("mouseup", opts));
-          el.dispatchEvent(new MouseEvent("click", opts));
-
-          // Focus events
-          el.dispatchEvent(
-            new FocusEvent("focus", { ...opts, bubbles: false }),
-          );
-          el.dispatchEvent(new FocusEvent("focusin", opts));
-        })
-        .catch(() => {});
-      await humanDelay(50, 80);
-
-      // Step 6: Verify selection landed
+      // Step 4: Verify selection landed
       const selectionLanded = await ensureSelectionInEditor(locator);
       if (selectionLanded) {
-        await humanDelay(80, 150);
         return true;
       }
 
-      // Step 7: Try coordinate-based click if selection failed
+      // Step 5: Coordinate-based click fallback (for overlapping elements)
       const box = await locator.boundingBox().catch(() => null);
       if (box) {
         const cx = box.x + box.width / 2;
         const cy = box.y + box.height * 0.4;
 
-        await page.mouse.move(cx, cy).catch(() => {});
-        await humanDelay(20, 40);
         await page.mouse.click(cx, cy).catch(() => {});
-        await humanDelay(50, 80);
+        await humanDelay(80, 150);
 
-        const selectionLandedMouse = await ensureSelectionInEditor(locator);
-        if (selectionLandedMouse) {
-          await humanDelay(80, 150);
+        if (await ensureSelectionInEditor(locator)) {
           return true;
         }
       }
 
-      // Step 8: If still failed, try to rediscover editor
       if (attempt < MAX_FOCUS_ATTEMPTS) {
-        await humanDelay(150 * attempt, 250 * attempt);
+        await humanDelay(200 * attempt, 350 * attempt);
       }
     } catch (err) {
       logger.warn(
@@ -1561,10 +1618,8 @@ async function activateDmEditor(page, locator) {
       const fallbackEditor = page.locator(selector).first();
       if (await fallbackEditor.isVisible({ timeout: 300 }).catch(() => false)) {
         await fallbackEditor.click({ force: true }).catch(() => {});
-        await humanDelay(50, 100);
-        const selectionLanded = await ensureSelectionInEditor(fallbackEditor);
-        if (selectionLanded) {
-          await humanDelay(80, 150);
+        await humanDelay(80, 150);
+        if (await ensureSelectionInEditor(fallbackEditor)) {
           return true;
         }
       }
@@ -1575,40 +1630,6 @@ async function activateDmEditor(page, locator) {
     );
   }
 
-  // Subject field guard - ensure we're not stuck on subject input
-  try {
-    for (let tabGuard = 0; tabGuard < 3; tabGuard++) {
-      const isOnSubjectInput = await page
-        .evaluate(() => {
-          const el = document.activeElement;
-          if (!el || el === document.body) return false;
-          const tag = el.tagName.toLowerCase();
-          if (tag !== "input" && tag !== "select") return false;
-          const hint = [
-            el.placeholder || "",
-            el.getAttribute("aria-label") || "",
-            el.name || "",
-            el.id || "",
-            el.className || "",
-          ]
-            .join(" ")
-            .toLowerCase();
-          return /subject|recipient|\bto\b|people/.test(hint);
-        })
-        .catch(() => false);
-
-      if (!isOnSubjectInput) break;
-
-      await page.keyboard.press("Tab").catch(() => {});
-      await humanDelay(100, 150);
-    }
-  } catch (err) {
-    logger.warn(
-      `LinkedIn DM editor subject field guard failed: ${err.message}`,
-    );
-  }
-
-  // Final verification
   return await ensureSelectionInEditor(locator);
 }
 
@@ -1668,53 +1689,84 @@ async function typeFast(page, locator, text) {
 }
 
 /**
- * Human-like message entry for LinkedIn's DM composer.
+ * Reliable message entry for LinkedIn's DM composer.
  *
- * Improved version with simpler, more robust typing strategy:
- * 1. Ensures proper focus and selection
- * 2. Uses reliable keyboard input with fallbacks
- * 3. Better verification and error recovery
- * 4. Simplified logic for better maintainability
+ * Uses atomic text injection strategies that work with React's contenteditable:
+ *   1. Primary: page.keyboard.insertText() — single CDP command, atomic
+ *   2. Fallback: pasteTextViaClipboard() — synthetic paste with proper events
+ *   3. Fallback: setEditorTextWithDomEvents() — direct DOM + React events
+ *
+ * Previous version used pressSequentially() which fired rapid key-by-key
+ * events, causing React to unmount/remount the editor mid-sequence and
+ * silently drop characters. The broken fallback accessed locator._selector
+ * (a private Playwright internal) which isn't a valid CSS selector.
  */
 async function typeLikeHuman(page, locatorOrSelector, text) {
   const locator =
     typeof locatorOrSelector === "string"
-      ? page.locator(locatorOrSelector).first()
+      ? page.locator(locatorOrSelector)
       : locatorOrSelector;
-  const expected = String(text || "").trim();
+
+  const value = String(text || "").trim();
+  if (!value) return false;
+
+  const normalizeWS = (s) => String(s).replace(/\s+/g, " ").trim();
 
   try {
-    // 1. Native click to establish true OS-level focus and trigger React's focus listeners
-    await locator.click({ timeout: 3000 });
-    await page.waitForTimeout(300);
+    // Step 1: Activate the editor
+    await activateDmEditor(page, locator);
+    await humanDelay(200, 350);
 
-    // 2. Clear existing text natively using keyboard shortcuts
-    const isMac = process.platform === "darwin";
-    await page.keyboard.press(isMac ? "Meta+A" : "Control+A");
-    await page.keyboard.press("Backspace");
-    await page.waitForTimeout(200);
-
-    // 3. Type using Playwright's native sequential typing.
-    // This flawlessly triggers React's internal state updates.
-    const charDelay =
-      process.env.TEST_SPEEDUP === "true"
-        ? 0
-        : Number(process.env.TYPING_DELAY_MS || 15);
-
-    if (locator.pressSequentially) {
-      await locator.pressSequentially(expected, { delay: charDelay });
-    } else {
-      // Fallback for older Playwright versions
-      await locator.type(expected, { delay: charDelay });
+    // Step 2: Clear existing text
+    const currentText = (await getEditableText(locator)).trim();
+    if (currentText) {
+      await ensureSelectionInEditor(locator);
+      const modifier = process.platform === "darwin" ? "Meta" : "Control";
+      await page.keyboard.press(`${modifier}+A`).catch(() => {});
+      await page.keyboard.press("Delete").catch(() => {});
+      await humanDelay(80, 150);
     }
 
-    // 4. Force a trailing space and backspace to guarantee React registers the final character
-    await page.waitForTimeout(200);
-    await page.keyboard.press("Space");
-    await page.keyboard.press("Backspace");
+    // Step 3: Primary — atomic insertText via CDP
+    await ensureSelectionInEditor(locator);
+    await page.keyboard.insertText(value);
+    await humanDelay(150, 250);
 
-    return true;
+    let actual = normalizeWS(await getEditableText(locator));
+    if (actual.includes(normalizeWS(value))) {
+      return true;
+    }
+
+    // Step 4: Fallback — clipboard paste with proper React event chain
+    logger.info("LinkedIn typeLikeHuman: insertText didn't stick, trying paste fallback");
+    const pasteOk = await pasteTextViaClipboard(page, locator, value);
+    if (pasteOk) {
+      actual = normalizeWS(await getEditableText(locator));
+      if (actual.includes(normalizeWS(value))) {
+        return true;
+      }
+    }
+
+    // Step 5: Fallback — direct DOM mutation with React events
+    logger.info("LinkedIn typeLikeHuman: paste didn't stick, trying DOM events fallback");
+    const domOk = await setEditorTextWithDomEvents(locator, value);
+    if (domOk) {
+      return true;
+    }
+
+    // Step 6: Final check — maybe one of the methods worked but verification was flaky
+    await humanDelay(200, 350);
+    actual = normalizeWS(await getEditableText(locator));
+    if (actual.includes(normalizeWS(value))) {
+      return true;
+    }
+
+    logger.warn("LinkedIn typeLikeHuman: all strategies failed to insert text");
+    return false;
   } catch (err) {
+    logger.error(
+      `LinkedIn typeLikeHuman failed: ${err.message}`,
+    );
     return false;
   }
 }
@@ -1925,124 +1977,63 @@ async function findSendButtonForEditor(page, editor, emit) {
   const log = emit || (() => {});
 
   try {
-    // Strategy 1: Search inside the same composer/overlay as the editor.
-    // LinkedIn can leave older/minimized conversation bubbles in the DOM. A
-    // global `.first()` often finds a stale disabled Send button from another
-    // bubble, so scoped lookup must come before any page-wide fallback.
-    const selector = await editor
-      .evaluate((el) => {
-        const isDisabled = (btn) => {
-          const ariaDisabled = String(btn.getAttribute("aria-disabled") || "")
-            .trim()
-            .toLowerCase();
-          const classes = String(btn.className || "").toLowerCase();
-          return (
-            Boolean(btn.disabled) ||
-            ariaDisabled === "true" ||
-            classes.includes("disabled") ||
-            btn.matches("[disabled], .artdeco-button--disabled")
-          );
-        };
-
-        const visibleButton = (btn) => {
-          const rect = btn.getBoundingClientRect();
-          const style = window.getComputedStyle(btn);
-          return (
-            rect.width > 0 &&
-            rect.height > 0 &&
-            style.visibility !== "hidden" &&
-            style.display !== "none" &&
-            Number(style.opacity || "1") > 0
-          );
-        };
-
-        const isSendLike = (btn) => {
-          const label = [
-            btn.getAttribute("aria-label"),
-            btn.getAttribute("title"),
-            btn.getAttribute("data-control-name"),
-            btn.innerText,
-            btn.textContent,
-            btn.className,
-            btn.type,
-          ]
-            .filter(Boolean)
-            .join(" ")
-            .toLowerCase();
-          return (
-            /\bsend\b/.test(label) ||
-            label.includes("msg-form__send") ||
-            String(btn.type || "").toLowerCase() === "submit"
-          );
-        };
-
+    // Strategy 1: Scope search to the editor's containing form/overlay.
+    // We tag the CONTAINER (a stable parent element that React doesn't
+    // re-render), then use Playwright's locator chaining to find buttons
+    // inside it. This eliminates the race condition where tagging a
+    // leaf-level button with data-gtss-send gets wiped by React re-renders.
+    const containerTag = `gtss-container-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const containerFound = await editor
+      .evaluate((el, tag) => {
         const container =
           el.closest(".msg-form") ||
           el.closest(".msg-overlay-conversation-bubble") ||
           el.closest('[role="dialog"]') ||
           el.closest(".msg-convo-wrapper");
+        if (!container) return false;
+        container.setAttribute("data-gtss-container", tag);
+        return true;
+      }, containerTag)
+      .catch(() => false);
 
-        if (!container)
-          return { selector: null, debug: "No container found from editor" };
-
-        const allButtons = [
-          ...container.querySelectorAll('button, [role="button"]'),
-        ];
-        const visible = allButtons.filter(visibleButton);
-
-        // Prefer non-disabled send-like buttons
-        const sendCandidates = visible
-          .filter(isSendLike)
-          .filter((btn) => !isDisabled(btn));
-
-        if (sendCandidates.length > 0) {
-          const send = sendCandidates[0];
-          const token =
-            "gtss-" + Date.now() + "-" + Math.random().toString(16).slice(2);
-          send.setAttribute("data-gtss-send", token);
-          return {
-            selector: `[data-gtss-send="${token}"]`,
-            disabled: isDisabled(send),
-            debug: `Found send button via container search`,
-          };
-        }
-
-        // Fallback to any submit button in container
-        const submitBtn = visible.find(
-          (btn) =>
-            String(btn.type || "").toLowerCase() === "submit" &&
-            !isDisabled(btn),
-        );
-
-        if (submitBtn) {
-          const token =
-            "gtss-" + Date.now() + "-" + Math.random().toString(16).slice(2);
-          submitBtn.setAttribute("data-gtss-send", token);
-          return {
-            selector: `[data-gtss-send="${token}"]`,
-            disabled: isDisabled(submitBtn),
-            debug: `Found submit button via container search`,
-          };
-        }
-
-        return { selector: null, debug: "No send button found in container" };
-      })
-      .catch(() => ({
-        selector: null,
-        disabled: true,
-        debug: "evaluate threw",
-      }));
-
-    if (selector.selector) {
-      const locator = page.locator(selector.selector);
-      const disabled = await isLocatorDisabled(locator).catch(
-        () => selector.disabled,
+    if (containerFound) {
+      const containerLocator = page.locator(
+        `[data-gtss-container="${containerTag}"]`,
       );
-      log(
-        `info`,
-        `findSendButtonForEditor: Found via container search, disabled=${disabled}`,
-      );
-      return { locator, disabled };
+
+      const sendSelectors = [
+        "button.msg-form__send-button",
+        '.msg-form__send-btn-container button[type="submit"]',
+        'button[type="submit"]',
+        'button[aria-label="Send"]',
+        'button[aria-label="Send message"]',
+        'button[aria-label*="Send" i]',
+      ];
+
+      for (const sel of sendSelectors) {
+        const candidates = containerLocator.locator(sel);
+        const count = await candidates.count().catch(() => 0);
+        for (let i = count - 1; i >= 0; i--) {
+          const btn = candidates.nth(i);
+          if (await btn.isVisible({ timeout: 100 }).catch(() => false)) {
+            const disabled = await isLocatorDisabled(btn);
+            log(
+              "info",
+              `findSendButtonForEditor: Found ${sel} in scoped container, disabled=${disabled}`,
+            );
+            // Clean up container tag
+            await containerLocator
+              .evaluate((el) => el.removeAttribute("data-gtss-container"))
+              .catch(() => {});
+            return { locator: btn, disabled };
+          }
+        }
+      }
+
+      // Clean up container tag if no button found
+      await containerLocator
+        .evaluate((el) => el.removeAttribute("data-gtss-container"))
+        .catch(() => {});
     }
 
     // Strategy 2: Try LinkedIn's stable class selectors, but prefer the last
@@ -2223,6 +2214,13 @@ async function sendDirectMessage(
     // keyboard work. In CDP-mode multi-tab sessions the tab is in the background
     // and document.hasFocus() is false, so all keyboard events are dropped.
     await bringLinkedInPageToFront(page);
+
+    // ── 0. Pre-navigation cleanup ────────────────────────────────────────────
+    // Dismiss any stale messaging UI from a previous profile's DM attempt.
+    // LinkedIn's new UI doesn't always use the old .msg-overlay class names,
+    // so we use broad strategies: Escape key + close any visible chat windows.
+    await dismissAllMessagingUI(page);
+
     emit("info", `Navigating to ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
     await humanDelay(300, 600);
@@ -2347,6 +2345,7 @@ async function sendDirectMessage(
     await messageMatch.locator.click();
     // Allow up to 900ms for the modal CSS animation to complete and React to mount.
     await humanDelay(600, 900);
+    await diag.capture(page, "after-message-click");
 
     // ── 2a. Detect navigation to full-page messaging UI ──────────────────────
     // When the "Message" element is an <a> link to an existing thread, Playwright
@@ -2400,6 +2399,7 @@ async function sendDirectMessage(
     } catch (err) {
       emit("warn", `Could not resolve stable editor locator: ${err.message}`);
     }
+    await diag.capture(page, "editor-found");
 
     // ── 6. Type the message ──────────────────────────────────────────────────
     emit("info", "Typing message...");
@@ -2428,55 +2428,79 @@ async function sendDirectMessage(
 
     // ── 6b. Short settle for React to process the input event ─────────────
     await humanDelay(400, 600);
+    await diag.capture(page, "after-typing", { typedSnippet: messageSnippet(message) });
 
     // ── 7. Wait for React to enable the Send button, then click it ───────────
-    emit("info", "Waiting for Send button to become enabled...");
+    emit("info", "Looking for Send button...");
 
     let sendSuccessful = false;
 
-    // Target the send button specifically looking for the ABSENCE of the disabled attribute
-    const sendButton = page
-      .locator(
-        'button.msg-form__send-button:not([disabled]), .msg-form button[type="submit"]:not([disabled])',
-      )
-      .last();
-
-    try {
-      // Wait up to 3 seconds for React to natively remove the 'disabled' attribute
-      await sendButton.waitFor({ state: "visible", timeout: 3000 });
-
-      emit("info", "Send button is enabled — clicking natively...");
-      logger.info(
-        "LinkedIn DM: Send button found and enabled, attempting native click",
+    // FIX Bug 3: poll until the Send button is enabled (React needs up to ~800ms
+    // after an input event to flip the button from disabled → enabled).
+    // Previously we searched once immediately — if React hadn't processed the
+    // typed content yet the button was still disabled, causing a silent fallback.
+    const SEND_BTN_POLL_TIMEOUT = 2500;
+    const sendBtnPollDeadline = Date.now() + SEND_BTN_POLL_TIMEOUT;
+    let sendBtnData = null;
+    while (Date.now() < sendBtnPollDeadline) {
+      sendBtnData = await findSendButtonForEditor(
+        page,
+        activeEditorLocator,
+        emit,
       );
-
-      await sendButton.click();
-      sendSuccessful = true;
-
-      logger.info("LinkedIn DM: Send button clicked successfully");
-    } catch (err) {
-      emit(
-        "warn",
-        "Send button did not enable in time or click failed. Falling back to Enter key.",
-      );
-      logger.warn(`LinkedIn DM: Send button wait/click failed: ${err.message}`);
+      if (sendBtnData && !sendBtnData.disabled) break;
+      await humanDelay(120, 180);
     }
 
+    if (sendBtnData && !sendBtnData.disabled) {
+      emit("info", `Send button found and enabled, attempting click...`);
+      sendSuccessful = await clickSendButtonRobust(
+        page,
+        sendBtnData.locator,
+        activeEditorLocator,
+      );
+    } else {
+      emit(
+        "warn",
+        "Send button not found or remains disabled. Falling back to Enter key.",
+      );
+    }
+    await diag.capture(page, "send-button-search", {
+      found: Boolean(sendBtnData),
+      disabled: sendBtnData?.disabled,
+      sendClicked: sendSuccessful,
+    });
+
     // ── 7a. Keyboard Enter fallback ──────────────────────────────────────────
+    // LinkedIn's DM overlay submits on bare Enter. Shift+Enter adds a newline.
+    // Control+Enter is kept as a secondary fallback for edge cases.
     if (!sendSuccessful) {
       emit("info", "Executing keyboard Enter fallback.");
-      logger.info("LinkedIn DM: Trying keyboard Enter fallback");
-
-      // Re-focus the editor just to be safe
-      await activeEditorLocator.click().catch(() => {});
+      await ensureSelectionInEditor(activeEditorLocator);
       await humanDelay(150, 200);
 
-      // LinkedIn's composer sends on Enter
-      await page.keyboard.press("Control+Enter").catch(() => {});
-      await humanDelay(150, 200);
+      // Primary: bare Enter — LinkedIn DM's default submit key
       await page.keyboard.press("Enter").catch(() => {});
+      await humanDelay(600, 900);
 
-      sendSuccessful = true;
+      // Check whether the editor cleared — if yes, the send went through.
+      const textAfterEnter = normalizeEditableText(
+        await getEditableText(activeEditorLocator).catch(() => ""),
+      );
+      const snippet = normalizeEditableText(message).substring(0, 20);
+      sendSuccessful = !textAfterEnter.includes(snippet);
+
+      if (!sendSuccessful) {
+        // Secondary fallback: Control+Enter (some LinkedIn UI versions)
+        await ensureSelectionInEditor(activeEditorLocator);
+        await page.keyboard.press("Control+Enter").catch(() => {});
+        await humanDelay(400, 600);
+
+        const textAfterCtrlEnter = normalizeEditableText(
+          await getEditableText(activeEditorLocator).catch(() => ""),
+        );
+        sendSuccessful = !textAfterCtrlEnter.includes(snippet);
+      }
     }
 
     await humanDelay(800, 1200);
@@ -2489,19 +2513,72 @@ async function sendDirectMessage(
     }
 
     emit("info", `DM sent — moving to next profile.`);
+    await page
+      .evaluate(() => {
+        window.__gtss_dm_outcome = "sent";
+      })
+      .catch(() => {});
+
+    // ── 9. Navigate back to profile if we ended up on /messaging/ ────────────
+    // When the "Message" button is an <a> link, clicking it navigates to
+    // /messaging/thread/... The next profile's goto() would then navigate
+    // FROM /messaging/ which can leave stale messaging state. Navigate back
+    // to the profile URL first to ensure a clean starting point.
+    const postSendUrl = page.url();
+    if (
+      postSendUrl.includes("/messaging/") ||
+      postSendUrl.includes("/messages/")
+    ) {
+      emit("info", "Navigating back to profile after /messaging/ send...");
+      await page.goto(profileUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
+      await humanDelay(300, 500);
+    }
+
     return { outcome: "sent" };
   } catch (err) {
     logger.error("LinkedIn DM Failed", { profileUrl, error: err.message });
     emit("error", `DM failed: ${err.message}`);
+    await diag.capture(page, `failure-${err.message.slice(0, 30).replace(/[^a-z0-9]/gi, '_')}`);
     return { outcome: "failed", reason: err.message };
   } finally {
+    // Flush diagnostics for this DM attempt
+    diag.flush(profileUrl);
+    // Clean up ALL data-gtss-* tags regardless of outcome
     await page
       .evaluate(() => {
-        document
-          .querySelectorAll("[data-gtss-active-overlay]")
-          .forEach((el) => {
-            el.removeAttribute("data-gtss-active-overlay");
+        const attrs = [
+          "data-gtss-active-overlay",
+          "data-gtss-dm-editor",
+          "data-gtss-dm-overlay",
+          "data-gtss-container",
+          "data-gtss-send",
+        ];
+        for (const attr of attrs) {
+          document.querySelectorAll(`[${attr}]`).forEach((el) => {
+            el.removeAttribute(attr);
           });
+        }
+      })
+      .catch(() => {});
+
+    // CRITICAL CONTAINMENT FIX: Purge any dirty lingering UI states before releasing control.
+    // Checks the page-level outcome flag set earlier in sendDirectMessage.
+    const executionOutcome = await page
+      .evaluate(() => window.__gtss_dm_outcome)
+      .catch(() => null);
+
+    if (executionOutcome !== "sent") {
+      logger.info(
+        "Outreach pipeline flag marked unsafe. Forcing interface restoration...",
+      );
+      // Broad cleanup: dismiss all open messaging UI before releasing control
+      await dismissAllMessagingUI(page);
+    }
+
+    // Reset the page-level outcome flag for the next run
+    await page
+      .evaluate(() => {
+        delete window.__gtss_dm_outcome;
       })
       .catch(() => {});
   }
