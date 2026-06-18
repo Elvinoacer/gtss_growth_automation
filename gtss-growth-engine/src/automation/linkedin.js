@@ -1683,116 +1683,40 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
       : locatorOrSelector;
   const expected = String(text || "").trim();
 
-  logger.info(
-    `LinkedIn DM: Starting to type message (${expected.length} chars)`,
-  );
-
-  // Step 0: Ensure document.hasFocus() returns true (CDP sessions)
-  await bringLinkedInPageToFront(page);
-
-  // Step 1: Properly activate the editor
-  const activated = await activateDmEditor(page, locator);
-  if (!activated) {
-    logger.warn("LinkedIn DM: Editor activation failed, trying fallback");
-    const freshEditorMatch = await findBestDmEditor(page, 1000);
-    if (freshEditorMatch) {
-      const stableFresh = await getActiveEditorLocator(page, freshEditorMatch);
-      return typeLikeHuman(page, stableFresh, text);
-    }
-    throw new Error(
-      "LinkedIn DM editor activation failed after multiple attempts",
-    );
-  }
-
-  // Step 2: Verify selection and clear existing text
-  const selectionLanded = await ensureSelectionInEditor(locator);
-  if (!selectionLanded) {
-    throw new Error("LinkedIn DM editor selection verification failed");
-  }
-
-  const currentText = (await getEditableText(locator)).trim();
-  if (currentText) {
-    logger.debug(
-      `LinkedIn DM: Clearing existing text (${currentText.length} chars)`,
-    );
-    await ensureSelectionInEditor(locator);
-    await page.keyboard
-      .press(process.platform === "darwin" ? "Meta+A" : "Control+A")
-      .catch(() => {});
-    await page.keyboard.press("Delete").catch(() => {});
-    await humanDelay(30, 60);
-  }
-
-  // Step 3: Type the message using multiple strategies with verification
-  const speedup = process.env.TEST_SPEEDUP === "true";
-  const charDelay = speedup ? 0 : Number(process.env.TYPING_DELAY_MS || 5);
-
-  // Strategy 1: Direct keyboard input (most reliable)
   try {
-    logger.debug("LinkedIn DM: Attempting keyboard input");
-    await typeMessageWithKeyboard(page, locator, text, charDelay);
-    await humanDelay(50, 100);
+    // 1. Native click to establish true OS-level focus and trigger React's focus listeners
+    await locator.click({ timeout: 3000 });
+    await page.waitForTimeout(300);
 
-    let actual = (await getEditableText(locator)).trim();
-    if (
-      normalizeEditableText(actual).includes(normalizeEditableText(expected))
-    ) {
-      logger.info("LinkedIn DM: Keyboard input successful");
-      return true;
+    // 2. Clear existing text natively using keyboard shortcuts
+    const isMac = process.platform === "darwin";
+    await page.keyboard.press(isMac ? "Meta+A" : "Control+A");
+    await page.keyboard.press("Backspace");
+    await page.waitForTimeout(200);
+
+    // 3. Type using Playwright's native sequential typing.
+    // This flawlessly triggers React's internal state updates.
+    const charDelay =
+      process.env.TEST_SPEEDUP === "true"
+        ? 0
+        : Number(process.env.TYPING_DELAY_MS || 15);
+
+    if (locator.pressSequentially) {
+      await locator.pressSequentially(expected, { delay: charDelay });
+    } else {
+      // Fallback for older Playwright versions
+      await locator.type(expected, { delay: charDelay });
     }
+
+    // 4. Force a trailing space and backspace to guarantee React registers the final character
+    await page.waitForTimeout(200);
+    await page.keyboard.press("Space");
+    await page.keyboard.press("Backspace");
+
+    return true;
   } catch (err) {
-    logger.warn(`LinkedIn DM: Keyboard input failed: ${err.message}`);
+    return false;
   }
-
-  // Strategy 2: Paste via clipboard (reliable fallback)
-  try {
-    logger.debug("LinkedIn DM: Attempting clipboard paste");
-    await activateDmEditor(page, locator);
-    await pasteTextViaClipboard(page, locator, text);
-
-    let actual = (await getEditableText(locator)).trim();
-    if (
-      normalizeEditableText(actual).includes(normalizeEditableText(expected))
-    ) {
-      logger.info("LinkedIn DM: Clipboard paste successful");
-      return true;
-    }
-  } catch (err) {
-    logger.warn(`LinkedIn DM: Clipboard paste failed: ${err.message}`);
-  }
-
-  // Strategy 3: Direct DOM manipulation (last resort)
-  try {
-    logger.debug("LinkedIn DM: Attempting DOM manipulation");
-    await activateDmEditor(page, locator);
-    await setEditorTextWithDomEvents(locator, text);
-
-    let actual = (await getEditableText(locator)).trim();
-    if (
-      normalizeEditableText(actual).includes(normalizeEditableText(expected))
-    ) {
-      logger.info("LinkedIn DM: DOM manipulation successful");
-      return true;
-    }
-  } catch (err) {
-    logger.warn(`LinkedIn DM: DOM manipulation failed: ${err.message}`);
-  }
-
-  // Final verification
-  const finalActual = (await getEditableText(locator)).trim();
-  const success = normalizeEditableText(finalActual).includes(
-    normalizeEditableText(expected),
-  );
-
-  if (!success) {
-    logger.error(
-      `LinkedIn DM: All typing strategies failed. Expected: "${expected.substring(0, 50)}..." Got: "${finalActual.substring(0, 50)}..."`,
-    );
-    throw new Error("LinkedIn DM: Failed to type message after all strategies");
-  }
-
-  logger.info("LinkedIn DM: Message typing successful");
-  return true;
 }
 
 async function typeIntoFirstVisible(page, selectors, text) {
@@ -2462,6 +2386,7 @@ async function sendDirectMessage(
     }
 
     // ── 5. Locate DM editor — single attempt ────────────────────────────────
+    // ── 5. Locate DM editor — single attempt ────────────────────────────────
     const editorMatch = await waitForDmEditor(page, null, 3);
     if (!editorMatch) {
       emit("warn", "DM editor not found — skipping profile.");
@@ -2473,24 +2398,21 @@ async function sendDirectMessage(
     try {
       activeEditorLocator = await getActiveEditorLocator(page, editorMatch);
     } catch (err) {
-      emit(
-        "warn",
-        `Failed to get stable active editor locator: ${err.message}`,
-      );
+      emit("warn", `Could not resolve stable editor locator: ${err.message}`);
     }
 
-    // ── 6. Type message ─────────────────────────────────────────────────────
-    await bringLinkedInPageToFront(page);
-    emit("info", "Typing message (visible fast typing)...");
+    // ── 6. Type the message ──────────────────────────────────────────────────
+    emit("info", "Typing message...");
+    const typeSuccess = await typeLikeHuman(page, activeEditorLocator, message);
 
-    try {
-      await typeLikeHuman(page, activeEditorLocator, message);
-    } catch (typeErr) {
-      emit("warn", `Typing failed: ${typeErr.message}`);
-      return { outcome: "failed", reason: "Text entry failed" };
+    if (!typeSuccess) {
+      return {
+        outcome: "failed",
+        reason: "Failed to type message into editor",
+      };
     }
-    await humanDelay(100, 200);
 
+    // ── 6a. Verify the message is actually in the DOM before clicking send ───
     const typedState = await getEditorState(activeEditorLocator);
     if (
       !normalizeEditableText(typedState.text).includes(
@@ -2504,210 +2426,57 @@ async function sendDirectMessage(
       };
     }
 
-    // Force React to recognize the content change
-    await activeEditorLocator
-      .evaluate((el) => {
-        el.dispatchEvent(
-          new InputEvent("input", { bubbles: true, inputType: "insertText" }),
-        );
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-      })
-      .catch(() => {});
-
     // ── 6b. Short settle for React to process the input event ─────────────
     await humanDelay(400, 600);
 
     // ── 7. Wait for React to enable the Send button, then click it ───────────
     emit("info", "Waiting for Send button to become enabled...");
 
-    // Poll until a non-disabled send button appears (React processes input events).
-    // Budget: up to 5 s in 150 ms increments (increased from 3s for reliability)
-    let enabledSendBtn = null;
-    const sendEnableDeadline = Date.now() + 5000;
-
-    while (Date.now() < sendEnableDeadline) {
-      const candidate = await findSendButtonForEditor(
-        page,
-        activeEditorLocator,
-        emit,
-      );
-      if (candidate) {
-        if (!candidate.disabled) {
-          enabledSendBtn = candidate.locator;
-          break;
-        }
-      }
-      // Also check the global stable selector as fallback
-      const globalBtn = page.locator("button.msg-form__send-button").last();
-      if (await globalBtn.isVisible({ timeout: 100 }).catch(() => false)) {
-        const globalDisabled = await isLocatorDisabled(globalBtn);
-        if (!globalDisabled) {
-          enabledSendBtn = globalBtn;
-          break;
-        }
-      }
-      await humanDelay(150, 200);
-    }
-
     let sendSuccessful = false;
 
-    if (enabledSendBtn) {
-      emit("info", "Send button is enabled — clicking...");
+    // Target the send button specifically looking for the ABSENCE of the disabled attribute
+    const sendButton = page
+      .locator(
+        'button.msg-form__send-button:not([disabled]), .msg-form button[type="submit"]:not([disabled])',
+      )
+      .last();
+
+    try {
+      // Wait up to 3 seconds for React to natively remove the 'disabled' attribute
+      await sendButton.waitFor({ state: "visible", timeout: 3000 });
+
+      emit("info", "Send button is enabled — clicking natively...");
       logger.info(
-        "LinkedIn DM: Send button found and enabled, attempting click",
+        "LinkedIn DM: Send button found and enabled, attempting native click",
       );
 
-      try {
-        await enabledSendBtn.scrollIntoViewIfNeeded().catch(() => {});
-        await enabledSendBtn.hover().catch(() => {});
-        await humanDelay(80, 150);
+      await sendButton.click();
+      sendSuccessful = true;
 
-        const clicked = await clickSendButtonRobust(
-          page,
-          enabledSendBtn,
-          activeEditorLocator,
-        );
-
-        await humanDelay(800, 1200);
-        sendSuccessful = clicked; // optimistic — verification below confirms
-        if (clicked) {
-          logger.info("LinkedIn DM: Send button clicked successfully");
-        } else {
-          logger.warn("LinkedIn DM: Send button click strategies all failed");
-        }
-      } catch (err) {
-        logger.warn(`LinkedIn DM: Send button click failed: ${err.message}`);
-        sendSuccessful = false;
-      }
-    } else {
-      logger.warn(
-        "LinkedIn DM: Send button not found or still disabled after waiting",
+      logger.info("LinkedIn DM: Send button clicked successfully");
+    } catch (err) {
+      emit(
+        "warn",
+        "Send button did not enable in time or click failed. Falling back to Enter key.",
       );
+      logger.warn(`LinkedIn DM: Send button wait/click failed: ${err.message}`);
     }
 
     // ── 7a. Keyboard Enter fallback ──────────────────────────────────────────
-    // If the send button was never found enabled, try pressing Enter on the
-    // focused editor. LinkedIn's DM composer submits on Enter (not Shift+Enter).
     if (!sendSuccessful) {
-      emit(
-        "warn",
-        "Send button not found / still disabled — trying keyboard Enter fallback...",
-      );
+      emit("info", "Executing keyboard Enter fallback.");
       logger.info("LinkedIn DM: Trying keyboard Enter fallback");
 
-      // First ensure focus is inside the editor
-      await activateDmEditor(page, activeEditorLocator);
+      // Re-focus the editor just to be safe
+      await activeEditorLocator.click().catch(() => {});
       await humanDelay(150, 200);
 
-      // Press Ctrl+Enter and Enter (LinkedIn supports both depending on user settings).
+      // LinkedIn's composer sends on Enter
       await page.keyboard.press("Control+Enter").catch(() => {});
       await humanDelay(150, 200);
       await page.keyboard.press("Enter").catch(() => {});
-      await humanDelay(800, 1200);
 
-      const afterEnterText = normalizeEditableText(
-        await getEditableText(activeEditorLocator),
-      );
-      sendSuccessful = !afterEnterText.includes(
-        normalizeEditableText(message).substring(0, 20),
-      );
-
-      if (sendSuccessful) {
-        logger.info("LinkedIn DM: Keyboard Enter fallback successful");
-      } else {
-        logger.warn("LinkedIn DM: Keyboard Enter fallback failed");
-      }
-    }
-
-    // ── 7b. DOM direct click last-resort ────────────────────────────────────
-    // This fires btn.click() bypassing Playwright's actionability checks.
-    if (!sendSuccessful) {
-      emit(
-        "warn",
-        "Enter fallback also failed — trying direct DOM click last-resort...",
-      );
-      logger.info("LinkedIn DM: Trying direct DOM click as last resort");
-      emit(
-        "warn",
-        "Enter fallback also failed — trying direct DOM click last-resort...",
-      );
-
-      try {
-        const clicked = await activeEditorLocator
-          .evaluate((editor) => {
-            const container =
-              editor.closest(".msg-form") ||
-              editor.closest(".msg-overlay-conversation-bubble") ||
-              editor.closest('[role="dialog"]') ||
-              editor.closest(".msg-convo-wrapper") ||
-              document;
-            const buttons = [...container.querySelectorAll("button")];
-            const btn =
-              buttons.find((candidate) =>
-                /msg-form__send|\bsend\b/i.test(
-                  [
-                    candidate.className,
-                    candidate.getAttribute("aria-label"),
-                    candidate.getAttribute("title"),
-                    candidate.innerText,
-                    candidate.textContent,
-                  ]
-                    .filter(Boolean)
-                    .join(" "),
-                ),
-              ) || document.querySelector("button.msg-form__send-button");
-            if (!btn) return false;
-
-            // Force enable the button
-            btn.disabled = false;
-            btn.removeAttribute("disabled");
-            btn.setAttribute("aria-disabled", "false");
-            btn.classList.remove("artdeco-button--disabled", "disabled");
-
-            // Dispatch comprehensive event sequence
-            const eventOptions = {
-              bubbles: true,
-              cancelable: true,
-              view: window,
-            };
-
-            // Pointer events
-            btn.dispatchEvent(new PointerEvent("pointerover", eventOptions));
-            btn.dispatchEvent(
-              new PointerEvent("pointerenter", {
-                ...eventOptions,
-                bubbles: false,
-              }),
-            );
-            btn.dispatchEvent(new PointerEvent("pointerdown", eventOptions));
-            btn.dispatchEvent(new PointerEvent("pointerup", eventOptions));
-
-            // Mouse events
-            btn.dispatchEvent(new MouseEvent("mousedown", eventOptions));
-            btn.dispatchEvent(new MouseEvent("mouseup", eventOptions));
-            btn.dispatchEvent(new MouseEvent("click", eventOptions));
-
-            // Focus events
-            btn.dispatchEvent(
-              new FocusEvent("focus", { ...eventOptions, bubbles: false }),
-            );
-            btn.dispatchEvent(new FocusEvent("focusin", eventOptions));
-
-            return true;
-          })
-          .catch(() => false);
-
-        if (clicked) {
-          await humanDelay(800, 1200);
-          sendSuccessful = true;
-          logger.info("LinkedIn DM: Direct DOM click successful");
-        } else {
-          logger.warn("LinkedIn DM: Direct DOM click failed");
-        }
-      } catch (err) {
-        logger.warn(`LinkedIn DM: Direct DOM click error: ${err.message}`);
-      }
+      sendSuccessful = true;
     }
 
     await humanDelay(800, 1200);
@@ -2719,7 +2488,7 @@ async function sendDirectMessage(
       return { outcome: "failed", reason: verification.reason };
     }
 
-    emit("info", `DM sent (${verification.reason}) — moving to next profile.`);
+    emit("info", `DM sent — moving to next profile.`);
     return { outcome: "sent" };
   } catch (err) {
     logger.error("LinkedIn DM Failed", { profileUrl, error: err.message });
@@ -2737,7 +2506,6 @@ async function sendDirectMessage(
       .catch(() => {});
   }
 }
-
 /**
  * Like a recent post on the user's profile to warm them up.
  */
