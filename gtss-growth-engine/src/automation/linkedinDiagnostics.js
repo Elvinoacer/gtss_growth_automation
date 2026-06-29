@@ -38,8 +38,9 @@ let _sessionStart = null;
  * @param {object} page      - Playwright page instance
  * @param {string} stepName  - Human-readable label for this snapshot
  * @param {object} [extra]   - Optional extra metadata to attach
+ * @param {object} [messagingFrame] - Optional interop-iframe Frame to also capture
  */
-async function capture(page, stepName, extra = {}) {
+async function capture(page, stepName, extra = {}, messagingFrame = null) {
   if (!isEnabled()) return;
   if (!page || page.isClosed()) return;
 
@@ -241,11 +242,65 @@ async function capture(page, stepName, extra = {}) {
     }
   }
 
+  // Optionally capture state from the messaging iframe too
+  let iframeSnapshot = null;
+  if (messagingFrame) {
+    try {
+      iframeSnapshot = await messagingFrame
+        .evaluate(() => {
+          const visible = (el) => {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              style.visibility !== "hidden" &&
+              style.display !== "none" &&
+              Number(style.opacity || "1") > 0
+            );
+          };
+          const describeEl = (el) => {
+            const rect = el.getBoundingClientRect();
+            return {
+              tag: el.tagName.toLowerCase(),
+              id: el.id || null,
+              className: (el.className || "").toString().slice(0, 120),
+              ariaLabel: el.getAttribute("aria-label") || null,
+              placeholder: el.getAttribute("placeholder") || el.getAttribute("data-placeholder") || null,
+              role: el.getAttribute("role") || null,
+              contenteditable: el.getAttribute("contenteditable") || null,
+              disabled: el.disabled || el.getAttribute("aria-disabled") === "true" || false,
+              type: el.getAttribute("type") || null,
+              rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) },
+              text: (el.innerText || el.textContent || el.value || "").replace(/\s+/g, " ").trim().slice(0, 100),
+              pointerEvents: window.getComputedStyle(el).pointerEvents,
+            };
+          };
+          const editors = [...document.querySelectorAll('[contenteditable="true"],[role="textbox"],textarea')]
+            .filter(visible).map(describeEl);
+          const buttons = [...document.querySelectorAll('button[aria-label*="Send" i],button[type="submit"],button:has-text("Send")')]
+            .filter(visible).map(describeEl);
+          const activeEl = document.activeElement;
+          return {
+            url: window.location.href,
+            hasFocus: document.hasFocus(),
+            editors,
+            buttons,
+            activeElement: activeEl ? describeEl(activeEl) : { tag: "none" },
+          };
+        })
+        .catch((err) => ({ error: `iframe evaluate failed: ${err.message}` }));
+    } catch (err) {
+      iframeSnapshot = { error: `iframe capture failed: ${err.message}` };
+    }
+  }
+
   _steps.push({
     step: stepName,
     timestamp,
     elapsedMs: elapsed,
     snapshot,
+    iframeSnapshot: iframeSnapshot || undefined,
     screenshotPath,
     ...extra,
   });
