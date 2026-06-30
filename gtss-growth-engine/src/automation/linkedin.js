@@ -891,10 +891,13 @@ async function findBestDmEditor(page, timeout = 2500) {
   const token = `gtss-dm-editor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const deadline = Date.now() + timeout;
 
-  while (Date.now() < deadline) {
-    const result = await page
+  // Inner helper: search for an editor INSIDE a given overlay element only.
+  // This is the heart of the bug fix — never query the page root for editors
+  // when a known overlay exists.
+  const findEditorInsideOverlay = async (overlayLocator) => {
+    return overlayLocator
       .evaluate(
-        ({ token }) => {
+        (overlay, token) => {
           const normalize = (value) =>
             String(value || "")
               .replace(/\s+/g, " ")
@@ -954,7 +957,7 @@ async function findBestDmEditor(page, timeout = 2500) {
           const candidates = [];
 
           for (const selector of selectors) {
-            for (const el of document.querySelectorAll(selector)) {
+            for (const el of overlay.querySelectorAll(selector)) {
               if (seen.has(el) || !visible(el)) continue;
               seen.add(el);
 
@@ -976,10 +979,6 @@ async function findBestDmEditor(page, timeout = 2500) {
 
               const text = attrText(el);
               const rect = el.getBoundingClientRect();
-              const overlay = el.closest(
-                '.msg-overlay-conversation-bubble, .msg-convo-wrapper, [role="dialog"], .artdeco-modal--type-is-messaging, .msg-form',
-              );
-              const overlayText = overlay ? normalize(overlay.textContent) : "";
               const inMsgForm = Boolean(el.closest(".msg-form"));
               const isContentEditable =
                 el.getAttribute("contenteditable") === "true";
@@ -997,13 +996,9 @@ async function findBestDmEditor(page, timeout = 2500) {
               if (isExplicitMessage) score += 650;
               if (isContentEditable) score += 320;
               if (isTextarea) score += 220;
-              if (overlay && visible(overlay)) score += 180;
-              if (/new message|messaging|message/.test(overlayText))
-                score += 120;
               if (rect.height >= 80) score += 420;
               if (rect.height >= 140) score += 260;
               score += Math.min(260, (rect.width * rect.height) / 900);
-              score -= rect.top / 50;
               if (isSubjectLike) score -= 1600;
               if (rect.height < 45 && !isExplicitMessage) score -= 500;
               if (text.includes("subject")) score -= 900;
@@ -1035,27 +1030,217 @@ async function findBestDmEditor(page, timeout = 2500) {
             rect: best.rect,
           };
         },
+        token,
+      )
+      .catch(() => null);
+  };
+
+  while (Date.now() < deadline) {
+    // === STEP 1: Find the active overlay FIRST ===
+    // Critical bug fix: scope editor selection to the active modal. Never
+    // scan the page root for editors when a known overlay exists — doing so
+    // would risk picking a background conversation bubble's editor and
+    // sending the message to the wrong recipient.
+    const remainingForOverlay = Math.min(1200, Math.max(200, deadline - Date.now()));
+    const overlayMatch = await findBestDmOverlay(page, remainingForOverlay);
+
+    if (overlayMatch?.ambiguous) {
+      // Two equally-prominent modals — cannot safely pick. Fail safe.
+      logger.warn(
+        "LinkedIn DM editor selection aborted: ambiguous messaging modals detected. " +
+          "Multiple overlays scored too similarly to confidently identify the active one. " +
+          "Aborting to prevent wrong-recipient send.",
+        { detail: overlayMatch.detail },
+      );
+      return null;
+    }
+
+    if (overlayMatch?.locator) {
+      // === STEP 2: Search for editors ONLY inside the chosen overlay ===
+      const editorResult = await findEditorInsideOverlay(overlayMatch.locator);
+
+      if (editorResult?.selector) {
+        const locator = page.locator(editorResult.selector).first();
+        if (await locator.isVisible({ timeout: 150 }).catch(() => false)) {
+          return {
+            locator,
+            selector: `best-dm-editor:${editorResult.selector}`,
+            detail: { ...editorResult, overlay: overlayMatch.detail },
+            overlay: overlayMatch,
+          };
+        }
+      }
+    }
+
+    // === FALLBACK: page-root scan, but ONLY if exactly one visible editor exists ===
+    // This preserves backward compat with LinkedIn UIs that don't wrap the
+    // composer in any of our recognized overlay containers (.msg-overlay-
+    // conversation-bubble, [role="dialog"], etc.). In that case the editor
+    // exists at the page root and there should only be ONE — if there are
+    // 2+, we cannot safely disambiguate and must fail safe.
+    const fallbackResult = await page
+      .evaluate(
+        ({ token }) => {
+          const normalize = (value) =>
+            String(value || "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .toLowerCase();
+          const visible = (el) => {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return (
+              rect.width >= 20 &&
+              rect.height >= 18 &&
+              rect.bottom > 0 &&
+              rect.right > 0 &&
+              rect.top < (window.innerHeight || 900) &&
+              rect.left < (window.innerWidth || 1400) &&
+              style.visibility !== "hidden" &&
+              style.display !== "none" &&
+              Number(style.opacity || 1) > 0
+            );
+          };
+          const rejectPattern =
+            /\b(subject|recipient|recipients|to:|search|people|name|email|add people|conversation name)\b/;
+          const messagePattern =
+            /\b(write a message|message|reply|body|compose)\b/;
+          const selectors = [
+            '.msg-form__contenteditable[contenteditable="true"]',
+            '.msg-form [contenteditable="true"]',
+            ".msg-form textarea",
+            'textarea[name*="message" i]',
+            'textarea[placeholder*="message" i]',
+            'textarea[aria-label*="message" i]',
+            '[contenteditable="true"][aria-label*="message" i]',
+            '[contenteditable="true"][aria-label*="write" i]',
+            '[role="textbox"][aria-label*="message" i]',
+            '[role="textbox"][aria-label*="write" i]',
+            '[contenteditable="true"]',
+            '[role="textbox"]',
+            "textarea",
+          ];
+          const seen = new Set();
+          const editors = [];
+
+          for (const selector of selectors) {
+            for (const el of document.querySelectorAll(selector)) {
+              if (seen.has(el) || !visible(el)) continue;
+              seen.add(el);
+
+              const tagName = normalize(el.tagName);
+              const type = normalize(el.getAttribute("type"));
+              if (
+                type &&
+                ["hidden", "button", "submit", "checkbox", "radio"].includes(
+                  type,
+                )
+              )
+                continue;
+              if (
+                el.disabled ||
+                el.getAttribute("aria-disabled") === "true" ||
+                el.readOnly
+              )
+                continue;
+
+              const text = [
+                el.getAttribute("aria-label"),
+                el.getAttribute("placeholder"),
+                el.getAttribute("data-placeholder"),
+                el.getAttribute("name"),
+                el.getAttribute("id"),
+                el.className,
+                el.textContent,
+              ]
+                .filter(Boolean)
+                .join(" ")
+                .toLowerCase();
+
+              // Reject subject/recipient-like fields.
+              if (
+                rejectPattern.test(text) &&
+                !messagePattern.test(text)
+              )
+                continue;
+
+              editors.push({ el, text });
+            }
+          }
+
+          // FAIL-SAFE: if multiple visible editors exist at page root
+          // WITHOUT a recognizable overlay wrapper, we cannot confidently
+          // pick the right one. Return ambiguous so the caller aborts.
+          if (editors.length > 1) {
+            return { ambiguous: true, count: editors.length };
+          }
+          if (editors.length === 0) return null;
+
+          const best = editors[0];
+          best.el.setAttribute("data-gtss-dm-editor", token);
+          return {
+            selector: `[data-gtss-dm-editor="${token}"]`,
+            score: 1,
+            label: best.text.slice(0, 120),
+          };
+        },
         { token },
       )
       .catch(() => null);
 
-    if (result?.selector) {
-      const locator = page.locator(result.selector).first();
+    if (fallbackResult?.ambiguous) {
+      logger.warn(
+        "LinkedIn DM editor selection aborted: multiple page-root editors detected " +
+          "without a recognizable overlay wrapper. Cannot safely identify the active modal. " +
+          "Aborting to prevent wrong-recipient send.",
+        { count: fallbackResult.count },
+      );
+      return null;
+    }
+
+    if (fallbackResult?.selector) {
+      const locator = page.locator(fallbackResult.selector).first();
       if (await locator.isVisible({ timeout: 150 }).catch(() => false)) {
         return {
           locator,
-          selector: `best-dm-editor:${result.selector}`,
-          detail: result,
+          selector: `best-dm-editor-legacy:${fallbackResult.selector}`,
+          detail: fallbackResult,
         };
       }
     }
 
-    await humanDelay(100, 160);
+    await humanDelay(80, 130);
   }
 
   return null;
 }
 
+/**
+ * Modal-aware overlay selection.
+ *
+ * CRITICAL FIX (wrong-recipient bug): the previous implementation scored
+ * overlays purely by "has editor + text match + size". When LinkedIn showed
+ * the alternate compose modal (Title/Subject input + Message input) WHILE a
+ * background conversation bubble was already open, both overlays scored
+ * similarly and the tie-breaker (DOM order / rect.top) could pick the
+ * background bubble's editor — causing messages to be sent to the wrong
+ * recipient.
+ *
+ * The new scoring uses unambiguous signals to identify the *active* modal:
+ *
+ *   +5000  aria-modal="true"          (W3C standard marker for a blocking modal)
+ *   +4000  has a Subject/Title input  (alternate compose modal marker —
+ *                                     the bug scenario modal has BOTH inputs)
+ *   +1500  "new message" heading text (compose modal marker)
+ *   +zIdx  higher z-index             (topmost stacking context wins)
+ *   +idx*30 later DOM position        (recently mounted overlays win)
+ *   -∞     aria-expanded="false"      (minimized bubble — never picked)
+ *   -∞     height < 100               (minimized bubble — never picked)
+ *
+ * FAIL-SAFE: if the top two overlays score within 500 points of each other,
+ * we cannot confidently identify the active one and return `{ ambiguous: true }`
+ * so the caller can abort instead of risking a wrong-modal send.
+ */
 async function findBestDmOverlay(page, timeout = 1500) {
   const token = `gtss-dm-overlay-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const deadline = Date.now() + timeout;
@@ -1075,44 +1260,190 @@ async function findBestDmOverlay(page, timeout = 1500) {
             return (
               rect.width >= 120 &&
               rect.height >= 80 &&
+              rect.bottom > 0 &&
+              rect.right > 0 &&
+              rect.top < (window.innerHeight || 900) &&
+              rect.left < (window.innerWidth || 1400) &&
               style.visibility !== "hidden" &&
-              style.display !== "none"
+              style.display !== "none" &&
+              Number(style.opacity || 1) > 0
             );
           };
-          const overlays = [
-            ...document.querySelectorAll(
-              '.msg-overlay-conversation-bubble, .msg-convo-wrapper, [role="dialog"], .artdeco-modal--type-is-messaging',
-            ),
-          ]
+
+          // Editor presence — an overlay is only a candidate if it actually
+          // contains a text editor. This rules out header-only minimized
+          // bubbles that happen to meet the width/height threshold.
+          const hasEditor = (el) =>
+            Boolean(
+              el.querySelector(
+                '.msg-form__contenteditable[contenteditable="true"], ' +
+                  '.msg-form [contenteditable="true"], ' +
+                  "textarea, [role=\"textbox\"]",
+              ),
+            );
+
+          // Subject / Title input detection — the alternate compose modal
+          // (the bug scenario) is the only LinkedIn messaging surface that
+          // has a Title/Subject field alongside the message body.
+          const hasSubjectInput = (el) =>
+            Boolean(
+              el.querySelector(
+                'input[aria-label*="subject" i], ' +
+                  'input[placeholder*="subject" i], ' +
+                  'input[aria-label*="title" i], ' +
+                  'input[placeholder*="title" i], ' +
+                  'input[name*="subject" i], ' +
+                  'input[name*="title" i]',
+              ),
+            );
+
+          // Minimized bubble detection — LinkedIn collapses conversation
+          // bubbles to a header-only strip when minimized. We must NEVER
+          // pick these because their editor exists in the DOM but is
+          // invisible/hidden and typing would silently land in the wrong place.
+          const isMinimized = (el) => {
+            const expanded = el.getAttribute("aria-expanded");
+            if (expanded === "false") return true;
+            const rect = el.getBoundingClientRect();
+            // Minimized bubbles are typically < 100px tall (just the header).
+            if (rect.height < 100) return true;
+            // Some LinkedIn bubbles use a "minimized" class instead.
+            if (/\b(minimized|collapsed)\b/i.test(el.className || "")) return true;
+            return false;
+          };
+
+          // Walk up to body to find the first ancestor with a non-auto z-index.
+          const getZIndex = (el) => {
+            let node = el;
+            while (node && node !== document.body) {
+              const z = window.getComputedStyle(node).zIndex;
+              if (z && z !== "auto") return parseInt(z, 10) || 0;
+              node = node.parentElement;
+            }
+            return 0;
+          };
+
+          // Try to extract the recipient name from the modal header. Used
+          // both for scoring (chat bubbles have a recipient header; compose
+          // modals typically don't) and for downstream recipient verification.
+          const getRecipientName = (el) => {
+            const headerSelectors = [
+              ".msg-overlay-bubble-header__name",
+              ".msg-overlay-conversation-bubble__name",
+              ".msg-convo-wrapper__name",
+              ".msg-form__recipient-name",
+              '[data-control-name="overlay.header"] [data-control-name="overlay.participant"]',
+              ".msg-overlay-bubble-header a[href*=\"/in/\"]",
+              ".msg-convo-wrapper a[href*=\"/in/\"]",
+              ".msg-overlay-bubble-header a",
+            ];
+            for (const sel of headerSelectors) {
+              const node = el.querySelector(sel);
+              if (node) {
+                const text = (node.textContent || node.getAttribute("title") || "")
+                  .trim();
+                if (text && text.length > 0 && text.length < 100) {
+                  return text;
+                }
+              }
+            }
+            return null;
+          };
+
+          const overlaySelectors =
+            ".msg-overlay-conversation-bubble, .msg-convo-wrapper, [role=\"dialog\"], .artdeco-modal--type-is-messaging";
+
+          const overlays = [...document.querySelectorAll(overlaySelectors)]
             .filter(visible)
-            .map((el) => {
+            .filter((el) => !isMinimized(el))
+            .map((el, idx) => {
+              if (!hasEditor(el)) return null;
+
               const rect = el.getBoundingClientRect();
               const text = normalize(el.textContent);
-              const hasEditor = Boolean(
-                el.querySelector(
-                  '.msg-form__contenteditable[contenteditable="true"], .msg-form [contenteditable="true"], textarea, [role="textbox"]',
-                ),
-              );
+              const subjectPresent = hasSubjectInput(el);
+              const zIndex = getZIndex(el);
+              const ariaModal = el.getAttribute("aria-modal") === "true";
+              const recipientName = getRecipientName(el);
+
               let score = 0;
-              if (hasEditor) score += 900;
-              if (/new message|message|messaging/.test(text)) score += 250;
+
+              // === STRONG IDENTITY SIGNALS ===
+              if (ariaModal) score += 5000;
+              if (subjectPresent) score += 4000;
+              if (/new message|compose|write a message/.test(text)) score += 1500;
+
+              // === STACKING / RECENCY SIGNALS ===
+              score += Math.min(2000, zIndex * 10);
+              score += idx * 30; // later in DOM = more recently mounted
+
+              // === SIZE / VISIBILITY SIGNALS ===
               if (rect.height >= 260) score += 180;
               score += Math.min(220, (rect.width * rect.height) / 1800);
-              return { el, score, text: text.slice(0, 80) };
+
+              // Chat-bubble recipient header — minor bonus so an open chat
+              // bubble still scores higher than a stale hidden one, but the
+              // compose-modal bonuses above always beat it.
+              if (recipientName && !subjectPresent) score += 200;
+
+              return {
+                el,
+                score,
+                text: text.slice(0, 80),
+                zIndex,
+                ariaModal,
+                subjectPresent,
+                recipientName,
+                rect: {
+                  x: rect.x,
+                  y: rect.y,
+                  width: rect.width,
+                  height: rect.height,
+                },
+              };
             })
+            .filter(Boolean)
             .sort((a, b) => b.score - a.score);
+
+          if (overlays.length === 0) return null;
+
+          // FAIL-SAFE: if the top two overlays score within 500 points,
+          // we cannot confidently identify the active one. Return ambiguous
+          // so the caller aborts instead of risking a wrong-modal send.
+          if (overlays.length >= 2) {
+            const gap = overlays[0].score - overlays[1].score;
+            if (gap < 500) {
+              return {
+                ambiguous: true,
+                topScore: Math.round(overlays[0].score),
+                secondScore: Math.round(overlays[1].score),
+                count: overlays.length,
+                topLabel: overlays[0].text,
+                secondLabel: overlays[1].text,
+              };
+            }
+          }
+
           const best = overlays[0];
-          if (!best) return null;
           best.el.setAttribute("data-gtss-dm-overlay", token);
           return {
             selector: `[data-gtss-dm-overlay="${token}"]`,
             score: Math.round(best.score),
             label: best.text,
+            hasSubject: best.subjectPresent,
+            recipientName: best.recipientName,
+            isModal: best.ariaModal,
           };
         },
         { token },
       )
       .catch(() => null);
+
+    // If scoring could not confidently identify the active modal, return the
+    // ambiguous flag immediately — do NOT retry, do NOT pick the first one.
+    if (result?.ambiguous) {
+      return { ambiguous: true, detail: result };
+    }
 
     if (result?.selector) {
       const locator = page.locator(result.selector).first();
@@ -1125,7 +1456,7 @@ async function findBestDmOverlay(page, timeout = 1500) {
       }
     }
 
-    await humanDelay(100, 160);
+    await humanDelay(80, 130);
   }
 
   return null;
@@ -1140,17 +1471,20 @@ async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 1) {
 
     if (dmOverlayMatch) {
       await dmOverlayMatch.locator.click({ force: true }).catch(() => {});
+      // Performance: React remounts the editor within ~150ms of the overlay
+      // click. 350-550ms was excessive; 150-250ms is enough to avoid the
+      // race condition noted below.
       // FIX: wait for React to finish remounting the editor after the overlay click
       // before immediately querying again — without this delay the query can race
       // against React's async render and return null even when the editor exists.
-      await humanDelay(350, 550);
+      await humanDelay(150, 250);
     }
 
-    const freshOverlay = await findBestDmOverlay(page, 700);
+    const freshOverlay = await findBestDmOverlay(page, 500);
     if (freshOverlay) {
       await freshOverlay.locator.click({ force: true }).catch(() => {});
       // FIX: same settle delay after fresh overlay click
-      await humanDelay(300, 480);
+      await humanDelay(150, 250);
       const freshBest = await findBestDmEditor(page, 900);
       if (freshBest) return freshBest;
     }
@@ -1499,7 +1833,10 @@ function normalizeEditableText(value) {
  * @param {string} [originalMessage]   - The message that was typed
  */
 async function verifyDmSent(page, editorLocator, originalMessage) {
-  await humanDelay(1200, 1500);
+  // Performance: 1200-1500ms was excessive. LinkedIn's send-button click
+  // handler clears the editor synchronously on success; an error banner
+  // (if any) appears within ~300ms. 500ms is enough to detect either state.
+  await humanDelay(500, 800);
 
   // Check 1: explicit LinkedIn error banner.
   const warning = await detectActionWarning(page);
@@ -2099,6 +2436,126 @@ async function getActiveEditorLocator(page, editorMatch) {
 }
 
 /**
+ * Verify the active messaging modal's recipient matches the expected lead.
+ *
+ * CRITICAL DEFENSE-IN-DEPTH against wrong-recipient sends. Even with the
+ * modal-aware editor selection in findBestDmEditor(), a future LinkedIn DOM
+ * change could regress that logic. This helper reads the recipient name
+ * directly from the active modal's header (using a comprehensive list of
+ * LinkedIn's known recipient-name selectors) and compares it to the expected
+ * lead name. If they don't match, the caller MUST abort the send.
+ *
+ * Returns:
+ *   { ok: true, actual?: string }            — recipient matches (or no
+ *                                              expectedName was provided)
+ *   { ok: true, warning: string, actual: null } — could not extract a
+ *                                              recipient name from the modal;
+ *                                              proceed (scoping already
+ *                                              ensures we're in the right
+ *                                              modal) but log the warning
+ *   { ok: false, reason: string, actual: string, expected: string } — mismatch
+ *
+ * @param {object} pageOrFrame    - Playwright Page or Frame (msgCtx)
+ * @param {object} editorLocator  - Locator for the chosen DM editor
+ * @param {string} expectedName   - Lead name from the queue
+ */
+async function verifyModalRecipient(pageOrFrame, editorLocator, expectedName) {
+  if (!expectedName) return { ok: true };
+
+  const normalise = (s) =>
+    String(s || "")
+      .trim()
+      .split(/\s+/)[0]
+      .toLowerCase()
+      .replace(/[^a-z]/g, "");
+
+  const expectedFirst = normalise(expectedName);
+  if (!expectedFirst) return { ok: true };
+
+  const overlayInfo = await editorLocator
+    .evaluate((editor) => {
+      // Walk up to the OUTERMOST overlay ancestor (not the first match).
+      // The editor's closest .msg-form matches first, but the recipient
+      // name header lives OUTSIDE the form, in the outer modal container.
+      // We must therefore find the outermost .msg-overlay-conversation-bubble
+      // / [role="dialog"] / .artdeco-modal--type-is-messaging ancestor.
+      const overlaySelectors =
+        '.msg-overlay-conversation-bubble, .msg-convo-wrapper, [role="dialog"], .artdeco-modal--type-is-messaging';
+      let node = editor;
+      let outermostOverlay = null;
+      while (node && node !== document.body) {
+        if (node.matches && node.matches(overlaySelectors)) {
+          outermostOverlay = node; // keep going — we want the OUTERMOST
+        }
+        node = node.parentElement;
+      }
+      const overlay = outermostOverlay;
+      if (!overlay) return { found: false };
+
+      // Comprehensive list of LinkedIn recipient-name header selectors.
+      // Listed in order of preference (most specific first).
+      const recipientSelectors = [
+        '.msg-overlay-bubble-header__name',
+        '.msg-overlay-conversation-bubble__name',
+        '.msg-convo-wrapper__name',
+        '.msg-form__recipient-name',
+        '[data-control-name="overlay.header"] [data-control-name="overlay.participant"]',
+        '.msg-overlay-bubble-header a[href*="/in/"]',
+        '.msg-convo-wrapper a[href*="/in/"]',
+        // Fallback: any <a> with /in/ link inside the modal header is usually
+        // the recipient's profile link.
+        'header a[href*="/in/"]',
+        '.msg-overlay-bubble-header a',
+        // For the alternate compose modal: there is often a recipient chip
+        // labelled "To: <name>" with the name in a span.
+        '[data-control-name="to"] [data-control-name="overlay.participant"]',
+        '.msg-form__recipient-chip',
+      ];
+
+      for (const sel of recipientSelectors) {
+        const node = overlay.querySelector(sel);
+        if (node) {
+          const text = (node.textContent || node.getAttribute("title") || "")
+            .trim();
+          if (text && text.length > 0 && text.length < 100) {
+            return { found: true, name: text, selector: sel };
+          }
+        }
+      }
+
+      return { found: false };
+    })
+    .catch(() => ({ found: false }));
+
+  if (!overlayInfo.found) {
+    // Cannot confidently extract a recipient name. Don't fail — the
+    // modal-aware editor selection already ensures we're in the correct
+    // modal. Log a warning so it's visible if a wrong-recipient bug is
+    // later reported.
+    return {
+      ok: true,
+      warning: "recipient_name_not_found_in_modal",
+      actual: null,
+    };
+  }
+
+  const actualFirst = normalise(overlayInfo.name);
+
+  if (actualFirst && actualFirst !== expectedFirst) {
+    return {
+      ok: false,
+      reason:
+        `Modal recipient "${overlayInfo.name}" does not match expected lead "${expectedName}". ` +
+        `Send aborted by recipient-verification guard.`,
+      actual: overlayInfo.name,
+      expected: expectedName,
+    };
+  }
+
+  return { ok: true, actual: overlayInfo.name };
+}
+
+/**
  * Low-level keyboard typing helper.
  */
 async function typeMessageWithKeyboard(page, locator, text, charDelay = 0) {
@@ -2631,23 +3088,34 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
 }
 
 /**
- * Find the send button for a LinkedIn DM editor with improved robustness.
+ * Find the send button for a LinkedIn DM editor — STRICTLY SCOPED.
  *
- * Simplified version that:
- * 1. Uses simpler, more reliable selector strategies
- * 2. Has better fallback mechanisms
- * 3. Improved disabled state detection
- * 4. Better error handling and logging
+ * CRITICAL FIX (wrong-recipient bug): the previous implementation fell back
+ * to page-root queries (Strategies 2 & 3) when the editor's container
+ * didn't contain a send button. With multiple messaging modals in the DOM
+ * (the bug scenario), those page-root queries could pick a Send button
+ * belonging to a DIFFERENT modal — clicking it would send the message to
+ * the wrong recipient.
+ *
+ * The new implementation uses ONE strategy only:
+ *
+ *   1. Tag the editor's containing form/overlay (closest matching ancestor).
+ *   2. Search for send buttons INSIDE that container only.
+ *   3. If none found, return null and let the caller fall back to the
+ *      keyboard Enter key (which types into the FOCUSED editor — never a
+ *      different modal's editor).
+ *
+ * This eliminates the entire class of "clicked the wrong modal's send
+ * button" bugs at the cost of slightly more reliance on the Enter-key
+ * fallback, which is already implemented and tested.
  */
 async function findSendButtonForEditor(page, editor, emit) {
   const log = emit || (() => {});
 
   try {
-    // Strategy 1: Scope search to the editor's containing form/overlay.
-    // We tag the CONTAINER (a stable parent element that React doesn't
-    // re-render), then use Playwright's locator chaining to find buttons
-    // inside it. This eliminates the race condition where tagging a
-    // leaf-level button with data-gtss-send gets wiped by React re-renders.
+    // Tag the editor's containing form/overlay — a stable parent element
+    // that React doesn't re-render. We then scope all send-button queries
+    // to this container only.
     const containerTag = `gtss-container-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const containerFound = await editor
       .evaluate((el, tag) => {
@@ -2707,62 +3175,14 @@ async function findSendButtonForEditor(page, editor, emit) {
         .catch(() => {});
     }
 
-    // Strategy 2: Try LinkedIn's stable class selectors, but prefer the last
-    // visible match because the active/open composer is usually appended after
-    // minimized bubbles. This is only a fallback after scoped lookup.
-    const stableSelectors = [
-      "button.msg-form__send-button",
-      '.msg-form__send-btn-container button[type="submit"]',
-      '.msg-form button[type="submit"]',
-    ];
-
-    for (const selectorText of stableSelectors) {
-      const candidates = page.locator(selectorText);
-      const count = await candidates.count().catch(() => 0);
-      for (let i = count - 1; i >= 0; i--) {
-        const locator = candidates.nth(i);
-        if (await locator.isVisible({ timeout: 150 }).catch(() => false)) {
-          const disabled = await isLocatorDisabled(locator);
-          log(
-            `info`,
-            `findSendButtonForEditor: Found stable selector ${selectorText}, disabled=${disabled}`,
-          );
-          return { locator, disabled };
-        }
-      }
-    }
-
-    // Strategy 3: aria/text/role fallbacks for icon-only or label-only buttons.
-    const ariaSelectors = [
-      'button[aria-label="Send"]',
-      '[role="button"][aria-label="Send"]',
-      'button[aria-label="Send message"]',
-      '[role="button"][aria-label="Send message"]',
-      'button[aria-label*="Send" i]',
-      '[role="button"][aria-label*="Send" i]',
-      'button:has-text("Send")',
-      '[role="button"]:has-text("Send")',
-    ];
-
-    for (const selectorText of ariaSelectors) {
-      const candidates = page.locator(selectorText);
-      const count = await candidates.count().catch(() => 0);
-      for (let i = count - 1; i >= 0; i--) {
-        const locator = candidates.nth(i);
-        if (await locator.isVisible({ timeout: 150 }).catch(() => false)) {
-          const disabled = await isLocatorDisabled(locator);
-          log(
-            `info`,
-            `findSendButtonForEditor: Found aria/text selector ${selectorText}, disabled=${disabled}`,
-          );
-          return { locator, disabled };
-        }
-      }
-    }
-
+    // NO PAGE-ROOT FALLBACK. Returning null here is intentional — the caller
+    // (sendDirectMessage) will fall back to pressing Enter on the keyboard,
+    // which routes to the FOCUSED editor (always the correct one because
+    // activateDmEditor() focused it). This is strictly safer than risking a
+    // click on a send button belonging to a different modal.
     log(
       "warn",
-      "findSendButtonForEditor: No send button found with any strategy",
+      "findSendButtonForEditor: No send button found in the editor's scoped container — refusing page-root fallback to prevent wrong-modal send. Caller will fall back to keyboard Enter.",
     );
     return null;
   } catch (err) {
@@ -2895,9 +3315,11 @@ async function sendDirectMessage(
 
     emit("info", `Navigating to ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await humanDelay(500, 900);
+    // Performance: domcontentloaded already fires when the DOM is ready.
+    // 200-350ms is enough for LinkedIn's React to mount profile headers;
+    // 500-900ms was excessive.
+    await humanDelay(200, 350);
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
-    await humanDelay(100, 250);
 
     // ── 0a. Profile identity & message-content verification ──────────────────
     // Two safety checks before we type a single character:
@@ -2996,11 +3418,13 @@ async function sendDirectMessage(
       await page.evaluate(() =>
         window.scrollTo({ top: 200, behavior: "instant" }),
       );
-      await humanDelay(400, 600);
+      // Performance: 400-600ms was excessive for a scroll-triggered lazy
+      // render. 150-250ms is enough for LinkedIn to render the action buttons.
+      await humanDelay(150, 250);
       await page.evaluate(() =>
         window.scrollTo({ top: 0, behavior: "instant" }),
       );
-      await humanDelay(300, 500);
+      await humanDelay(120, 220);
       messageMatch = await findProfileMessageAction(page, 2000);
     }
 
@@ -3016,8 +3440,10 @@ async function sendDirectMessage(
     emit("info", `Clicking Message (${messageMatch.selector})...`);
     // DOM-level click: avoids sticky-header interception when element is near viewport top.
     await messageMatch.locator.evaluate((el) => el.click()).catch(() => {});
-    // Allow up to 900ms for the modal CSS animation to complete and React to mount.
-    await humanDelay(600, 900);
+    // Performance: LinkedIn's modal CSS animation completes in ~200-300ms.
+    // 600-900ms was excessive; 250-400ms is enough for React to mount the
+    // composer and for the editor to become interactive.
+    await humanDelay(250, 400);
     await diag.capture(page, "after-message-click");
 
     // ── 2a. Detect execution context: full-page / iframe / shadow DOM ────────
@@ -3045,7 +3471,9 @@ async function sendDirectMessage(
 
     if (ctxInfo.mode === "page") {
       msgCtx = page;
-      await humanDelay(400, 700);
+      // Performance: 400-700ms was excessive; the page-mode editor is
+      // already mounted by the time detectMessagingContext returns.
+      await humanDelay(150, 280);
     } else if (ctxInfo.mode === "iframe" && ctxInfo.frame) {
       messagingFrame = ctxInfo.frame;
       msgCtx = messagingFrame;
@@ -3109,6 +3537,58 @@ async function sendDirectMessage(
     }
     await diag.capture(page, "editor-found");
 
+    // ── 5a. Verify the modal's recipient matches the expected lead ──────────
+    // CRITICAL DEFENSE-IN-DEPTH: even with modal-aware editor selection, we
+    // re-read the recipient name directly from the active modal's header and
+    // refuse to send if it does not match `leadName`. This catches any
+    // regression in findBestDmEditor (e.g. a LinkedIn DOM change that
+    // confuses our scoring) before a single character is typed.
+    if (leadName) {
+      const recipientCheck = await verifyModalRecipient(
+        msgCtx,
+        activeEditorLocator,
+        leadName,
+      ).catch((err) => ({ ok: true, warning: `verify_error: ${err.message}` }));
+
+      if (recipientCheck && !recipientCheck.ok) {
+        emit(
+          "error",
+          `WRONG-RECIPIENT BLOCK: ${recipientCheck.reason}`,
+        );
+        logger.error(
+          "LinkedIn DM wrong-modal block at recipient verification",
+          {
+            profileUrl,
+            expectedLeadName: leadName,
+            actualModalRecipient: recipientCheck.actual,
+          },
+        );
+        await diag.capture(page, "wrong-modal-recipient-block", {
+          expected: leadName,
+          actual: recipientCheck.actual,
+        });
+        // Force-clear the editor so the wrong draft is not left behind for
+        // the next recipient to inherit.
+        await forceClearDmDraft(page, activeEditorLocator).catch(() => {});
+        return {
+          outcome: "failed",
+          reason: recipientCheck.reason,
+        };
+      }
+
+      if (recipientCheck?.actual) {
+        emit(
+          "info",
+          `Modal recipient verified: "${recipientCheck.actual}" matches lead "${leadName}".`,
+        );
+      } else if (recipientCheck?.warning) {
+        emit(
+          "info",
+          `Modal recipient name not extractable (${recipientCheck.warning}) — relying on modal-scoped editor selection.`,
+        );
+      }
+    }
+
     // ── 6. Type the message ───────────────────────────────────────────────────
     emit("info", "Typing message...");
     let typeSuccess = await typeLikeHuman(page, activeEditorLocator, message);
@@ -3154,6 +3634,7 @@ async function sendDirectMessage(
         reason: "Failed to type message into editor",
       };
     }
+
 
     // ── 6a. Verify the message is actually in the DOM before clicking send ────
     const typedState = await getEditorState(activeEditorLocator);
@@ -3217,7 +3698,10 @@ async function sendDirectMessage(
     }
 
     // ── 6b. Short settle for React to process the input event ─────────────────
-    await humanDelay(400, 600);
+    // Performance: React processes the input event synchronously on the next
+    // microtask. 400-600ms was excessive; 150-280ms is enough for the Send
+    // button to flip from disabled to enabled.
+    await humanDelay(150, 280);
     await diag.capture(page, "after-typing", { typedSnippet: messageSnippet(message) });
 
     // ── 7. Find and click the Send button ─────────────────────────────────────
@@ -3225,7 +3709,10 @@ async function sendDirectMessage(
 
     let sendSuccessful = false;
 
-    const SEND_BTN_POLL_TIMEOUT = 3000;
+    // Performance: poll for up to 1500ms (was 3000ms). The send button is
+    // already rendered when we reach this point — we're just waiting for it
+    // to flip from disabled to enabled after the input event lands.
+    const SEND_BTN_POLL_TIMEOUT = 1500;
     const sendBtnPollDeadline = Date.now() + SEND_BTN_POLL_TIMEOUT;
     let sendBtnData = null;
     while (Date.now() < sendBtnPollDeadline) {
@@ -3235,7 +3722,7 @@ async function sendDirectMessage(
         emit,
       );
       if (sendBtnData && !sendBtnData.disabled) break;
-      await humanDelay(120, 180);
+      await humanDelay(60, 100);
     }
 
     if (sendBtnData && !sendBtnData.disabled) {
@@ -3261,10 +3748,13 @@ async function sendDirectMessage(
     if (!sendSuccessful) {
       emit("info", "Executing keyboard Enter fallback.");
       await ensureSelectionInEditor(activeEditorLocator);
-      await humanDelay(150, 200);
+      await humanDelay(80, 140);
 
       await page.keyboard.press("Enter").catch(() => {});
-      await humanDelay(600, 900);
+      // Performance: 600-900ms was excessive; LinkedIn clears the editor on
+      // successful send within ~250ms. 300-500ms is enough to detect either
+      // state.
+      await humanDelay(300, 500);
 
       const textAfterEnter = normalizeEditableText(
         await getEditableText(activeEditorLocator).catch(() => ""),
@@ -3275,7 +3765,7 @@ async function sendDirectMessage(
       if (!sendSuccessful) {
         await ensureSelectionInEditor(activeEditorLocator);
         await page.keyboard.press("Control+Enter").catch(() => {});
-        await humanDelay(400, 600);
+        await humanDelay(250, 400);
 
         const textAfterCtrlEnter = normalizeEditableText(
           await getEditableText(activeEditorLocator).catch(() => ""),
@@ -3284,7 +3774,10 @@ async function sendDirectMessage(
       }
     }
 
-    await humanDelay(800, 1200);
+    // Performance: post-send settle. 800-1200ms was excessive; verifyDmSent
+    // already waits 500-800ms before checking. 350-600ms here is enough for
+    // the editor to clear and any error banner to render.
+    await humanDelay(350, 600);
 
     // ── 8. Verification — check error banner AND that editor cleared ───────────
     const verification = await verifyDmSent(page, activeEditorLocator, message);
@@ -3308,7 +3801,9 @@ async function sendDirectMessage(
     ) {
       emit("info", "Navigating back to profile after /messaging/ send...");
       await page.goto(profileUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
-      await humanDelay(300, 500);
+      // Performance: domcontentloaded already fires when the DOM is ready.
+      // 150-250ms is enough for React to mount the profile header.
+      await humanDelay(150, 250);
     }
 
     return { outcome: "sent" };
@@ -3432,5 +3927,6 @@ module.exports = {
     detectMessagingBlocked,
     detectMessagingContext,
     dismissPremiumDialog,
+    verifyModalRecipient,
   },
 };

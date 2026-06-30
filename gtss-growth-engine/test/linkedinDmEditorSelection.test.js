@@ -842,3 +842,445 @@ test(
     }
   },
 );
+
+// ─── regression tests for the alternate-modal wrong-recipient bug ──────────
+//
+// The bug: when LinkedIn shows the alternate compose modal (Title/Subject +
+// Message body) WHILE a background conversation bubble is also in the DOM,
+// the old findBestDmEditor() scanned the page root, scored both editors by
+// identical heuristics, and could pick the background bubble's editor —
+// causing the message to be sent to the wrong recipient.
+//
+// The fix: findBestDmEditor() now calls findBestDmOverlay() FIRST, which uses
+// unambiguous identity signals (aria-modal, has-subject-input, z-index,
+// minimized-bubble rejection) to identify the active modal, then searches
+// for editors ONLY inside that modal. If two modals score too similarly,
+// it fails safe and returns null.
+
+// Helper: build HTML simulating the bug scenario — alternate compose modal
+// (with Title/Subject + Message body) alongside a background conversation
+// bubble from a previous chat. Both editors have aria-label="Write a message".
+function alternateModalAndBackgroundBubbleHtml() {
+  return `
+    <main></main>
+
+    <!-- Background conversation bubble from a previous chat. Contains its own
+         editor with the same aria-label as the active modal's editor. The old
+         code would pick this one because it appears first in DOM order and
+         has a smaller rect.top. -->
+    <section
+      class="msg-overlay-conversation-bubble"
+      role="dialog"
+      aria-expanded="true"
+      style="position:fixed;left:72px;top:480px;width:502px;height:340px;display:block;visibility:visible;opacity:1;z-index:10;"
+    >
+      <header class="msg-overlay-bubble-header">
+        <a href="/in/wrong-recipient/">Wrong Recipient</a>
+        <button aria-label="Close">x</button>
+      </header>
+      <form class="msg-form" style="display:block;margin-top:16px;">
+        <div
+          class="msg-form__contenteditable"
+          contenteditable="true"
+          role="textbox"
+          aria-label="Write a message"
+          data-placeholder="Write a message..."
+          style="display:block;width:440px;height:160px;border:1px solid #ddd;pointer-events:auto;"
+        ></div>
+        <button class="msg-form__send-button" aria-label="Send" type="submit">Send</button>
+      </form>
+    </section>
+
+    <!-- Active alternate compose modal — has BOTH a Title/Subject input AND
+         a message body editor. This is the modal the user just opened by
+         clicking "Message" on the target profile. -->
+    <section
+      class="msg-overlay-conversation-bubble artdeco-modal--type-is-messaging"
+      role="dialog"
+      aria-modal="true"
+      aria-expanded="true"
+      style="position:fixed;left:200px;top:120px;width:560px;height:540px;display:block;visibility:visible;opacity:1;z-index:1000;"
+    >
+      <h2>New message</h2>
+      <input
+        aria-label="Subject"
+        placeholder="Subject"
+        role="textbox"
+        style="display:block;width:520px;height:32px;"
+      />
+      <form class="msg-form" style="display:block;margin-top:16px;">
+        <div
+          id="active-modal-editor"
+          class="msg-form__contenteditable"
+          contenteditable="true"
+          role="textbox"
+          aria-label="Write a message"
+          data-placeholder="Write a message..."
+          style="display:block;width:520px;height:240px;border:1px solid #ddd;pointer-events:auto;"
+        ></div>
+        <button id="active-modal-send" class="msg-form__send-button" aria-label="Send" type="submit">Send</button>
+      </form>
+    </section>
+  `;
+}
+
+test(
+  "findBestDmEditor picks the alternate compose modal's editor over a background conversation bubble (wrong-recipient regression)",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({
+      viewport: { width: 1366, height: 768 },
+    });
+
+    try {
+      await page.setContent(alternateModalAndBackgroundBubbleHtml());
+      process.env.TEST_SPEEDUP = "true";
+
+      const editor = await __private.findBestDmEditor(page, 1500);
+      assert.ok(editor, "an editor must be found");
+
+      const editorId = await editor.locator.getAttribute("id");
+      assert.equal(
+        editorId,
+        "active-modal-editor",
+        "must pick the active compose modal's editor, NOT the background conversation bubble's editor",
+      );
+
+      // Sanity: the chosen editor must be inside the modal that has the
+      // Subject input (i.e. the alternate compose modal).
+      const hasSubjectSibling = await editor.locator.evaluate((el) => {
+        const overlay = el.closest('.msg-overlay-conversation-bubble, [role="dialog"]');
+        if (!overlay) return false;
+        return Boolean(
+          overlay.querySelector(
+            'input[aria-label*="subject" i], input[placeholder*="subject" i]',
+          ),
+        );
+      });
+      assert.equal(
+        hasSubjectSibling,
+        true,
+        "chosen editor must live inside the modal that has the Subject input",
+      );
+    } finally {
+      delete process.env.TEST_SPEEDUP;
+      await browser.close();
+    }
+  },
+);
+
+test(
+  "findBestDmEditor never picks an editor from a minimized conversation bubble",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({
+      viewport: { width: 1366, height: 768 },
+    });
+
+    try {
+      // Two bubbles: the first is minimized (aria-expanded="false", small
+      // height), the second is the active compose modal. The minimized
+      // bubble's editor technically exists in the DOM but must NEVER be
+      // picked.
+      await page.setContent(`
+        <main></main>
+        <section
+          class="msg-overlay-conversation-bubble"
+          role="dialog"
+          aria-expanded="false"
+          style="position:fixed;left:72px;top:600px;width:502px;height:80px;display:block;visibility:visible;opacity:1;"
+        >
+          <header class="msg-overlay-bubble-header">
+            <a href="/in/minimized-recipient/">Minimized Recipient</a>
+            <button aria-label="Close">x</button>
+          </header>
+          <form class="msg-form" style="display:none;">
+            <div
+              id="minimized-editor"
+              class="msg-form__contenteditable"
+              contenteditable="true"
+              aria-label="Write a message"
+              style="display:block;width:440px;height:160px;"
+            ></div>
+          </form>
+        </section>
+        <section
+          class="msg-overlay-conversation-bubble"
+          role="dialog"
+          aria-expanded="true"
+          style="position:fixed;left:200px;top:120px;width:560px;height:540px;display:block;visibility:visible;opacity:1;z-index:100;"
+        >
+          <h2>New message</h2>
+          <input aria-label="Subject" placeholder="Subject" style="display:block;width:520px;height:32px;" />
+          <form class="msg-form">
+            <div
+              id="active-editor"
+              class="msg-form__contenteditable"
+              contenteditable="true"
+              aria-label="Write a message"
+              style="display:block;width:520px;height:240px;"
+            ></div>
+            <button class="msg-form__send-button" type="submit">Send</button>
+          </form>
+        </section>
+      `);
+      process.env.TEST_SPEEDUP = "true";
+
+      const editor = await __private.findBestDmEditor(page, 1500);
+      assert.ok(editor, "an editor must be found");
+
+      const editorId = await editor.locator.getAttribute("id");
+      assert.equal(
+        editorId,
+        "active-editor",
+        "must pick the active modal's editor, never the minimized bubble's editor",
+      );
+    } finally {
+      delete process.env.TEST_SPEEDUP;
+      await browser.close();
+    }
+  },
+);
+
+test(
+  "findBestDmEditor fails safe (returns null) when two equally-prominent chat bubbles are present and no compose modal",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({
+      viewport: { width: 1366, height: 768 },
+    });
+
+    try {
+      // Two identical open chat bubbles — no compose modal, no aria-modal,
+      // no subject input, same z-index, same size. Scoring cannot confidently
+      // identify the active one. The new code MUST fail safe.
+      await page.setContent(`
+        <main></main>
+        <section
+          class="msg-overlay-conversation-bubble"
+          role="dialog"
+          aria-expanded="true"
+          style="position:fixed;left:72px;top:300px;width:502px;height:340px;display:block;visibility:visible;opacity:1;z-index:10;"
+        >
+          <header class="msg-overlay-bubble-header">
+            <a href="/in/first-recipient/">First Recipient</a>
+          </header>
+          <form class="msg-form">
+            <div
+              id="first-editor"
+              class="msg-form__contenteditable"
+              contenteditable="true"
+              aria-label="Write a message"
+              style="display:block;width:440px;height:160px;"
+            ></div>
+            <button class="msg-form__send-button" type="submit">Send</button>
+          </form>
+        </section>
+        <section
+          class="msg-overlay-conversation-bubble"
+          role="dialog"
+          aria-expanded="true"
+          style="position:fixed;left:72px;top:300px;width:502px;height:340px;display:block;visibility:visible;opacity:1;z-index:10;"
+        >
+          <header class="msg-overlay-bubble-header">
+            <a href="/in/second-recipient/">Second Recipient</a>
+          </header>
+          <form class="msg-form">
+            <div
+              id="second-editor"
+              class="msg-form__contenteditable"
+              contenteditable="true"
+              aria-label="Write a message"
+              style="display:block;width:440px;height:160px;"
+            ></div>
+            <button class="msg-form__send-button" type="submit">Send</button>
+          </form>
+        </section>
+      `);
+      process.env.TEST_SPEEDUP = "true";
+
+      const editor = await __private.findBestDmEditor(page, 1200);
+      assert.equal(
+        editor,
+        null,
+        "findBestDmEditor MUST return null when two equally-prominent chat bubbles are present — never guess",
+      );
+    } finally {
+      delete process.env.TEST_SPEEDUP;
+      await browser.close();
+    }
+  },
+);
+
+test(
+  "findSendButtonForEditor returns null when the editor's container has no send button — no page-root fallback (wrong-recipient regression)",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({
+      viewport: { width: 1366, height: 768 },
+    });
+
+    try {
+      // Two modals. The "wrong" modal has a Send button. The active modal's
+      // container has NO send button (simulating a UI where the send button
+      // is elsewhere). The OLD code would fall back to page-root query and
+      // return the WRONG modal's send button — clicking it would send our
+      // message to the wrong recipient. The new code MUST return null.
+      await page.setContent(`
+        <main></main>
+        <section
+          class="msg-overlay-conversation-bubble"
+          role="dialog"
+          aria-expanded="true"
+          style="position:fixed;left:72px;top:400px;width:502px;height:340px;display:block;visibility:visible;opacity:1;z-index:10;"
+        >
+          <header class="msg-overlay-bubble-header">
+            <a href="/in/wrong-recipient/">Wrong Recipient</a>
+          </header>
+          <form class="msg-form">
+            <div class="msg-form__contenteditable" contenteditable="true" aria-label="Write a message" style="display:block;width:440px;height:160px;"></div>
+            <button id="wrong-send" class="msg-form__send-button" aria-label="Send" type="submit">Send</button>
+          </form>
+        </section>
+        <section
+          class="msg-overlay-conversation-bubble"
+          role="dialog"
+          aria-modal="true"
+          aria-expanded="true"
+          style="position:fixed;left:200px;top:120px;width:560px;height:540px;display:block;visibility:visible;opacity:1;z-index:1000;"
+        >
+          <h2>New message</h2>
+          <input aria-label="Subject" placeholder="Subject" style="display:block;width:520px;height:32px;" />
+          <form class="msg-form">
+            <div id="active-editor-no-send" class="msg-form__contenteditable" contenteditable="true" aria-label="Write a message" style="display:block;width:520px;height:240px;"></div>
+            <!-- NOTE: NO send button inside this form. -->
+          </form>
+        </section>
+      `);
+      process.env.TEST_SPEEDUP = "true";
+
+      const editor = page.locator("#active-editor-no-send");
+      const send = await __private.findSendButtonForEditor(page, editor);
+
+      assert.equal(
+        send,
+        null,
+        "must NOT fall back to page-root query — doing so could return the wrong modal's send button",
+      );
+    } finally {
+      delete process.env.TEST_SPEEDUP;
+      await browser.close();
+    }
+  },
+);
+
+test(
+  "verifyModalRecipient blocks send when the modal's recipient name does not match the expected lead",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({
+      viewport: { width: 1366, height: 768 },
+    });
+
+    try {
+      await page.setContent(`
+        <main></main>
+        <section
+          class="msg-overlay-conversation-bubble"
+          role="dialog"
+          aria-modal="true"
+          style="position:fixed;left:200px;top:120px;width:560px;height:540px;display:block;visibility:visible;opacity:1;"
+        >
+          <header class="msg-overlay-bubble-header">
+            <a href="/in/wrongperson/" class="msg-overlay-bubble-header__name">Letrise Johnson</a>
+            <button aria-label="Close">x</button>
+          </header>
+          <form class="msg-form">
+            <div
+              id="the-editor"
+              class="msg-form__contenteditable"
+              contenteditable="true"
+              aria-label="Write a message"
+              style="display:block;width:520px;height:240px;"
+            ></div>
+          </form>
+        </section>
+      `);
+      process.env.TEST_SPEEDUP = "true";
+
+      const editor = page.locator("#the-editor");
+
+      // Mismatch case: modal says "Letrise", expected lead is "Mike".
+      const result = await __private.verifyModalRecipient(page, editor, "Mike Peterson");
+      assert.equal(result.ok, false, "must report ok=false when modal recipient does not match expected lead");
+      assert.ok(result.reason, "must provide a reason");
+      assert.match(result.actual, /letrise/i);
+      assert.match(result.expected, /mike/i);
+
+      // Match case: modal says "Letrise", expected lead is "Letrise".
+      const okResult = await __private.verifyModalRecipient(page, editor, "Letrise Johnson");
+      assert.equal(okResult.ok, true, "must report ok=true when modal recipient matches expected lead");
+      assert.match(okResult.actual, /letrise/i);
+
+      // No expected name → always ok (defensive).
+      const nullResult = await __private.verifyModalRecipient(page, editor, null);
+      assert.equal(nullResult.ok, true, "must report ok=true when no expected name is provided");
+    } finally {
+      delete process.env.TEST_SPEEDUP;
+      await browser.close();
+    }
+  },
+);
+
+test(
+  "verifyModalRecipient returns ok=true (with warning) when the modal has no extractable recipient name",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({
+      viewport: { width: 1366, height: 768 },
+    });
+
+    try {
+      // Modal with NO recognizable recipient-name header element. The
+      // helper must NOT fail — the modal-aware editor selection already
+      // ensures we're in the correct modal. It should return ok=true with
+      // a warning so the operator knows the verification was inconclusive.
+      await page.setContent(`
+        <main></main>
+        <section
+          class="msg-overlay-conversation-bubble"
+          role="dialog"
+          aria-modal="true"
+          style="position:fixed;left:200px;top:120px;width:560px;height:540px;display:block;visibility:visible;opacity:1;"
+        >
+          <h2>New message</h2>
+          <input aria-label="Subject" placeholder="Subject" style="display:block;width:520px;height:32px;" />
+          <form class="msg-form">
+            <div
+              id="the-editor"
+              class="msg-form__contenteditable"
+              contenteditable="true"
+              aria-label="Write a message"
+              style="display:block;width:520px;height:240px;"
+            ></div>
+          </form>
+        </section>
+      `);
+      process.env.TEST_SPEEDUP = "true";
+
+      const editor = page.locator("#the-editor");
+      const result = await __private.verifyModalRecipient(page, editor, "Mike Peterson");
+      assert.equal(result.ok, true, "must NOT block send when recipient name cannot be extracted (modal-aware editor selection already ensures correct modal)");
+      assert.ok(result.warning, "must include a warning explaining the verification was inconclusive");
+    } finally {
+      delete process.env.TEST_SPEEDUP;
+      await browser.close();
+    }
+  },
+);
