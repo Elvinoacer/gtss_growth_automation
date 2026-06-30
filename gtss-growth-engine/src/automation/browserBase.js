@@ -190,6 +190,81 @@ function humanDelay(min = 3000, max = 15000) {
 }
 
 /**
+ * Close stray browser tabs that match unwanted URL patterns.
+ *
+ * LinkedIn's own JS can auto-redirect tabs to /talent/job-posting-redirect/
+ * when a Premium upsell dialog is dismissed (or when the dialog stays open
+ * after we return premium_required). These stray tabs:
+ *   - Pollute the shared CDP context for future runs
+ *   - Cause the "two tabs active, one is /job-posting" symptom
+ *   - Can intercept focus events from the automation tab
+ *
+ * This function enumerates all pages in the context and closes any whose URL
+ * matches unwanted patterns. It NEVER closes the first tab (index 0), which
+ * is typically the user's manually-opened tab.
+ *
+ * URL patterns we close:
+ *   - /job-posting
+ *   - /talent/job-posting-redirect
+ *   - /jobs/view/
+ *   - /jobs/ (job search page, often spawns popups)
+ *   - /messaging/compose (leftover DM composer tab from a previous run)
+ *   - /messaging/thread (leftover thread tab)
+ *
+ * @param {object} context - Playwright browser context
+ * @param {string} _platform - Platform name (unused, reserved for future per-platform rules)
+ * @returns {Promise<number>} Number of tabs closed
+ */
+async function closeStrayTabs(context, _platform) {
+  let closedCount = 0;
+  let pages;
+  try {
+    pages = context.pages();
+  } catch (_) {
+    return 0;
+  }
+
+  // URL patterns that indicate a stray tab we should close.
+  const strayPatterns = [
+    "/job-posting",
+    "/talent/job-posting-redirect",
+    "/jobs/view/",
+    "/jobs/",
+    "/messaging/compose",
+    "/messaging/thread",
+  ];
+
+  // Never close the first tab — it's typically the user's manually-opened tab.
+  for (let i = 1; i < pages.length; i++) {
+    const page = pages[i];
+    if (!page || page.isClosed()) continue;
+    let url = "";
+    try {
+      url = String(page.url() || "");
+    } catch (_) {
+      continue;
+    }
+    if (!url || url === "about:blank") continue;
+
+    const isStray = strayPatterns.some((p) => url.includes(p));
+    if (!isStray) continue;
+
+    try {
+      logger.info(
+        "BROWSER",
+        `Closing stray tab: ${url.slice(0, 120)}`,
+      );
+      await page.close().catch(() => {});
+      closedCount++;
+    } catch (_) {
+      // Best-effort cleanup — ignore errors.
+    }
+  }
+
+  return closedCount;
+}
+
+/**
  * Type a string character by character with human-like delays into a locator or selector.
  */
 async function humanTypeText(page, locatorOrSelector, text) {
@@ -918,9 +993,54 @@ async function createBrowser(platform, options = {}) {
         await configureInstagramContext(context);
       }
 
-      // Always open a NEW tab for automation — never hijack existing tabs
-      const page = await context.newPage();
-      logger.info("BROWSER", `Opened new CDP tab for ${platform} automation`);
+      // ── Stray-tab cleanup ────────────────────────────────────────────────
+      // The user's real Chrome may contain leftover tabs from previous runs,
+      // browser popups, or LinkedIn's own auto-redirects (e.g. to
+      // /talent/job-posting-redirect/ when a Premium upsell dialog is
+      // dismissed). These stray tabs pollute the context and cause the
+      // "two tabs active, one is /job-posting" symptom.
+      //
+      // We proactively close any tab whose URL matches patterns we never want
+      // to operate on, EXCEPT the very first tab (index 0) which is usually
+      // the user's manually-opened tab and should never be closed by us.
+      await closeStrayTabs(context, platform);
+
+      // ── Tab reuse for LinkedIn ───────────────────────────────────────────
+      // Previous code unconditionally opened a NEW tab on every CDP attach,
+      // which over a long session accumulated many LinkedIn tabs (one per run).
+      // Now we mirror the Instagram path: reuse an existing linkedin.com tab
+      // if one is open and not closed, otherwise open a new one. This keeps
+      // the user's Chrome tab count stable across runs.
+      let page = null;
+      if (platform === "linkedin") {
+        const existingPages = context.pages().filter((candidate) => {
+          if (!candidate || candidate.isClosed()) return false;
+          const url = String(candidate.url?.() || candidate.url || "").toLowerCase();
+          if (!url || url === "about:blank") return false;
+          // Only consider LinkedIn tabs — never grab a /job-posting tab
+          // (closeStrayTabs should have already removed them, but be defensive).
+          if (!url.includes("linkedin.com")) return false;
+          if (
+            url.includes("/job-posting") ||
+            url.includes("/talent/job-posting-redirect") ||
+            url.includes("/jobs/view") ||
+            url.includes("/jobs/")
+          ) {
+            return false;
+          }
+          return true;
+        });
+        page = existingPages[0] || null;
+        if (page) {
+          logger.info("BROWSER", `Reusing existing LinkedIn tab: ${page.url()}`);
+          await page.bringToFront().catch(() => {});
+        }
+      }
+
+      if (!page) {
+        page = await context.newPage();
+        logger.info("BROWSER", `Opened new CDP tab for ${platform} automation`);
+      }
 
       page.once("close", () => releaseBrowserLock(lock));
 
@@ -1775,6 +1895,7 @@ module.exports = {
   releaseBrowserLock,
   closeAllBrowsers,
   normalizeHeadless,
+  closeStrayTabs,
 
   // Instagram Extensions
   firstVisible,

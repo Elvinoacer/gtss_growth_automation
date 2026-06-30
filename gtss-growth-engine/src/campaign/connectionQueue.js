@@ -13,6 +13,21 @@ const platformAdapter = require("./platformAdapter");
 const platformPolicies = require("../config/platformPolicies");
 const limits = require("../config/limits");
 const { getContext } = require("../services/contextService");
+
+// ── GLOBAL STOP FLAG (shared with executor.js via stopConnectionQueue()) ──────
+// Mirrors dmQueue.js — lets the automation page's stop button halt the cron
+// connection queue too.
+let CONNECTION_QUEUE_STOPPED = false;
+
+function stopConnectionQueue() {
+  CONNECTION_QUEUE_STOPPED = true;
+}
+function resetConnectionQueueStopFlag() {
+  CONNECTION_QUEUE_STOPPED = false;
+}
+function isConnectionQueueStopped() {
+  return CONNECTION_QUEUE_STOPPED;
+}
 const {
   calculateBackoffDelay,
   recordCampaignEvent,
@@ -63,8 +78,22 @@ function isWithinActiveWindow(policy) {
  *
  * @param {number} ms - Milliseconds to sleep
  */
+/**
+ * Interruptible sleep. Resolves early if the global CONNECTION_QUEUE_STOPPED
+ * flag is set, so the stop button on the automation page can halt the
+ * cron-triggered connection queue without waiting for the full cooldown.
+ *
+ * @param {number} ms - Milliseconds to sleep
+ */
 async function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  const stepMs = 500;
+  let elapsed = 0;
+  while (elapsed < ms) {
+    if (CONNECTION_QUEUE_STOPPED) return;
+    const waitMs = Math.min(stepMs, ms - elapsed);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    elapsed += waitMs;
+  }
 }
 
 /**
@@ -118,6 +147,10 @@ function promoteRelatedDmJob(txDb, job, policy, forceImmediate = false) {
  * @returns {Promise<object>} Analytical report of processed batch items
  */
 async function processConnectionQueue(page, options = {}) {
+  // Reset the stop flag at the START of each run so a previous stop doesn't
+  // permanently disable future cron runs.
+  resetConnectionQueueStopFlag();
+
   const report = {
     processed: 0,
     success: 0,
@@ -181,6 +214,15 @@ async function processConnectionQueue(page, options = {}) {
   );
 
   for (const job of eligibleJobs) {
+    if (CONNECTION_QUEUE_STOPPED) {
+      queueLog(
+        "info",
+        "connection_queue",
+        "SYSTEM",
+        "Connection queue stopped by user (stop button on automation page).",
+      );
+      break;
+    }
     // Isolated nested exception handling to keep queue running no matter what
     try {
       const normPlatform = String(job.platform).toLowerCase().trim();
@@ -674,4 +716,7 @@ async function processConnectionQueue(page, options = {}) {
 
 module.exports = {
   processConnectionQueue,
+  stopConnectionQueue,
+  resetConnectionQueueStopFlag,
+  isConnectionQueueStopped,
 };

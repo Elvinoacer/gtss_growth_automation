@@ -815,6 +815,10 @@ async function processActionQueue(jobId, sseRes, options = {}) {
     let successes = 0;
     let failures = 0;
     let skipped = 0;
+    // Consecutive failure counter for circuit breaker. Reset on any success
+    // or non-failure outcome (skipped, premium_required, etc.). If this hits
+    // MAX_CONSECUTIVE_FAILURES (defined inside the loop), the run aborts.
+    let consecutiveFailures = 0;
     const maxDmsPerRun = options.maxDmsPerRun;
     const maxConnectionsPerRun = options.maxConnectionsPerRun;
     let dmsSentThisRun = 0;
@@ -1051,11 +1055,65 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           `Running ${platform} ${actionType}.`,
           { ...eventBase, fingerprint: reservation.fingerprint },
         );
-        const outcomeObj = await runAutomationAction(
-          action,
-          browserState,
-          emit,
-        );
+
+        // ── In-loop retry with circuit breaker ──────────────────────────────
+        //
+        // Previously, any failure (including transient ones like "React
+        // remounted the editor mid-typing") would immediately record the
+        // outcome and move on, snoozing the message for 1-3 hours. Now we
+        // retry the action up to MAX_INLOOP_RETRIES times with a short
+        // interruptible delay between attempts. Only retryable outcomes are
+        // retried — premium_required, not_connected, already_connected,
+        // session_required, no_posts, and skipped are NOT retried.
+        //
+        // We also track consecutive failures across profiles. If we hit
+        // MAX_CONSECUTIVE_FAILURES in a row, we abort the whole run — that's
+        // a strong signal something systemic is wrong (session expired,
+        // LinkedIn changed selectors, captcha wall, etc.) and continuing
+        // would just burn time on doomed attempts.
+        const MAX_INLOOP_RETRIES = 2; // 1 initial + 2 retries = 3 attempts max
+        const MAX_CONSECUTIVE_FAILURES = 5;
+        const NON_RETRYABLE_OUTCOMES = new Set([
+          "sent",
+          "premium_required",
+          "not_connected",
+          "already_connected",
+          "session_required",
+          "no_posts",
+          "skipped",
+        ]);
+
+        let outcomeObj = null;
+        for (let attempt = 1; attempt <= MAX_INLOOP_RETRIES + 1; attempt++) {
+          if (STOP_FLAGS.get(jobId)) {
+            outcomeObj = { outcome: "skipped", reason: "Stopped by user" };
+            break;
+          }
+          outcomeObj = await runAutomationAction(
+            action,
+            browserState,
+            emit,
+          );
+
+          // Success or non-retryable → done.
+          if (
+            !outcomeObj ||
+            outcomeObj.outcome === "sent" ||
+            NON_RETRYABLE_OUTCOMES.has(outcomeObj.outcome)
+          ) {
+            break;
+          }
+
+          // Retryable failure — try again if we have attempts left.
+          if (attempt <= MAX_INLOOP_RETRIES) {
+            emit(
+              "warn",
+              `Attempt ${attempt} failed (${outcomeObj.reason || outcomeObj.outcome}). Retrying (${attempt}/${MAX_INLOOP_RETRIES})...`,
+            );
+            await interruptibleDelay(2000, 4000, jobId);
+            if (STOP_FLAGS.get(jobId)) break;
+          }
+        }
 
         // Post-action session check
         emitState(
@@ -1097,6 +1155,7 @@ async function processActionQueue(jobId, sseRes, options = {}) {
 
         if (outcomeObj.outcome === "sent") {
           successes++;
+          consecutiveFailures = 0; // reset circuit breaker on success
           if (actionType === "dm" || actionType === "instagram_dm") {
             dmsSentThisRun++;
           }
@@ -1115,9 +1174,14 @@ async function processActionQueue(jobId, sseRes, options = {}) {
         ) {
           releaseActionFingerprint(reservation.fingerprint);
           skipped++;
+          // premium_required / not_connected / already_connected are NOT
+          // failures of our automation — they're LinkedIn saying "this lead
+          // can't be DM'd". Don't let them count toward the circuit breaker.
+          consecutiveFailures = 0;
         } else {
           releaseActionFingerprint(reservation.fingerprint);
           failures++;
+          consecutiveFailures++;
         }
       } catch (err) {
         logger.error("AUTOMATION", `Error on action ${action.message_id}`, err);
@@ -1140,11 +1204,51 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           reason: err.message,
         });
         failures++;
+        consecutiveFailures++;
       }
+
+      // ── Circuit breaker: too many consecutive failures ─────────────────────
+      // If we hit MAX_CONSECUTIVE_FAILURES in a row, abort the whole run —
+      // something systemic is wrong (session expired, selectors changed,
+      // captcha wall) and continuing would just burn time on doomed attempts.
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES && !STOP_FLAGS.get(jobId)) {
+        emit(
+          "error",
+          `Aborting run: ${consecutiveFailures} consecutive failures (circuit breaker). ` +
+            `Last outcome: ${outcomeObj?.outcome || "exception"} — ${outcomeObj?.reason || ""}. ` +
+            `Check that your LinkedIn session is still valid and that LinkedIn hasn't changed its UI.`,
+        );
+        emitState(
+          emit,
+          jobId,
+          "MANUAL_INTERVENTION_REQUIRED",
+          `Run aborted after ${consecutiveFailures} consecutive failures.`,
+          { ...eventBase, consecutiveFailures },
+        );
+        break;
+      }
+
+      // ── Cooldown between profiles ──────────────────────────────────────────
+      // SKIP the cooldown entirely for premium_required / not_connected /
+      // already_connected / no_posts — these are not "actions we just took"
+      // (no DM was sent, no connection request was submitted), so there's
+      // nothing to cool down from. The user explicitly asked for this so we
+      // don't waste 60-180s on every premium-required profile.
+      const SKIP_COOLDOWN_OUTCOMES = new Set([
+        "premium_required",
+        "not_connected",
+        "already_connected",
+        "no_posts",
+        "skipped",
+      ]);
+      const shouldSkipCooldown = outcomeObj
+        ? SKIP_COOLDOWN_OUTCOMES.has(outcomeObj.outcome)
+        : false;
 
       if (
         runnableQueue.indexOf(action) < runnableQueue.length - 1 &&
-        !STOP_FLAGS.get(jobId)
+        !STOP_FLAGS.get(jobId) &&
+        !shouldSkipCooldown
       ) {
         const delay = getActionDelayRange(platform, actionType);
         emitState(emit, jobId, "COOLDOWN", "Cooling down before next action.", {
@@ -1157,7 +1261,27 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           `Cooling down before next action (${Math.round(delay.min / 1000)}-${Math.round(delay.max / 1000)}s).`,
         );
         await interruptibleDelay(delay.min, delay.max, jobId);
+      } else if (shouldSkipCooldown && !STOP_FLAGS.get(jobId)) {
+        // Brief pause only — enough for the browser to settle, not enough to
+        // waste time. Lets us move to the next profile almost immediately.
+        emit(
+          "info",
+          `Skipping cooldown for ${outcomeObj.outcome} — moving to next profile.`,
+        );
+        await interruptibleDelay(800, 1500, jobId);
       }
+
+      // ── Stray-tab cleanup after every profile ─────────────────────────────
+      // LinkedIn may have spawned a /job-posting tab during this action (e.g.
+      // by auto-redirecting after a premium dialog). Close any stray tabs
+      // before moving to the next profile so they don't accumulate.
+      try {
+        const cached = browserCache.get(platform);
+        if (cached && cached.context && typeof cached.context.pages === "function") {
+          const { closeStrayTabs } = require("./browserBase");
+          await closeStrayTabs(cached.context, platform);
+        }
+      } catch (_) {}
     }
 
     // Close all browsers only after the ENTIRE run is done

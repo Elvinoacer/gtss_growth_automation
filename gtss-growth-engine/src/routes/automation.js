@@ -5,8 +5,11 @@ const { getDb, getDailyLimits } = require("../db/database");
 const {
   enqueueActionQueue,
   stopJob,
+  stopAllJobs,
   getQueuedActions,
 } = require("../automation/executor");
+const { stopDmQueue } = require("../campaign/dmQueue");
+const { stopConnectionQueue } = require("../campaign/connectionQueue");
 const { getPlatformKeys } = require("../services/platformCatalog");
 const {
   createActionFingerprint,
@@ -245,10 +248,31 @@ router.get("/api/automation/stream/:jobId", (req, res) => {
 });
 
 // Stop a running job
+//
+// Signals stop to BOTH runners:
+//   1. Executor (Runner A — automation-page-triggered queue) via STOP_FLAGS
+//   2. Campaign DM queue (Runner B — cron-triggered) via stopDmQueue()
+//   3. Campaign connection queue (Runner B — cron-triggered) via stopConnectionQueue()
+//
+// The cron runners previously had no stop mechanism at all — once a cron tick
+// started processDmQueue, it ran to completion. Now they check their stop
+// flag between profiles and inside the cooldown sleep, so the stop button on
+// the automation page actually halts them.
 router.post("/api/automation/stop/:jobId", (req, res) => {
   const { jobId } = req.params;
   const stopped = stopJob(jobId);
+  // Also halt any in-flight cron-triggered queue runs.
+  try { stopDmQueue(); } catch (_) {}
+  try { stopConnectionQueue(); } catch (_) {}
   res.json({ success: true, stopped });
+});
+
+// Stop ALL running queues (no jobId required) — useful as a panic button.
+router.post("/api/automation/stop-all", (_req, res) => {
+  try { stopAllJobs(); } catch (_) {}
+  try { stopDmQueue(); } catch (_) {}
+  try { stopConnectionQueue(); } catch (_) {}
+  res.json({ success: true, stopped: true });
 });
 
 // Skip an action

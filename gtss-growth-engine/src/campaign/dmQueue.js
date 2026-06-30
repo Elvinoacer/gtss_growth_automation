@@ -21,6 +21,39 @@ const {
 } = require("./utils/campaignUtils");
 const { sendNotification } = require("../services/notificationService");
 
+// ── GLOBAL STOP FLAG (shared with executor.js via stopDmQueue()) ──────────────
+//
+// The executor's STOP_FLAGS only stops the automation-page-triggered queue
+// (Runner A). The campaign cron-triggered DM queue (Runner B) had NO stop
+// mechanism at all — once a cron tick started processDmQueue, it ran to
+// completion. This global flag lets the automation page's stop button halt
+// the cron queue too: stopDmQueue() sets this to true, and the loop checks
+// it between profiles and inside the cooldown sleep.
+let DM_QUEUE_STOPPED = false;
+
+/**
+ * Halt the in-flight DM queue (if any). Called by the automation route's
+ * stop endpoint. Idempotent — safe to call multiple times.
+ */
+function stopDmQueue() {
+  DM_QUEUE_STOPPED = true;
+}
+
+/**
+ * Reset the stop flag. Called at the START of each processDmQueue run so a
+ * previous stop doesn't permanently disable future cron runs.
+ */
+function resetDmQueueStopFlag() {
+  DM_QUEUE_STOPPED = false;
+}
+
+/**
+ * Check whether the queue has been stopped.
+ */
+function isDmQueueStopped() {
+  return DM_QUEUE_STOPPED;
+}
+
 // ── SCHEMA AUTO-UPGRADE (DEFENSIVE STARTUP INITIALIZATION) ───────────────────
 const db = getDb();
 try {
@@ -103,8 +136,22 @@ function isWithinActiveWindow(policy) {
  *
  * @param {number} ms - Milliseconds to sleep
  */
+/**
+ * Interruptible sleep. Resolves early if the global DM_QUEUE_STOPPED flag is
+ * set, so the stop button on the automation page can halt the cron-triggered
+ * queue without waiting for the full cooldown to elapse.
+ *
+ * @param {number} ms - Milliseconds to sleep
+ */
 async function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  const stepMs = 500;
+  let elapsed = 0;
+  while (elapsed < ms) {
+    if (DM_QUEUE_STOPPED) return;
+    const waitMs = Math.min(stepMs, ms - elapsed);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    elapsed += waitMs;
+  }
 }
 
 /**
@@ -115,6 +162,11 @@ async function sleep(ms) {
  * @returns {Promise<object>} Analytical report of processed batch items
  */
 async function processDmQueue(page, options = {}) {
+  // Reset the stop flag at the START of each run so a previous stop doesn't
+  // permanently disable future cron runs. If the user clicks stop during
+  // this run, the loop checks DM_QUEUE_STOPPED between profiles and aborts.
+  resetDmQueueStopFlag();
+
   const report = {
     processed: 0,
     success: 0,
@@ -180,6 +232,15 @@ async function processDmQueue(page, options = {}) {
   );
 
   for (const job of eligibleJobs) {
+    if (DM_QUEUE_STOPPED) {
+      queueLog(
+        "info",
+        "dm_queue",
+        "SYSTEM",
+        "DM queue stopped by user (stop button on automation page).",
+      );
+      break;
+    }
     if (typeof maxDmsPerRun === "number" && dmsSentThisRun >= maxDmsPerRun) {
       queueLog(
         "info",
@@ -702,24 +763,67 @@ async function processDmQueue(page, options = {}) {
       );
 
       // ── 8. BROWSER OUTREACH EXECUTION via platformAdapter ───────────────────
+      //
+      // In-loop retry: previously a single failure would immediately mark the
+      // job as failed and snooze it for 30+ minutes. Now we retry the action
+      // up to MAX_INLOOP_RETRIES times with a short interruptible delay
+      // between attempts. Only retryable outcomes are retried — sent,
+      // premium_required, not_connected, already_connected, session_required,
+      // no_posts, and skipped are NOT retried.
+      const MAX_INLOOP_RETRIES = 2; // 1 initial + 2 retries = 3 attempts max
+      const NON_RETRYABLE_OUTCOMES = new Set([
+        "sent",
+        "premium_required",
+        "not_connected",
+        "already_connected",
+        "session_required",
+        "no_posts",
+        "skipped",
+        "blocked",
+      ]);
       let res;
-      try {
-        res = await platformAdapter.runDmAction(
-          job.platform,
-          page,
-          job,
-          messageBody,
-          (type, msg) => {
-            queueLog(type, "dm_queue", job.id, `[ADAPTER LOG] ${msg}`);
-          },
-        );
-      } catch (err) {
-        res = {
-          outcome: "failed",
-          error: `Uncaught DM adapter crash: ${err.message}`,
-          metadata: {},
-          retryable: true,
-        };
+      for (let attempt = 1; attempt <= MAX_INLOOP_RETRIES + 1; attempt++) {
+        if (DM_QUEUE_STOPPED) {
+          res = { outcome: "skipped", error: "Stopped by user", metadata: {}, retryable: false };
+          break;
+        }
+        try {
+          res = await platformAdapter.runDmAction(
+            job.platform,
+            page,
+            job,
+            messageBody,
+            (type, msg) => {
+              queueLog(type, "dm_queue", job.id, `[ADAPTER LOG] ${msg}`);
+            },
+          );
+        } catch (err) {
+          res = {
+            outcome: "failed",
+            error: `Uncaught DM adapter crash: ${err.message}`,
+            metadata: {},
+            retryable: true,
+          };
+        }
+        // Success or non-retryable → done.
+        if (
+          !res ||
+          res.outcome === "sent" ||
+          NON_RETRYABLE_OUTCOMES.has(res.outcome)
+        ) {
+          break;
+        }
+        // Retryable failure — try again if we have attempts left.
+        if (attempt <= MAX_INLOOP_RETRIES) {
+          queueLog(
+            "warn",
+            "dm_queue",
+            job.id,
+            `Attempt ${attempt} failed (${res.outcome}: ${res.error || ""}). Retrying (${attempt}/${MAX_INLOOP_RETRIES})...`,
+          );
+          await sleep(2000 + Math.floor(Math.random() * 1500));
+          if (DM_QUEUE_STOPPED) break;
+        }
       }
 
       // ── 9. ATOMIC MULTI-TABLE TRANSACTION STATE UPDATE ──────────────────────
@@ -1044,7 +1148,36 @@ async function processDmQueue(page, options = {}) {
       }
 
       // ── 10. HUMAN-LIKE INTER-ACTION DELAY ─────────────────────────────────
+      //
+      // SKIP the cooldown entirely for outcomes where no DM was actually sent
+      // — premium_required, not_connected, already_connected, no_posts,
+      // skipped, session_required. The user explicitly asked for this so the
+      // queue doesn't waste 30-45 seconds on every premium-required profile.
+      const SKIP_COOLDOWN_OUTCOMES = new Set([
+        "premium_required",
+        "not_connected",
+        "already_connected",
+        "no_posts",
+        "skipped",
+        "session_required",
+      ]);
+      const lastOutcome = res?.outcome;
+      const shouldSkipCooldown =
+        lastOutcome && SKIP_COOLDOWN_OUTCOMES.has(lastOutcome);
+
       if (options.skipDelays) {
+        continue;
+      }
+      if (shouldSkipCooldown) {
+        // Brief pause only — enough for the browser to settle, not enough to
+        // waste time. Lets us move to the next profile almost immediately.
+        queueLog(
+          "info",
+          "dm_queue",
+          job.id,
+          `Skipping cooldown for outcome=${lastOutcome} — moving to next lead.`,
+        );
+        await sleep(800 + Math.floor(Math.random() * 700));
         continue;
       }
       const minSec = policy.delays?.actionMinSeconds || 20;
@@ -1059,6 +1192,19 @@ async function processDmQueue(page, options = {}) {
         `Simulating human browser delay: sleeping for ${(randomDelay / 1000).toFixed(1)} seconds.`,
       );
       await sleep(randomDelay);
+
+      // ── 11. STRAY-TAB CLEANUP ─────────────────────────────────────────────
+      // LinkedIn may have spawned a /job-posting tab during this action (e.g.
+      // by auto-redirecting after a premium dialog). Close any stray tabs
+      // before moving to the next lead so they don't accumulate.
+      try {
+        const { closeStrayTabs } = require("../automation/browserBase");
+        if (page && page.context && typeof page.context === "function") {
+          await closeStrayTabs(page.context(), job.platform);
+        } else if (page && page._context) {
+          await closeStrayTabs(page._context, job.platform);
+        }
+      } catch (_) {}
     } catch (err) {
       queueLog(
         "error",
@@ -1080,4 +1226,7 @@ async function processDmQueue(page, options = {}) {
 
 module.exports = {
   processDmQueue,
+  stopDmQueue,
+  resetDmQueueStopFlag,
+  isDmQueueStopped,
 };
