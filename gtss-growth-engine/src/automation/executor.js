@@ -817,8 +817,15 @@ async function processActionQueue(jobId, sseRes, options = {}) {
     let skipped = 0;
     // Consecutive failure counter for circuit breaker. Reset on any success
     // or non-failure outcome (skipped, premium_required, etc.). If this hits
-    // MAX_CONSECUTIVE_FAILURES (defined inside the loop), the run aborts.
+    // MAX_CONSECUTIVE_FAILURES, the run aborts.
+    //
+    // NOTE: this must live out here (outer loop scope), not inside the
+    // per-action try block below — it's read after the try/catch closes
+    // (in the circuit-breaker check), and a `const` declared inside the
+    // try block falls out of scope before that check runs, which is what
+    // caused "MAX_CONSECUTIVE_FAILURES is not defined" at runtime.
     let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 5;
     const maxDmsPerRun = options.maxDmsPerRun;
     const maxConnectionsPerRun = options.maxConnectionsPerRun;
     let dmsSentThisRun = 0;
@@ -1066,13 +1073,14 @@ async function processActionQueue(jobId, sseRes, options = {}) {
         // retried — premium_required, not_connected, already_connected,
         // session_required, no_posts, and skipped are NOT retried.
         //
-        // We also track consecutive failures across profiles. If we hit
-        // MAX_CONSECUTIVE_FAILURES in a row, we abort the whole run — that's
-        // a strong signal something systemic is wrong (session expired,
-        // LinkedIn changed selectors, captcha wall, etc.) and continuing
-        // would just burn time on doomed attempts.
+        // We also track consecutive failures across profiles (counter and
+        // MAX_CONSECUTIVE_FAILURES are declared in the outer run-level scope
+        // above, since the circuit-breaker check below needs them after this
+        // try block closes). If we hit MAX_CONSECUTIVE_FAILURES in a row, we
+        // abort the whole run — that's a strong signal something systemic is
+        // wrong (session expired, LinkedIn changed selectors, captcha wall,
+        // etc.) and continuing would just burn time on doomed attempts.
         const MAX_INLOOP_RETRIES = 2; // 1 initial + 2 retries = 3 attempts max
-        const MAX_CONSECUTIVE_FAILURES = 5;
         const NON_RETRYABLE_OUTCOMES = new Set([
           "sent",
           "premium_required",
@@ -1089,11 +1097,7 @@ async function processActionQueue(jobId, sseRes, options = {}) {
             outcomeObj = { outcome: "skipped", reason: "Stopped by user" };
             break;
           }
-          outcomeObj = await runAutomationAction(
-            action,
-            browserState,
-            emit,
-          );
+          outcomeObj = await runAutomationAction(action, browserState, emit);
 
           // Success or non-retryable → done.
           if (
@@ -1141,7 +1145,10 @@ async function processActionQueue(jobId, sseRes, options = {}) {
               outcomeObj.reason = `${outcomeObj.reason || "Failed"} | screenshot: ${screenshot}`;
             }
           } catch (artifactErr) {
-            logger.warn("AUTOMATION", `captureFailureArtifact failed: ${artifactErr.message}`);
+            logger.warn(
+              "AUTOMATION",
+              `captureFailureArtifact failed: ${artifactErr.message}`,
+            );
           }
         }
 
@@ -1211,7 +1218,10 @@ async function processActionQueue(jobId, sseRes, options = {}) {
             );
           }
         } catch (artifactErr) {
-          logger.warn("AUTOMATION", `captureFailureArtifact failed: ${artifactErr.message}`);
+          logger.warn(
+            "AUTOMATION",
+            `captureFailureArtifact failed: ${artifactErr.message}`,
+          );
         }
         emitState(emit, jobId, "FAILED", `Action failed: ${err.message}`, {
           ...eventBase,
@@ -1230,7 +1240,10 @@ async function processActionQueue(jobId, sseRes, options = {}) {
       // If we hit MAX_CONSECUTIVE_FAILURES in a row, abort the whole run —
       // something systemic is wrong (session expired, selectors changed,
       // captcha wall) and continuing would just burn time on doomed attempts.
-      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES && !STOP_FLAGS.get(jobId)) {
+      if (
+        consecutiveFailures >= MAX_CONSECUTIVE_FAILURES &&
+        !STOP_FLAGS.get(jobId)
+      ) {
         emit(
           "error",
           `Aborting run: ${consecutiveFailures} consecutive failures (circuit breaker). ` +
@@ -1296,7 +1309,11 @@ async function processActionQueue(jobId, sseRes, options = {}) {
       // before moving to the next profile so they don't accumulate.
       try {
         const cached = browserCache.get(platform);
-        if (cached && cached.context && typeof cached.context.pages === "function") {
+        if (
+          cached &&
+          cached.context &&
+          typeof cached.context.pages === "function"
+        ) {
           const { closeStrayTabs } = require("./browserBase");
           await closeStrayTabs(cached.context, platform);
         }
