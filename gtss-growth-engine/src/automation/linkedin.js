@@ -113,42 +113,53 @@ async function getMessagingFrame(page, timeout = 15000) {
           frameUrl.includes("/messaging/thread") ||
           frameUrl.includes("msgOverlay")
         ) {
-          logger.info("LinkedIn messaging iframe detected (compose URL)", { frameUrl });
+          logger.info("LinkedIn messaging iframe detected (compose URL)", {
+            frameUrl,
+          });
           return f;
         }
 
         // Method 2: The interop-iframe starts at /preload/?_bprMode=vanilla.
         // After click, it navigates to /messaging/compose. Detect by origin URL
         // pattern first, then confirm editor content.
-        if (
-          frameUrl.includes("/preload") ||
-          frameUrl.includes("_bprMode")
-        ) {
+        if (frameUrl.includes("/preload") || frameUrl.includes("_bprMode")) {
           // Frame found but may still be navigating — check for any editor element
           const hasMsgContent = await f
             .locator(
               '[contenteditable="true"], textarea, [role="textbox"], ' +
-              '[placeholder*="message" i], [aria-label*="message" i], ' +
-              '[placeholder*="Subject" i], [placeholder*="Write" i]',
+                '[placeholder*="message" i], [aria-label*="message" i], ' +
+                '[placeholder*="Subject" i], [placeholder*="Write" i]',
             )
             .first()
             .isVisible({ timeout: 500 })
             .catch(() => false);
           if (hasMsgContent) {
-            logger.info("LinkedIn messaging iframe detected (preload URL with editor)", { frameUrl });
+            logger.info(
+              "LinkedIn messaging iframe detected (preload URL with editor)",
+              { frameUrl },
+            );
             return f;
           }
         }
 
         // Method 3: Any child frame with a visible message editor
-        if (frameUrl && !frameUrl.startsWith("about:") && !frameUrl.startsWith("chrome:")) {
+        if (
+          frameUrl &&
+          !frameUrl.startsWith("about:") &&
+          !frameUrl.startsWith("chrome:")
+        ) {
           const hasMsgContent = await f
-            .locator('[contenteditable="true"][aria-label*="message" i], [role="textbox"]')
+            .locator(
+              '[contenteditable="true"][aria-label*="message" i], [role="textbox"]',
+            )
             .first()
             .isVisible({ timeout: 200 })
             .catch(() => false);
           if (hasMsgContent) {
-            logger.info("LinkedIn messaging iframe detected (editor fallback)", { frameUrl });
+            logger.info(
+              "LinkedIn messaging iframe detected (editor fallback)",
+              { frameUrl },
+            );
             return f;
           }
         }
@@ -159,6 +170,161 @@ async function getMessagingFrame(page, timeout = 15000) {
   }
 
   return null;
+}
+
+/**
+ * Detect LinkedIn's messaging execution context after clicking "Message".
+ *
+ * LinkedIn renders the DM composer in ONE of three modes:
+ *   1. Full-page navigation to /messaging/ or /messages/
+ *   2. Interop iframe — the iframe at /preload/?_bprMode=vanilla receives a
+ *      postMessage and renders the compose UI INSIDE ITSELF. The iframe URL
+ *      stays at /preload/ but the iframe gains editor content. This is the
+ *      mode observed in production (profile.html shows the iframe with
+ *      allow="clipboard-read; clipboard-write; display-capture").
+ *   3. Shadow DOM — the compose UI is mounted into #interop-outlet's shadow
+ *      root. Playwright locators pierce open shadow DOMs natively.
+ *
+ * CRITICAL BUG FIXED: the previous detection used
+ *     page.locator('#interop-outlet').isVisible()
+ * to decide Shadow DOM mode. But #interop-outlet is ALWAYS visible in the DOM
+ * (it's a placeholder div with visibility:visible per profile.html). So that
+ * check ALWAYS returned true, the iframe branch was NEVER taken, and when
+ * LinkedIn was actually using the iframe, all keyboard input was silently
+ * dropped because:
+ *   - msgCtx was set to `page` (wrong — should be the iframe)
+ *   - bringLinkedInPageToFront(page, messagingFrame) was never called, so
+ *     the iframe's document.hasFocus() was never patched
+ *   - findBestDmEditor ran page.evaluate() which does NOT pierce iframes
+ *
+ * This new implementation probes all three modes in priority order and only
+ * returns once it finds a mode that actually has editor content visible.
+ *
+ * @param {object} page - Playwright page instance
+ * @param {number} [timeout=5000] - Max time to wait for messaging UI to mount
+ * @returns {Promise<{mode: 'page'|'iframe'|'shadow', frame: Frame|null, reason: string}>}
+ */
+async function detectMessagingContext(page, timeout = 5000) {
+  const deadline = Date.now() + timeout;
+  const preloadEditorSelectors =
+    '[contenteditable="true"], textarea, [role="textbox"], ' +
+    '[placeholder*="message" i], [aria-label*="message" i], ' +
+    '[placeholder*="Write" i]';
+
+  while (Date.now() < deadline) {
+    // Mode 1: Full-page navigation to /messaging/ or /messages/
+    const url = page.url();
+    if (url.includes("/messaging/") || url.includes("/messages/")) {
+      return {
+        mode: "page",
+        frame: null,
+        reason: `navigated to ${url}`,
+      };
+    }
+
+    // Mode 2: Interop iframe with compose content.
+    // The iframe starts at /preload/?_bprMode=vanilla and either navigates to
+    // /messaging/compose OR receives a postMessage and renders compose UI
+    // inside itself while staying at /preload/. We must check BOTH cases.
+    for (const f of page.frames()) {
+      if (f === page.mainFrame()) continue;
+      let frameUrl = "";
+      try {
+        frameUrl = f.url();
+      } catch (_) {
+        continue;
+      }
+      if (
+        !frameUrl ||
+        frameUrl === "about:blank" ||
+        frameUrl.startsWith("chrome:")
+      ) {
+        continue;
+      }
+
+      // Case 2a: iframe navigated to a compose URL
+      if (
+        frameUrl.includes("/messaging/compose") ||
+        frameUrl.includes("/messaging/thread") ||
+        frameUrl.includes("msgOverlay")
+      ) {
+        return {
+          mode: "iframe",
+          frame: f,
+          reason: `iframe at compose URL (${frameUrl})`,
+        };
+      }
+
+      // Case 2b: iframe is at /preload/ but has editor content (the common
+      // production case — LinkedIn renders compose UI inside the preload
+      // iframe via postMessage, the URL never changes).
+      if (frameUrl.includes("/preload") || frameUrl.includes("_bprMode")) {
+        const hasEditor = await f
+          .locator(preloadEditorSelectors)
+          .first()
+          .isVisible({ timeout: 300 })
+          .catch(() => false);
+        if (hasEditor) {
+          return {
+            mode: "iframe",
+            frame: f,
+            reason: `iframe at preload URL with editor (${frameUrl})`,
+          };
+        }
+      }
+    }
+
+    // Mode 3: Shadow DOM — #interop-outlet actually has editor content in its
+    // shadow root. Playwright locators pierce open shadow DOMs natively, so
+    // we just check for editors inside #interop-outlet.
+    const shadowEditor = await page
+      .locator(
+        '#interop-outlet [contenteditable="true"], ' +
+          '#interop-outlet [role="textbox"], ' +
+          "#interop-outlet textarea",
+      )
+      .first()
+      .isVisible({ timeout: 300 })
+      .catch(() => false);
+    if (shadowEditor) {
+      return {
+        mode: "shadow",
+        frame: null,
+        reason: "editor found inside #interop-outlet (shadow DOM)",
+      };
+    }
+
+    // Mode 3b: Legacy non-iframe editors in the main page (old LinkedIn UI
+    // without interop). Treat as page context — findBestDmEditor will scope
+    // via .msg-form__contenteditable etc.
+    const legacyEditor = await page
+      .locator(
+        '.msg-form__contenteditable[contenteditable="true"], ' +
+          '.msg-form [contenteditable="true"], ' +
+          '.msg-overlay-conversation-bubble [contenteditable="true"]',
+      )
+      .first()
+      .isVisible({ timeout: 200 })
+      .catch(() => false);
+    if (legacyEditor) {
+      return {
+        mode: "shadow",
+        frame: null,
+        reason: "legacy .msg-form editor in main page",
+      };
+    }
+
+    await humanDelay(200, 400);
+  }
+
+  // Timeout — default to page context as a last resort. The caller will
+  // likely fail to find an editor and return outcome:failed, which is the
+  // safe outcome (no wrong-person DM).
+  return {
+    mode: "page",
+    frame: null,
+    reason: "detection timeout — no messaging UI mounted",
+  };
 }
 
 /**
@@ -270,7 +436,7 @@ const SELECTORS = {
   dmEditor: [
     // New interop Shadow DOM selectors
     '#interop-outlet [contenteditable="true"]',
-    '#interop-outlet textarea',
+    "#interop-outlet textarea",
     '#interop-outlet [role="textbox"]',
     // Legacy selectors
     '.msg-form__contenteditable[contenteditable="true"]',
@@ -290,7 +456,7 @@ const SELECTORS = {
   ],
   dmOverlay: [
     // New interop Shadow DOM selectors
-    '#interop-outlet',
+    "#interop-outlet",
     '[data-testid="interop-shadowdom"]',
     // Legacy selectors
     ".msg-overlay-conversation-bubble",
@@ -949,7 +1115,11 @@ async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 1) {
  * If we try to focus() before the animation completes, the click or CDP focus
  * command hits an element with pointer-events:none and is silently ignored.
  */
-async function waitForEditorInteractive(pageOrFrame, timeout = 2500, messagingFrame = null) {
+async function waitForEditorInteractive(
+  pageOrFrame,
+  timeout = 2500,
+  messagingFrame = null,
+) {
   const deadline = Date.now() + timeout;
 
   // Broad interactive-editor check for any document context
@@ -960,13 +1130,13 @@ async function waitForEditorInteractive(pageOrFrame, timeout = 2500, messagingFr
         // new obfuscated UI (any contenteditable), and full-page messaging.
         const editors = document.querySelectorAll(
           '[contenteditable="true"],' +
-          '[role="textbox"],' +
-          'textarea:not([type="hidden"]):not([readonly]),' +
-          '.msg-form__contenteditable,' +
-          '.msg-form [contenteditable="true"],' +
-          '[role="dialog"] [contenteditable="true"],' +
-          '[role="dialog"] textarea,' +
-          '[role="dialog"] [role="textbox"]',
+            '[role="textbox"],' +
+            'textarea:not([type="hidden"]):not([readonly]),' +
+            ".msg-form__contenteditable," +
+            '.msg-form [contenteditable="true"],' +
+            '[role="dialog"] [contenteditable="true"],' +
+            '[role="dialog"] textarea,' +
+            '[role="dialog"] [role="textbox"]',
         );
         const rejectHint =
           /\b(subject|recipient|recipients|to:|search|people|name|email)\b/i;
@@ -1050,9 +1220,9 @@ async function dismissAllMessagingUI(page) {
         .evaluate(() => {
           // Check for any visible messaging-like overlay
           const candidates = document.querySelectorAll(
-            '.msg-overlay-conversation-bubble, .msg-convo-wrapper, .msg-form,' +
-            ' [role="dialog"], .artdeco-modal, [data-gtss-active-overlay],' +
-            ' [class*="msg-overlay"], [class*="messaging"]'
+            ".msg-overlay-conversation-bubble, .msg-convo-wrapper, .msg-form," +
+              ' [role="dialog"], .artdeco-modal, [data-gtss-active-overlay],' +
+              ' [class*="msg-overlay"], [class*="messaging"]',
           );
           for (const el of candidates) {
             const rect = el.getBoundingClientRect();
@@ -1079,8 +1249,8 @@ async function dismissAllMessagingUI(page) {
     // Strategy 2: Click close buttons using broad selectors
     const closeSelectors = [
       // LinkedIn's old class names
-      '.msg-overlay-bubble-header__control--close',
-      '.msg-overlay-conversation-bubble__close-btn',
+      ".msg-overlay-bubble-header__control--close",
+      ".msg-overlay-conversation-bubble__close-btn",
       '[data-control-name="close_chat"]',
       // Broad attribute-based selectors for new UI
       'button[aria-label="Close"]',
@@ -1746,17 +1916,19 @@ async function activateDmEditor(page, locator) {
       // Step 3.5: Shadow DOM explicit focus — the Shadow DOM compositor may
       // intercept the click without sinking the caret into the text node.
       // Explicitly call focus() and set the selection to the end of the content.
-      await locator.evaluate((el) => {
-        el.focus();
-        if (el.isContentEditable) {
-          const selection = window.getSelection();
-          const range = document.createRange();
-          range.selectNodeContents(el);
-          range.collapse(false);
-          selection.removeAllRanges();
-          selection.addRange(range);
-        }
-      }).catch(() => {});
+      await locator
+        .evaluate((el) => {
+          el.focus();
+          if (el.isContentEditable) {
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            range.collapse(false);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
+        })
+        .catch(() => {});
 
       // Step 4: Verify selection landed
       const selectionLanded = await ensureSelectionInEditor(locator);
@@ -1922,7 +2094,9 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
     }
 
     // Step 4: Fallback — clipboard paste with proper React event chain
-    logger.info("LinkedIn typeLikeHuman: insertText didn't stick, trying paste fallback");
+    logger.info(
+      "LinkedIn typeLikeHuman: insertText didn't stick, trying paste fallback",
+    );
     const pasteOk = await pasteTextViaClipboard(page, locator, value);
     if (pasteOk) {
       actual = normalizeWS(await getEditableText(locator));
@@ -1932,7 +2106,9 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
     }
 
     // Step 5: Fallback — direct DOM mutation with React events
-    logger.info("LinkedIn typeLikeHuman: paste didn't stick, trying DOM events fallback");
+    logger.info(
+      "LinkedIn typeLikeHuman: paste didn't stick, trying DOM events fallback",
+    );
     const domOk = await setEditorTextWithDomEvents(locator, value);
     if (domOk) {
       return true;
@@ -1948,9 +2124,7 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
     logger.warn("LinkedIn typeLikeHuman: all strategies failed to insert text");
     return false;
   } catch (err) {
-    logger.error(
-      `LinkedIn typeLikeHuman failed: ${err.message}`,
-    );
+    logger.error(`LinkedIn typeLikeHuman failed: ${err.message}`);
     return false;
   }
 }
@@ -2208,16 +2382,20 @@ async function findSendButtonForEditor(page, editor, emit) {
               "info",
               `findSendButtonForEditor: Found ${sel} in scoped container, disabled=${disabled}`,
             );
-            // Clean up container tag
-            await containerLocator
-              .evaluate((el) => el.removeAttribute("data-gtss-container"))
-              .catch(() => {});
+            // NOTE: Do NOT removeAttribute("data-gtss-container") here.
+            // The returned `btn` is a relative locator scoped to
+            // [data-gtss-container="<tag>"]. Removing the attribute invalidates
+            // the locator — the caller's send.locator.getAttribute(...) would
+            // time out (this was the root cause of tests #11 and #12 failing
+            // with 30s timeouts). The tag is cleaned up later by the finally
+            // block in sendDirectMessage() or by dismissAllMessagingUI().
             return { locator: btn, disabled };
           }
         }
       }
 
-      // Clean up container tag if no button found
+      // Clean up container tag if no button found in this scoped container.
+      // Safe to remove here because we're NOT returning a locator bound to it.
       await containerLocator
         .evaluate((el) => el.removeAttribute("data-gtss-container"))
         .catch(() => {});
@@ -2410,7 +2588,10 @@ async function sendDirectMessage(
     await dismissAllMessagingUI(page);
 
     emit("info", `Navigating to ${profileUrl}`);
-    await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.goto(profileUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
     await humanDelay(500, 900);
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
     await humanDelay(100, 250);
@@ -2536,39 +2717,54 @@ async function sendDirectMessage(
     await humanDelay(600, 900);
     await diag.capture(page, "after-message-click");
 
-    // ── 2a. Detect execution context: iframe overlay vs full-page messaging ───
-    const currentUrl = page.url();
-    const navigatedToMessaging =
-      currentUrl.includes("/messaging/") || currentUrl.includes("/messages/");
+    // ── 2a. Detect execution context: full-page / iframe / shadow DOM ────────
+    //
+    // LinkedIn renders the DM composer in one of three modes. We must pick the
+    // correct context (page vs iframe) before any locator/evaluate call, otherwise
+    // findBestDmEditor runs page.evaluate() which does NOT pierce iframes and
+    // returns null (or matches a wrong editor in the main page like a search box).
+    //
+    // See detectMessagingContext() for the full rationale of why the previous
+    // #interop-outlet visibility check was broken.
+    const ctxInfo = await detectMessagingContext(page, 5000);
+    emit("info", `Messaging context: mode=${ctxInfo.mode} (${ctxInfo.reason})`);
+    await diag.capture(page, "messaging-context-detected", {
+      mode: ctxInfo.mode,
+      reason: ctxInfo.reason,
+    });
 
     let messagingFrame = null;
 
-    if (navigatedToMessaging) {
-      emit(
-        "info",
-        `Navigated to full messaging page (${currentUrl}). Using main-page context.`,
-      );
+    if (ctxInfo.mode === "page") {
       msgCtx = page;
-      await humanDelay(600, 1000);
+      await humanDelay(400, 700);
+    } else if (ctxInfo.mode === "iframe" && ctxInfo.frame) {
+      messagingFrame = ctxInfo.frame;
+      msgCtx = messagingFrame;
+      // CRITICAL: patch document.hasFocus() inside the iframe too. React's
+      // composer living in the iframe checks the IFRAME's document.hasFocus(),
+      // not the parent page's. Without this patch, ALL keyboard input is
+      // silently dropped — the exact "focus lands but typing fails" symptom.
+      await bringLinkedInPageToFront(page, messagingFrame);
     } else {
-      emit("info", "Checking for new Shadow DOM interop messaging...");
-      const isShadowDom = await page.locator('#interop-outlet').isVisible().catch(() => false);
-
-      if (isShadowDom) {
-        emit("info", "Shadow DOM interop overlay detected. Using main page context (Playwright pierces Shadow DOM natively).");
-        msgCtx = page;
-      } else {
-        emit("info", "Detecting legacy interop-iframe for messaging overlay...");
-        messagingFrame = await getMessagingFrame(page, 5000);
-
-        if (messagingFrame) {
-          emit("info", `Legacy iframe found (${messagingFrame.url()}). Routing operations through iframe.`);
-          msgCtx = messagingFrame;
-          await bringLinkedInPageToFront(page, messagingFrame);
-        } else {
-          emit("warn", "No interop iframe or Shadow DOM overlay found — falling back to main-page context.");
-          msgCtx = page;
-        }
+      // shadow DOM mode — compose UI is in #interop-outlet's shadow root.
+      // Playwright locators pierce open shadow DOMs natively, so msgCtx = page
+      // is correct. But we still patch hasFocus() in any /preload/ iframe as a
+      // belt-and-suspenders measure — LinkedIn sometimes uses a hybrid where
+      // the editor is in shadow DOM but ancillary state lives in the iframe.
+      msgCtx = page;
+      for (const f of page.frames()) {
+        if (f === page.mainFrame()) continue;
+        try {
+          const fUrl = f.url();
+          if (
+            fUrl &&
+            (fUrl.includes("/preload") || fUrl.includes("_bprMode"))
+          ) {
+            await bringLinkedInPageToFront(page, f);
+            break;
+          }
+        } catch (_) {}
       }
     }
 
@@ -2580,9 +2776,16 @@ async function sendDirectMessage(
     }
 
     // ── 4. Wait for editor to be interactive ──────────────────────────────────
-    const editorInteractive = await waitForEditorInteractive(msgCtx, 3000, messagingFrame);
+    const editorInteractive = await waitForEditorInteractive(
+      msgCtx,
+      3000,
+      messagingFrame,
+    );
     if (!editorInteractive) {
-      emit("warn", "Editor not yet interactive — checking for premium block...");
+      emit(
+        "warn",
+        "Editor not yet interactive — checking for premium block...",
+      );
       const blockedAfterWait = await detectMessagingBlocked(page, 500);
       if (blockedAfterWait) {
         emit("warn", blockedAfterWait.reason);
@@ -2608,7 +2811,41 @@ async function sendDirectMessage(
 
     // ── 6. Type the message ───────────────────────────────────────────────────
     emit("info", "Typing message...");
-    const typeSuccess = await typeLikeHuman(page, activeEditorLocator, message);
+    let typeSuccess = await typeLikeHuman(page, activeEditorLocator, message);
+
+    // Robustness retry: if the first typing attempt failed, the editor was
+    // likely replaced by a React re-render mid-typing (LinkedIn does this when
+    // the modal CSS animation finishes mid-sequence). Re-find the editor from
+    // scratch and try once more before giving up.
+    if (!typeSuccess) {
+      emit(
+        "warn",
+        "First typing attempt failed — re-finding editor and retrying once...",
+      );
+      await diag.capture(page, "type-failed-retry-1");
+      await humanDelay(300, 500);
+
+      // Re-detect context in case LinkedIn swapped modes (rare but possible
+      // if the overlay finished loading after our initial detection).
+      const retryCtx = await detectMessagingContext(page, 1500);
+      const retryMsgCtx =
+        retryCtx.mode === "iframe" && retryCtx.frame ? retryCtx.frame : msgCtx;
+
+      const editorRetry = await waitForDmEditor(retryMsgCtx, null, 2);
+      if (editorRetry) {
+        let retryLocator = editorRetry.locator;
+        try {
+          retryLocator = await getActiveEditorLocator(retryMsgCtx, editorRetry);
+        } catch (_) {}
+        activeEditorLocator = retryLocator;
+        // Re-bring to front in case focus was lost.
+        await bringLinkedInPageToFront(
+          page,
+          retryCtx.mode === "iframe" ? retryCtx.frame : null,
+        );
+        typeSuccess = await typeLikeHuman(page, activeEditorLocator, message);
+      }
+    }
 
     if (!typeSuccess) {
       await diag.capture(page, "type-failed");
@@ -2635,7 +2872,9 @@ async function sendDirectMessage(
 
     // ── 6b. Short settle for React to process the input event ─────────────────
     await humanDelay(400, 600);
-    await diag.capture(page, "after-typing", { typedSnippet: messageSnippet(message) });
+    await diag.capture(page, "after-typing", {
+      typedSnippet: messageSnippet(message),
+    });
 
     // ── 7. Find and click the Send button ─────────────────────────────────────
     emit("info", "Looking for Send button...");
@@ -2724,7 +2963,9 @@ async function sendDirectMessage(
       postSendUrl.includes("/messages/")
     ) {
       emit("info", "Navigating back to profile after /messaging/ send...");
-      await page.goto(profileUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
+      await page
+        .goto(profileUrl, { waitUntil: "domcontentloaded" })
+        .catch(() => {});
       await humanDelay(300, 500);
     }
 
@@ -2732,7 +2973,10 @@ async function sendDirectMessage(
   } catch (err) {
     logger.error("LinkedIn DM Failed", { profileUrl, error: err.message });
     emit("error", `DM failed: ${err.message}`);
-    await diag.capture(page, `failure-${err.message.slice(0, 30).replace(/[^a-z0-9]/gi, '_')}`);
+    await diag.capture(
+      page,
+      `failure-${err.message.slice(0, 30).replace(/[^a-z0-9]/gi, "_")}`,
+    );
     return { outcome: "failed", reason: err.message };
   } finally {
     // Flush diagnostics for this DM attempt
@@ -2846,5 +3090,6 @@ module.exports = {
     waitForEditorInteractive,
     waitForDmEditor,
     detectMessagingBlocked,
+    detectMessagingContext,
   },
 };
