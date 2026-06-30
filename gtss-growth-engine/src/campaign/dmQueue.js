@@ -20,6 +20,7 @@ const {
   queueLog,
 } = require("./utils/campaignUtils");
 const { sendNotification } = require("../services/notificationService");
+const { closeStrayTabs } = require("../automation/browserBase");
 
 // ── GLOBAL STOP FLAG (shared with executor.js via stopDmQueue()) ──────────────
 //
@@ -1147,7 +1148,35 @@ async function processDmQueue(page, options = {}) {
         );
       }
 
-      // ── 10. HUMAN-LIKE INTER-ACTION DELAY ─────────────────────────────────
+      // ── 10. STRAY-TAB CLEANUP (always, before any continue) ──────────────
+      // LinkedIn may have spawned a /job-posting tab during this action (e.g.
+      // by auto-redirecting after a premium dialog). Close any stray tabs
+      // BEFORE deciding on cooldown, so that the `continue` paths below (which
+      // skip the cooldown) still clean up. Previously this cleanup was at the
+      // very end of the try block, which meant the two `continue` statements
+      // below (skipDelays and shouldSkipCooldown) jumped over it — and those
+      // are the MOST COMMON outcomes (premium_required, not_connected, etc.),
+      // so stray tabs accumulated across the whole batch.
+      try {
+        const ctx =
+          page && page.context && typeof page.context === "function"
+            ? page.context()
+            : page && page._context
+              ? page._context
+              : null;
+        if (ctx) {
+          await closeStrayTabs(ctx, job.platform);
+        }
+      } catch (cleanupErr) {
+        queueLog(
+          "warn",
+          "dm_queue",
+          job.id,
+          `Stray-tab cleanup failed: ${cleanupErr.message}`,
+        );
+      }
+
+      // ── 11. HUMAN-LIKE INTER-ACTION DELAY ─────────────────────────────────
       //
       // SKIP the cooldown entirely for outcomes where no DM was actually sent
       // — premium_required, not_connected, already_connected, no_posts,
@@ -1192,19 +1221,6 @@ async function processDmQueue(page, options = {}) {
         `Simulating human browser delay: sleeping for ${(randomDelay / 1000).toFixed(1)} seconds.`,
       );
       await sleep(randomDelay);
-
-      // ── 11. STRAY-TAB CLEANUP ─────────────────────────────────────────────
-      // LinkedIn may have spawned a /job-posting tab during this action (e.g.
-      // by auto-redirecting after a premium dialog). Close any stray tabs
-      // before moving to the next lead so they don't accumulate.
-      try {
-        const { closeStrayTabs } = require("../automation/browserBase");
-        if (page && page.context && typeof page.context === "function") {
-          await closeStrayTabs(page.context(), job.platform);
-        } else if (page && page._context) {
-          await closeStrayTabs(page._context, job.platform);
-        }
-      } catch (_) {}
     } catch (err) {
       queueLog(
         "error",

@@ -12,6 +12,7 @@ const {
   checkSessionState,
   AUTH_STATES,
   captureFailureArtifact,
+  closeStrayTabs,
 } = require("./browserBase");
 const { isSessionValid } = require("./sessionManager");
 const { startJob, updateJobStatus, recordEvent } = require("./journal");
@@ -375,6 +376,26 @@ async function runAutomationAction(action, browserState, emit) {
 
 function recordOutcome(action, actionType, outcomeObj) {
   const db = getDb();
+  // Defensive: if a caller ever passes null/undefined (e.g. because
+  // runAutomationAction returned undefined, or a future refactor forgets to
+  // assign outcomeObj in some branch), fall back to a safe "failed" outcome
+  // instead of throwing `TypeError: Cannot destructure property 'outcome' of
+  // null` — which would escape recordOutcome and abort the run.
+  if (!outcomeObj || typeof outcomeObj !== "object") {
+    logger.warn(
+      "EXECUTOR",
+      "recordOutcome called with invalid outcomeObj — falling back to 'failed'",
+      {
+        messageId: action && action.message_id,
+        actionType,
+        receivedType: typeof outcomeObj,
+      },
+    );
+    outcomeObj = {
+      outcome: "failed",
+      reason: "Internal: missing or invalid outcome object",
+    };
+  }
   const { outcome, reason } = outcomeObj;
   const normalizedActionType = normalizeActionType(actionType);
   const failCategory = classifyOutcome(outcome, reason);
@@ -995,6 +1016,17 @@ async function processActionQueue(jobId, sseRes, options = {}) {
         continue;
       }
 
+      // NOTE: outcomeObj MUST be declared in the for-loop body scope (here),
+      // NOT inside the try block below. It is read after the try/catch closes
+      // (circuit-breaker message, cooldown decision, stray-tab cleanup). The
+      // previous code declared it with `let` inside the try, which made it
+      // block-scoped to the try — any throw left it undefined in the post-catch
+      // zone, raising `ReferenceError: outcomeObj is not defined` and aborting
+      // the entire run. This mirrors the same class of bug previously fixed
+      // for `consecutiveFailures` / `MAX_CONSECUTIVE_FAILURES` (see comment
+      // above). Hoisting here ensures the post-catch code always sees a value.
+      let outcomeObj = null;
+
       try {
         const validated = await getOrCreateBrowser(
           platform,
@@ -1091,7 +1123,9 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           "skipped",
         ]);
 
-        let outcomeObj = null;
+        // outcomeObj is declared in the outer (for-loop body) scope above the
+        // try block, so the post-catch circuit-breaker / cooldown / cleanup
+        // code can read it safely even when the try throws before assignment.
         for (let attempt = 1; attempt <= MAX_INLOOP_RETRIES + 1; attempt++) {
           if (STOP_FLAGS.get(jobId)) {
             outcomeObj = { outcome: "skipped", reason: "Stopped by user" };
@@ -1228,85 +1262,109 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           fingerprint: reservation.fingerprint,
         });
         releaseActionFingerprint(reservation.fingerprint);
-        recordOutcome(action, actionType, {
-          outcome: "failed",
-          reason: err.message,
-        });
+        // Record the outcome object in the outer scope so the post-catch
+        // circuit-breaker / cooldown code below sees a real value instead of
+        // null. Without this, `outcomeObj?.outcome` would fall back to
+        // "exception" — accurate, but we can be more precise.
+        outcomeObj = { outcome: "failed", reason: err.message };
+        recordOutcome(action, actionType, outcomeObj);
         failures++;
         consecutiveFailures++;
       }
 
-      // ── Circuit breaker: too many consecutive failures ─────────────────────
-      // If we hit MAX_CONSECUTIVE_FAILURES in a row, abort the whole run —
-      // something systemic is wrong (session expired, selectors changed,
-      // captcha wall) and continuing would just burn time on doomed attempts.
-      if (
-        consecutiveFailures >= MAX_CONSECUTIVE_FAILURES &&
-        !STOP_FLAGS.get(jobId)
-      ) {
-        emit(
-          "error",
-          `Aborting run: ${consecutiveFailures} consecutive failures (circuit breaker). ` +
-            `Last outcome: ${outcomeObj?.outcome || "exception"} — ${outcomeObj?.reason || ""}. ` +
-            `Check that your LinkedIn session is still valid and that LinkedIn hasn't changed its UI.`,
-        );
-        emitState(
-          emit,
-          jobId,
-          "MANUAL_INTERVENTION_REQUIRED",
-          `Run aborted after ${consecutiveFailures} consecutive failures.`,
-          { ...eventBase, consecutiveFailures },
-        );
-        break;
-      }
+      // ── Post-action bookkeeping (circuit breaker + cooldown + cleanup) ───────
+      // This entire section is wrapped in a try/catch so that any error here
+      // (e.g. a future bug in emitState, interruptibleDelay, or closeStrayTabs)
+      // is logged but does NOT abort the whole run. Previously this section
+      // was unprotected — a single throw here escaped to the outer executor
+      // catch and skipped all remaining profiles, AND skipped the per-profile
+      // stray-tab cleanup, causing /job-posting tabs to accumulate.
+      try {
+        // ── Circuit breaker: too many consecutive failures ───────────────────
+        // If we hit MAX_CONSECUTIVE_FAILURES in a row, abort the whole run —
+        // something systemic is wrong (session expired, selectors changed,
+        // captcha wall) and continuing would just burn time on doomed attempts.
+        if (
+          consecutiveFailures >= MAX_CONSECUTIVE_FAILURES &&
+          !STOP_FLAGS.get(jobId)
+        ) {
+          emit(
+            "error",
+            `Aborting run: ${consecutiveFailures} consecutive failures (circuit breaker). ` +
+              `Last outcome: ${outcomeObj?.outcome || "exception"} — ${outcomeObj?.reason || ""}. ` +
+              `Check that your LinkedIn session is still valid and that LinkedIn hasn't changed its UI.`,
+          );
+          emitState(
+            emit,
+            jobId,
+            "MANUAL_INTERVENTION_REQUIRED",
+            `Run aborted after ${consecutiveFailures} consecutive failures.`,
+            { ...eventBase, consecutiveFailures },
+          );
+          break;
+        }
 
-      // ── Cooldown between profiles ──────────────────────────────────────────
-      // SKIP the cooldown entirely for premium_required / not_connected /
-      // already_connected / no_posts — these are not "actions we just took"
-      // (no DM was sent, no connection request was submitted), so there's
-      // nothing to cool down from. The user explicitly asked for this so we
-      // don't waste 60-180s on every premium-required profile.
-      const SKIP_COOLDOWN_OUTCOMES = new Set([
-        "premium_required",
-        "not_connected",
-        "already_connected",
-        "no_posts",
-        "skipped",
-      ]);
-      const shouldSkipCooldown = outcomeObj
-        ? SKIP_COOLDOWN_OUTCOMES.has(outcomeObj.outcome)
-        : false;
+        // ── Cooldown between profiles ────────────────────────────────────────
+        // SKIP the cooldown entirely for premium_required / not_connected /
+        // already_connected / no_posts — these are not "actions we just took"
+        // (no DM was sent, no connection request was submitted), so there's
+        // nothing to cool down from. The user explicitly asked for this so we
+        // don't waste 60-180s on every premium-required profile.
+        const SKIP_COOLDOWN_OUTCOMES = new Set([
+          "premium_required",
+          "not_connected",
+          "already_connected",
+          "no_posts",
+          "skipped",
+        ]);
+        const shouldSkipCooldown = outcomeObj
+          ? SKIP_COOLDOWN_OUTCOMES.has(outcomeObj.outcome)
+          : false;
 
-      if (
-        runnableQueue.indexOf(action) < runnableQueue.length - 1 &&
-        !STOP_FLAGS.get(jobId) &&
-        !shouldSkipCooldown
-      ) {
-        const delay = getActionDelayRange(platform, actionType);
-        emitState(emit, jobId, "COOLDOWN", "Cooling down before next action.", {
-          ...eventBase,
-          minDelayMs: delay.min,
-          maxDelayMs: delay.max,
-        });
-        emit(
-          "info",
-          `Cooling down before next action (${Math.round(delay.min / 1000)}-${Math.round(delay.max / 1000)}s).`,
+        if (
+          runnableQueue.indexOf(action) < runnableQueue.length - 1 &&
+          !STOP_FLAGS.get(jobId) &&
+          !shouldSkipCooldown
+        ) {
+          const delay = getActionDelayRange(platform, actionType);
+          emitState(emit, jobId, "COOLDOWN", "Cooling down before next action.", {
+            ...eventBase,
+            minDelayMs: delay.min,
+            maxDelayMs: delay.max,
+          });
+          emit(
+            "info",
+            `Cooling down before next action (${Math.round(delay.min / 1000)}-${Math.round(delay.max / 1000)}s).`,
+          );
+          await interruptibleDelay(delay.min, delay.max, jobId);
+        } else if (shouldSkipCooldown && !STOP_FLAGS.get(jobId)) {
+          // Brief pause only — enough for the browser to settle, not enough to
+          // waste time. Lets us move to the next profile almost immediately.
+          emit(
+            "info",
+            `Skipping cooldown for ${outcomeObj?.outcome || "skipped"} — moving to next profile.`,
+          );
+          await interruptibleDelay(800, 1500, jobId);
+        }
+      } catch (bookkeepingErr) {
+        // Never let a bug in cooldown / circuit-breaker accounting abort the
+        // entire run. Log it and continue to the next profile.
+        logger.error(
+          "AUTOMATION",
+          `Post-action bookkeeping failed for ${action.message_id}: ${bookkeepingErr.message}`,
         );
-        await interruptibleDelay(delay.min, delay.max, jobId);
-      } else if (shouldSkipCooldown && !STOP_FLAGS.get(jobId)) {
-        // Brief pause only — enough for the browser to settle, not enough to
-        // waste time. Lets us move to the next profile almost immediately.
-        emit(
-          "info",
-          `Skipping cooldown for ${outcomeObj.outcome} — moving to next profile.`,
-        );
-        await interruptibleDelay(800, 1500, jobId);
+        emit("warn", `Post-action bookkeeping error (continuing): ${bookkeepingErr.message}`);
       }
 
       // ── Stray-tab cleanup after every profile ─────────────────────────────
       // LinkedIn may have spawned a /job-posting tab during this action (e.g.
       // by auto-redirecting after a premium dialog). Close any stray tabs
       // before moving to the next profile so they don't accumulate.
+      //
+      // This is intentionally OUTSIDE the bookkeeping try/catch above so that
+      // even if cooldown threw, we still clean up stray tabs. It has its own
+      // try/catch because closeStrayTabs touches the browser context and we
+      // never want a cleanup failure to abort the run.
       try {
         const cached = browserCache.get(platform);
         if (
@@ -1314,10 +1372,14 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           cached.context &&
           typeof cached.context.pages === "function"
         ) {
-          const { closeStrayTabs } = require("./browserBase");
           await closeStrayTabs(cached.context, platform);
         }
-      } catch (_) {}
+      } catch (cleanupErr) {
+        logger.warn(
+          "AUTOMATION",
+          `Stray-tab cleanup failed for ${platform}: ${cleanupErr.message}`,
+        );
+      }
     }
 
     // Close all browsers only after the ENTIRE run is done

@@ -13,6 +13,7 @@ const platformAdapter = require("./platformAdapter");
 const platformPolicies = require("../config/platformPolicies");
 const limits = require("../config/limits");
 const { getContext } = require("../services/contextService");
+const { closeStrayTabs } = require("../automation/browserBase");
 
 // ── GLOBAL STOP FLAG (shared with executor.js via stopConnectionQueue()) ──────
 // Mirrors dmQueue.js — lets the automation page's stop button halt the cron
@@ -679,7 +680,34 @@ async function processConnectionQueue(page, options = {}) {
         );
       }
 
-      // ── 7. HUMAN-LIKE INTER-ACTION DELAY ──────────────────────────────────
+      // ── 7. STRAY-TAB CLEANUP (always, before any continue) ──────────────
+      // LinkedIn frequently auto-redirects to /talent/job-posting-redirect/
+      // or /job-posting/ when a "Connect" click triggers a Premium upsell or
+      // email-required interstitial. The connection queue processes many leads
+      // back-to-back; without per-iteration cleanup these redirect tabs
+      // accumulate for the entire batch (the "two tabs active, one is
+      // /job-posting" symptom). This MUST run before the `continue` below so
+      // the skipDelays path still cleans up.
+      try {
+        const ctx =
+          page && page.context && typeof page.context === "function"
+            ? page.context()
+            : page && page._context
+              ? page._context
+              : null;
+        if (ctx) {
+          await closeStrayTabs(ctx, job.platform);
+        }
+      } catch (cleanupErr) {
+        queueLog(
+          "warn",
+          "connection_queue",
+          job.id,
+          `Stray-tab cleanup failed: ${cleanupErr.message}`,
+        );
+      }
+
+      // ── 8. HUMAN-LIKE INTER-ACTION DELAY ──────────────────────────────────
       if (options.skipDelays) {
         continue;
       }

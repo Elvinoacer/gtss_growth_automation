@@ -208,6 +208,14 @@ async function runConnectionAction(platform, page, lead, message, emitter) {
           res.reason || "X connection failed",
         );
       }
+      // Fallback for any other outcome (e.g. "skipped", "session_required",
+      // or a future outcome string). Without this, the function would return
+      // `undefined`, causing `res.outcome` in the caller to throw a TypeError.
+      return classifyAndNormalizeError(
+        "x",
+        "connection",
+        res.reason || `X connection returned unhandled outcome: ${res.outcome}`,
+      );
     }
 
     if (normPlatform === "instagram") {
@@ -290,6 +298,14 @@ async function runConnectionAction(platform, page, lead, message, emitter) {
           res.reason || "Facebook connection failed",
         );
       }
+      // Fallback for any other outcome (e.g. "skipped", "session_required",
+      // or a future outcome string). Without this, the function would return
+      // `undefined`, causing `res.outcome` in the caller to throw a TypeError.
+      return classifyAndNormalizeError(
+        "facebook",
+        "connection",
+        res.reason || `Facebook connection returned unhandled outcome: ${res.outcome}`,
+      );
     }
   } catch (err) {
     return classifyAndNormalizeError(normPlatform, "connection", err);
@@ -403,6 +419,14 @@ async function runDmAction(platform, page, lead, message, emitter) {
           res.reason || "X DM failed",
         );
       }
+      // Fallback for any other outcome (e.g. "skipped", "session_required",
+      // or a future outcome string). Without this, the function would return
+      // `undefined`, causing `res.outcome` in the caller to throw a TypeError.
+      return classifyAndNormalizeError(
+        "x",
+        "dm",
+        res.reason || `X DM returned unhandled outcome: ${res.outcome}`,
+      );
     }
 
     if (normPlatform === "instagram") {
@@ -497,6 +521,14 @@ async function runDmAction(platform, page, lead, message, emitter) {
           res.reason || "Facebook DM failed",
         );
       }
+      // Fallback for any other outcome (e.g. "skipped", "session_required",
+      // or a future outcome string). Without this, the function would return
+      // `undefined`, causing `res.outcome` in the caller to throw a TypeError.
+      return classifyAndNormalizeError(
+        "facebook",
+        "dm",
+        res.reason || `Facebook DM returned unhandled outcome: ${res.outcome}`,
+      );
     }
   } catch (err) {
     return classifyAndNormalizeError(normPlatform, "dm", err);
