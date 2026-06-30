@@ -321,18 +321,38 @@ function getProfileDir(platform, options = {}) {
 }
 
 function getArtifactsDir() {
-  const dir = path.resolve(
+  const configured = path.resolve(
     process.env.AUTOMATION_ARTIFACTS_DIR || "./artifacts/automation",
   );
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  // Try the configured dir first; if it can't be created (e.g. user pointed
+  // it at /var/log/... without root), fall back to ./artifacts/automation
+  // under the process cwd. NEVER throw — this is called from many failure
+  // paths (captureFailureArtifact) where an exception would mask the
+  // original automation outcome and could abort the whole run.
+  try {
+    fs.mkdirSync(configured, { recursive: true });
+    return configured;
+  } catch (err) {
+    logger.warn("BROWSER", `Configured AUTOMATION_ARTIFACTS_DIR unwritable: ${configured} (${err.message}); falling back to ./artifacts/automation`);
+  }
+  const fallback = path.resolve(process.cwd(), "artifacts", "automation");
+  try {
+    fs.mkdirSync(fallback, { recursive: true });
+  } catch (err) {
+    logger.warn("BROWSER", `Fallback artifacts dir unwritable: ${fallback} (${err.message})`);
+  }
+  return fallback;
 }
 
 function getLocksDir() {
   const dir = path.resolve(
     process.env.AUTOMATION_LOCKS_DIR || "./data/browser-locks",
   );
-  fs.mkdirSync(dir, { recursive: true });
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    logger.warn("BROWSER", `Locks dir unwritable: ${dir} (${err.message})`);
+  }
   return dir;
 }
 
@@ -930,7 +950,16 @@ function resolveInstagramCdpEndpoint(options = {}) {
 
 async function captureFailureArtifact(page, platform, label) {
   if (!page || page.isClosed()) return null;
-  const filePath = artifactPath(platform, label, "png");
+  // Resolve the path inside a try/catch — getArtifactsDir() is hardened but
+  // this is the last-mile defense so a screenshot failure can never mask
+  // the original automation outcome.
+  let filePath;
+  try {
+    filePath = artifactPath(platform, label, "png");
+  } catch (err) {
+    logger.warn("BROWSER", `Could not resolve artifact path: ${err.message}`);
+    return null;
+  }
   try {
     await page.screenshot({ path: filePath, fullPage: true });
     logger.info("BROWSER", "Captured failure screenshot", {

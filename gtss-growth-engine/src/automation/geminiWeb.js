@@ -7,12 +7,35 @@ const {
 } = require("./browserBase");
 const logger = require("../utils/logger");
 
-const ARTIFACTS_DIR = path.resolve(
+const CONFIGURED_ARTIFACTS_DIR = path.resolve(
   process.env.GEMINI_IMAGE_SAVE_DIR ||
     process.env.AUTOMATION_ARTIFACTS_DIR ||
     "./artifacts/automation",
 );
 const GEMINI_URL = "https://gemini.google.com/app";
+
+/**
+ * Resolve a writable artifacts directory for Gemini image output.
+ *
+ * Tries the configured GEMINI_IMAGE_SAVE_DIR / AUTOMATION_ARTIFACTS_DIR first;
+ * if that path can't be created (e.g. user pointed it at /var/log/... without
+ * root), falls back to ./artifacts/automation under the process cwd.
+ */
+function getArtifactsDir() {
+  try {
+    fs.mkdirSync(CONFIGURED_ARTIFACTS_DIR, { recursive: true });
+    return CONFIGURED_ARTIFACTS_DIR;
+  } catch (err) {
+    logger.warn("GEMINI_WEB", `Artifacts dir unwritable: ${CONFIGURED_ARTIFACTS_DIR} (${err.message}); falling back to ./artifacts/automation`);
+  }
+  const fallback = path.resolve(process.cwd(), "artifacts", "automation");
+  try {
+    fs.mkdirSync(fallback, { recursive: true });
+  } catch (err) {
+    logger.warn("GEMINI_WEB", `Fallback artifacts dir unwritable: ${fallback} (${err.message})`);
+  }
+  return fallback;
+}
 
 function getSharedCdpEndpoint() {
   return (
@@ -360,7 +383,7 @@ async function downloadImageFromGeminiUi(page, image, emit = () => {}) {
       const suggestedName = safeDownloadName(download.suggestedFilename());
       const ext = path.extname(suggestedName) || ".png";
       const fileName = `${baseName}${ext}`;
-      const filePath = path.join(ARTIFACTS_DIR, fileName);
+      const filePath = path.join(getArtifactsDir(), fileName);
 
       await download.saveAs(filePath);
       return { filePath, fileName };
@@ -377,7 +400,7 @@ async function downloadImageFromGeminiUi(page, image, emit = () => {}) {
     "Gemini download button was not found - saving a screenshot fallback.",
   );
   const fileName = `${baseName}.png`;
-  const filePath = path.join(ARTIFACTS_DIR, fileName);
+  const filePath = path.join(getArtifactsDir(), fileName);
   await image.screenshot({ path: filePath });
   return { filePath, fileName };
 }
@@ -390,7 +413,9 @@ async function downloadImageFromGeminiUi(page, image, emit = () => {}) {
  * @returns {Promise<{filePath: string, fileName: string}>}
  */
 async function generateImageViaGeminiWeb(prompt, emit = () => {}) {
-  fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
+  // Ensure the artifacts dir exists; getArtifactsDir() handles the
+  // fallback to ./artifacts/automation if the configured dir is unwritable.
+  getArtifactsDir();
 
   // 1. Prefer the shared Chrome/CDP session so Gemini opens as a new tab in
   //    the same browser used by LinkedIn / Instagram / X / Facebook.

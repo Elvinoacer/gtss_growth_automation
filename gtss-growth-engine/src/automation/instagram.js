@@ -387,12 +387,29 @@ async function findInstagramCaptionInput(page, timeout = 20000) {
 }
 
 function getInstagramDebugDir() {
-  const dir = path.resolve(
+  const configured = path.resolve(
     process.env.AUTOMATION_ARTIFACTS_DIR || "./artifacts/automation",
     "instagram-debug",
   );
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  // Try the configured dir; if it can't be created (e.g. user pointed
+  // AUTOMATION_ARTIFACTS_DIR at /var/log/... without root), fall back to
+  // ./artifacts/automation/instagram-debug under the process cwd. NEVER
+  // throw — getInstagramDebugPath() is called outside try/catch in several
+  // places, and a throw here would mask the original automation outcome.
+  try {
+    fs.mkdirSync(configured, { recursive: true });
+    return configured;
+  } catch (_) {}
+  const fallback = path.resolve(
+    process.cwd(),
+    "artifacts",
+    "automation",
+    "instagram-debug",
+  );
+  try {
+    fs.mkdirSync(fallback, { recursive: true });
+  } catch (_) {}
+  return fallback;
 }
 
 function getInstagramDebugPath(label, extension) {

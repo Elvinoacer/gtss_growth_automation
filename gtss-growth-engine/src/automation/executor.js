@@ -1128,13 +1128,20 @@ async function processActionQueue(jobId, sseRes, options = {}) {
         });
 
         if (outcomeObj.outcome === "failed") {
-          const screenshot = await captureFailureArtifact(
-            browserState.page,
-            platform,
-            `${actionType}-${action.message_id}-${outcomeObj.reason || "failed"}`,
-          );
-          if (screenshot) {
-            outcomeObj.reason = `${outcomeObj.reason || "Failed"} | screenshot: ${screenshot}`;
+          // Hardened: captureFailureArtifact must not throw even if the
+          // artifacts dir is unwritable. Wrap in try/catch as belt-and-
+          // suspenders so the original failure reason isn't masked.
+          try {
+            const screenshot = await captureFailureArtifact(
+              browserState.page,
+              platform,
+              `${actionType}-${action.message_id}-${outcomeObj.reason || "failed"}`,
+            );
+            if (screenshot) {
+              outcomeObj.reason = `${outcomeObj.reason || "Failed"} | screenshot: ${screenshot}`;
+            }
+          } catch (artifactErr) {
+            logger.warn("AUTOMATION", `captureFailureArtifact failed: ${artifactErr.message}`);
           }
         }
 
@@ -1186,13 +1193,25 @@ async function processActionQueue(jobId, sseRes, options = {}) {
       } catch (err) {
         logger.error("AUTOMATION", `Error on action ${action.message_id}`, err);
         emit("error", `Unexpected error: ${err.message}`);
-        const cached = browserCache.get(platform);
-        if (cached && cached.page && !cached.page.isClosed()) {
-          await captureFailureArtifact(
-            cached.page,
-            platform,
-            `${actionType}-${action.message_id}-exception`,
-          );
+        // Capture a failure screenshot for debugging — but never let this
+        // mask the original automation error. If the artifacts dir is
+        // unwritable (e.g. user pointed AUTOMATION_ARTIFACTS_DIR at
+        // /var/log/... without root), captureFailureArtifact must NOT
+        // throw here, because that throw would escape this catch block
+        // and bubble to the outer executor catch, aborting the entire
+        // run. captureFailureArtifact is hardened, but we add a belt-
+        // and-suspenders try/catch here as well.
+        try {
+          const cached = browserCache.get(platform);
+          if (cached && cached.page && !cached.page.isClosed()) {
+            await captureFailureArtifact(
+              cached.page,
+              platform,
+              `${actionType}-${action.message_id}-exception`,
+            );
+          }
+        } catch (artifactErr) {
+          logger.warn("AUTOMATION", `captureFailureArtifact failed: ${artifactErr.message}`);
         }
         emitState(emit, jobId, "FAILED", `Action failed: ${err.message}`, {
           ...eventBase,

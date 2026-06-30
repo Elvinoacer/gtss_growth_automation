@@ -224,10 +224,7 @@ async function capture(page, stepName, extra = {}, messagingFrame = null) {
   let screenshotPath = null;
   if (process.env.LINKEDIN_DM_DEBUG_SCREENSHOTS === "true") {
     try {
-      const artifactsDir = path.resolve(
-        process.env.AUTOMATION_ARTIFACTS_DIR || "./artifacts/automation",
-      );
-      fs.mkdirSync(artifactsDir, { recursive: true });
+      const artifactsDir = resolveArtifactsDir();
       const ts = new Date().toISOString().replace(/[:.]/g, "-");
       const safeName = stepName.replace(/[^a-z0-9_-]/gi, "_").slice(0, 40);
       screenshotPath = path.join(
@@ -307,6 +304,37 @@ async function capture(page, stepName, extra = {}, messagingFrame = null) {
 }
 
 /**
+ * Resolve a writable artifacts directory.
+ *
+ * Tries the configured `AUTOMATION_ARTIFACTS_DIR` first. If that directory
+ * cannot be created (e.g. the user pointed it at /var/log/... without root
+ * permissions), falls back to `./artifacts/automation` under the process
+ * working directory. This is critical because flush() is called from a
+ * `finally` block in sendDirectMessage — if mkdirSync throws here, the
+ * exception replaces the original outcome (e.g. `premium_required`) and
+ * the executor sees a "failed" outcome instead of the real one.
+ */
+function resolveArtifactsDir() {
+  const configured = process.env.AUTOMATION_ARTIFACTS_DIR;
+  const candidates = [
+    configured,
+    path.resolve(process.cwd(), "artifacts", "automation"),
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    } catch (err) {
+      logger.warn("LINKEDIN_DIAG", `Artifacts dir unwritable: ${dir} (${err.message})`);
+    }
+  }
+  // Last resort: return the configured/default path without creating it.
+  // writeFileSync below will fail and be caught by its own try/catch.
+  return path.resolve(configured || "./artifacts/automation");
+}
+
+/**
  * Write all accumulated step snapshots to a timestamped JSON file
  * and reset the internal buffer for the next DM attempt.
  *
@@ -316,10 +344,20 @@ function flush(profileUrl) {
   if (!isEnabled()) return null;
   if (_steps.length === 0) return null;
 
-  const artifactsDir = path.resolve(
-    process.env.AUTOMATION_ARTIFACTS_DIR || "./artifacts/automation",
-  );
-  fs.mkdirSync(artifactsDir, { recursive: true });
+  // CRITICAL: never let mkdir/file failures escape this function — it runs
+  // inside a `finally` block in sendDirectMessage, and any throw here would
+  // replace the original outcome (e.g. premium_required / sent / failed)
+  // with an EACCES exception, causing the executor to misclassify the
+  // action as a hard failure and potentially abort the whole run.
+  let artifactsDir;
+  try {
+    artifactsDir = resolveArtifactsDir();
+  } catch (err) {
+    logger.warn("LINKEDIN_DIAG", `Could not resolve artifacts dir: ${err.message}`);
+    _steps = [];
+    _sessionStart = null;
+    return null;
+  }
 
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
   const filePath = path.join(artifactsDir, `${ts}-linkedin-dm-diagnostics.json`);
