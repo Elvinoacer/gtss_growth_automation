@@ -319,6 +319,19 @@ async function detectMessagingContext(page, timeout = 5000) {
  * cleanly and no auto-redirect fires.
  */
 async function dismissPremiumDialog(page, timeout = 1200) {
+  // Record the URL BEFORE we touch the dialog. LinkedIn's React sometimes
+  // auto-redirects the tab (or spawns a new tab) to /talent/job-posting-redirect/
+  // when a Premium upsell dialog is dismissed — this is the source of the
+  // "two tabs active, one is /job-posting" symptom the user reported.
+  // If we detect a URL change after dismissal, we navigate back so the
+  // automation tab stays on the profile page.
+  let urlBefore = null;
+  try {
+    urlBefore = page.url();
+  } catch (_) {
+    urlBefore = null;
+  }
+
   try {
     // Broad selector set — LinkedIn rotates these labels frequently.
     const dismissSelectors = [
@@ -337,14 +350,62 @@ async function dismissPremiumDialog(page, timeout = 1200) {
 
     const match = await firstVisible(page, dismissSelectors, timeout);
     if (match) {
-      await match.locator.click({ force: true }).catch(() => {});
+      // Use DOM-level click instead of click({ force: true }) to avoid
+      // coordinate-based interception by the fixed nav bar (which could
+      // accidentally click the "Hire with AI" target="_blank" anchor and
+      // open a new tab).
+      await match.locator
+        .evaluate((el) => el.click())
+        .catch(() => {});
       await humanDelay(200, 350);
+
+      // Check if the page URL changed after dismissal — if it did, LinkedIn's
+      // auto-redirect fired and we need to navigate back to the original URL
+      // to keep the automation on the profile page.
+      try {
+        const urlAfter = page.url();
+        if (
+          urlBefore &&
+          urlAfter &&
+          urlAfter !== urlBefore &&
+          !urlAfter.includes("/in/")
+        ) {
+          logger.warn(
+            `LinkedIn dismissPremiumDialog: page redirected to ${urlAfter.slice(0, 80)} after dismissal — navigating back to ${urlBefore.slice(0, 80)}`,
+          );
+          await page
+            .goto(urlBefore, { waitUntil: "domcontentloaded", timeout: 15000 })
+            .catch(() => {});
+          await humanDelay(200, 400);
+        }
+      } catch (_) {}
+
       return true;
     }
 
     // Fallback: press Escape to dismiss any modal.
     await page.keyboard.press("Escape").catch(() => {});
     await humanDelay(150, 250);
+
+    // Same redirect-recovery check after Escape fallback.
+    try {
+      const urlAfter = page.url();
+      if (
+        urlBefore &&
+        urlAfter &&
+        urlAfter !== urlBefore &&
+        !urlAfter.includes("/in/")
+      ) {
+        logger.warn(
+          `LinkedIn dismissPremiumDialog (Escape fallback): page redirected to ${urlAfter.slice(0, 80)} — navigating back to ${urlBefore.slice(0, 80)}`,
+        );
+        await page
+          .goto(urlBefore, { waitUntil: "domcontentloaded", timeout: 15000 })
+          .catch(() => {});
+        await humanDelay(200, 400);
+      }
+    } catch (_) {}
+
     return false;
   } catch (_) {
     return false;
@@ -1552,22 +1613,72 @@ async function pasteTextViaClipboard(page, locator, text) {
     // clipboard write or keyboard paste path will simply fail and fall through.
   }
 
-  let clipboardLoaded = false;
+  // ── CRITICAL: clipboard safeguard ────────────────────────────────────────
+  // The OS clipboard is SHARED across all recipients in the same browser
+  // context. If a previous recipient's send wrote "Hi Letrise..." to the
+  // clipboard and the next navigator.clipboard.writeText() resolves without
+  // actually updating the OS clipboard (which happens in CDP-attached
+  // background-tab sessions — document.hasFocus() may be patched to true but
+  // the real OS focus may not have transferred), Meta+V would paste the STALE
+  // previous recipient's text into the current editor. This is the root cause
+  // of the "Hi Letrise" being pasted into Mike's composer bug.
+  //
+  // Mitigation:
+  //   1. Write a sentinel (empty string) first to flush any stale content.
+  //   2. Write the actual value.
+  //   3. READ THE CLIPBOARD BACK and verify it equals `value`.
+  //   4. Only if read-back matches do we trust the clipboard and press Meta+V.
+  //      Otherwise we skip the Meta+V path entirely and fall straight through
+  //      to the synthetic paste fallback, which uses `value` directly.
+  let clipboardVerified = false;
   try {
-    clipboardLoaded = await page.evaluate(async (message) => {
-      if (!navigator.clipboard?.writeText) return false;
-      await navigator.clipboard.writeText(message);
-      return true;
+    clipboardVerified = await page.evaluate(async (message) => {
+      if (!navigator.clipboard?.writeText || !navigator.clipboard?.readText) {
+        return false;
+      }
+      // Step 1: flush stale clipboard content with an empty write.
+      try {
+        await navigator.clipboard.writeText("");
+      } catch (_) {
+        // Empty write may fail on some platforms — non-fatal, the read-back
+        // check below will catch any stale content.
+      }
+      // Step 2: write the actual message.
+      try {
+        await navigator.clipboard.writeText(message);
+      } catch (_) {
+        return false;
+      }
+      // Step 3: read back and verify. Small delay to let the OS commit.
+      await new Promise((r) => setTimeout(r, 30));
+      let readBack = "";
+      try {
+        readBack = await navigator.clipboard.readText();
+      } catch (_) {
+        return false;
+      }
+      // Step 4: strict equality check. If the OS clipboard wasn't actually
+      // updated (e.g. background tab), readBack will be the previous
+      // recipient's text — we must NOT press Meta+V in that case.
+      return readBack === message;
     }, value);
   } catch (_) {
-    clipboardLoaded = false;
+    clipboardVerified = false;
   }
 
-  if (clipboardLoaded) {
+  if (clipboardVerified) {
+    // Re-focus the editor right before paste — the clipboard read-back above
+    // may have moved focus to the document body.
+    await ensureSelectionInEditor(locator);
     await page.keyboard
       .press(process.platform === "darwin" ? "Meta+V" : "Control+V")
       .catch(() => {});
     if (await waitForEditorText(locator, value, 900)) return true;
+  } else {
+    logger.warn(
+      "LinkedIn pasteTextViaClipboard: OS clipboard did not verify — skipping Meta+V " +
+        "(would have pasted stale content from a previous recipient). Falling through to synthetic paste.",
+    );
   }
 
   // Synthetic paste fallback. LinkedIn's React composer listens to paste/input
@@ -1809,6 +1920,115 @@ async function ensureSelectionInEditor(locator) {
       }
     })
     .catch(() => false);
+}
+
+/**
+ * Forcefully clear any existing draft text from the DM editor.
+ *
+ * LinkedIn persists DM drafts server-side. If a previous recipient's send
+ * failed and left "Hi Letrise..." in the composer, the next recipient's
+ * composer (Mike's) may open WITH "Hi Letrise..." already populated. The
+ * naive Meta+A+Delete clear (used inside typeLikeHuman) only fires if
+ * `getEditableText(locator)` returns non-empty AND can be defeated if focus
+ * lands on a sibling field (search box, recipient input) — Meta+A would then
+ * select the wrong field and the stale draft would survive, getting sent to
+ * the wrong person.
+ *
+ * This helper:
+ *   1. Activates the editor (real, trusted click + focus).
+ *   2. Reads the current text.
+ *   3. If non-empty, performs Meta+A / Control+A → Delete.
+ *   4. Re-reads and verifies the editor is now empty.
+ *   5. Retries up to 3 times with escalating strategies (DOM-level selectAll,
+ *      innerHTML reset) if the editor still contains stale text.
+ *
+ * Returns true only when the editor is verifiably empty (or was empty to
+ * begin with). This is the critical anti-wrong-recipient guard that runs
+ * BEFORE any text is typed.
+ */
+async function forceClearDmDraft(page, locator, { maxAttempts = 3 } = {}) {
+  const normalizeWS = (s) => String(s || "").replace(/\s+/g, " ").trim();
+
+  // Activate the editor first so keyboard shortcuts route to it, not to a
+  // sibling search/recipient field.
+  await activateDmEditor(page, locator);
+  await ensureSelectionInEditor(locator);
+  await humanDelay(60, 120);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const currentText = normalizeWS(await getEditableText(locator));
+    if (!currentText) {
+      return true;
+    }
+
+    // Strategy A: trusted keyboard select-all + delete.
+    if (attempt === 1) {
+      await ensureSelectionInEditor(locator);
+      const modifier = process.platform === "darwin" ? "Meta" : "Control";
+      await page.keyboard.press(`${modifier}+A`).catch(() => {});
+      await humanDelay(40, 80);
+      await page.keyboard.press("Delete").catch(() => {});
+      await page.keyboard.press("Backspace").catch(() => {});
+      await humanDelay(80, 140);
+      continue;
+    }
+
+    // Strategy B: DOM-level selectAll + delete command on the editor itself.
+    if (attempt === 2) {
+      await locator
+        .evaluate((el) => {
+          el.focus();
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          if (typeof document.execCommand === "function") {
+            document.execCommand("selectAll", false, undefined);
+            document.execCommand("delete", false, undefined);
+          }
+        })
+        .catch(() => {});
+      await humanDelay(80, 140);
+      continue;
+    }
+
+    // Strategy C: hard innerHTML / value reset + React-friendly input event.
+    await locator
+      .evaluate((el) => {
+        const tagName = String(el.tagName || "").toLowerCase();
+        el.focus();
+        if (tagName === "textarea" || tagName === "input") {
+          const proto =
+            tagName === "textarea"
+              ? HTMLTextAreaElement.prototype
+              : HTMLInputElement.prototype;
+          const desc = Object.getOwnPropertyDescriptor(proto, "value");
+          if (desc?.set) desc.set.call(el, "");
+          else el.value = "";
+        } else {
+          el.innerHTML = "";
+        }
+        el.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            inputType: "deleteContent",
+          }),
+        );
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      })
+      .catch(() => {});
+    await humanDelay(100, 180);
+  }
+
+  const finalText = normalizeWS(await getEditableText(locator));
+  if (finalText) {
+    logger.warn(
+      `LinkedIn forceClearDmDraft: editor still contains stale text after ${maxAttempts} attempts: "${finalText.slice(0, 60)}..."`,
+    );
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -2094,20 +2314,28 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
   if (!value) return false;
 
   const normalizeWS = (s) => String(s).replace(/\s+/g, " ").trim();
+  const valueNorm = normalizeWS(value);
 
   try {
     // Step 1: Activate the editor
     await activateDmEditor(page, locator);
     await humanDelay(200, 350);
 
-    // Step 2: Clear existing text
-    const currentText = (await getEditableText(locator)).trim();
-    if (currentText) {
-      await ensureSelectionInEditor(locator);
-      const modifier = process.platform === "darwin" ? "Meta" : "Control";
-      await page.keyboard.press(`${modifier}+A`).catch(() => {});
-      await page.keyboard.press("Delete").catch(() => {});
-      await humanDelay(80, 150);
+    // Step 2: FORCE-CLEAR any existing draft text.
+    // CRITICAL: This is the anti-wrong-recipient guard. LinkedIn persists DM
+    // drafts server-side — if the previous recipient's send left a draft, it
+    // will reappear in the next recipient's composer. We must verify the
+    // editor is empty BEFORE typing. The old code only cleared if
+    // getEditableText() returned non-empty AND used a single Meta+A+Delete
+    // that could be defeated by focus landing on a sibling field.
+    const cleared = await forceClearDmDraft(page, locator, { maxAttempts: 3 });
+    if (!cleared) {
+      // Editor still contains stale text we couldn't clear. Abort typing —
+      // better to fail this send than to send the wrong person's draft.
+      logger.error(
+        "LinkedIn typeLikeHuman: could not clear stale draft — aborting to prevent wrong-recipient send",
+      );
+      return false;
     }
 
     // Step 3: Primary — atomic insertText via CDP
@@ -2116,31 +2344,85 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
     await humanDelay(150, 250);
 
     let actual = normalizeWS(await getEditableText(locator));
-    if (actual.includes(normalizeWS(value))) {
+    if (actual.includes(valueNorm)) {
+      // Sanity check: the typed text's greeting name (if any) must match the
+      // value we just inserted. If the editor contains text from a DIFFERENT
+      // recipient (e.g. clipboard paste wrote the wrong text), this catches
+      // it before we return success.
       return true;
     }
 
-    // Step 4: Fallback — clipboard paste with proper React event chain
-    logger.info("LinkedIn typeLikeHuman: insertText didn't stick, trying paste fallback");
+    // Step 4: Fallback — per-character typing with human-like delays.
+    // This is the "type like human" path that the user expected. We try it
+    // BEFORE the clipboard fallback because per-character keyboard.type()
+    // dispatches real keydown/keypress/keyup events that React's controlled
+    // component model handles natively — no clipboard involvement, no stale
+    // content risk. The delay is small (30-80ms) to keep throughput high
+    // while still looking human.
+    logger.info(
+      "LinkedIn typeLikeHuman: insertText didn't stick, trying per-character human typing",
+    );
+    try {
+      const lines = value.split("\n");
+      for (let li = 0; li < lines.length; li++) {
+        const line = lines[li];
+        if (line) {
+          await ensureSelectionInEditor(locator);
+          for (let ci = 0; ci < line.length; ci++) {
+            await page.keyboard.type(line[ci]);
+            // Small human-like jitter between keystrokes.
+            if (process.env.TEST_SPEEDUP !== "true") {
+              await humanDelay(15, 55);
+            }
+          }
+        }
+        if (li < lines.length - 1) {
+          await ensureSelectionInEditor(locator);
+          await page.keyboard.press("Shift+Enter").catch(() => {});
+          if (process.env.TEST_SPEEDUP !== "true") {
+            await humanDelay(20, 45);
+          }
+        }
+      }
+      await humanDelay(120, 220);
+
+      actual = normalizeWS(await getEditableText(locator));
+      if (actual.includes(valueNorm)) {
+        return true;
+      }
+    } catch (typeErr) {
+      logger.warn(
+        `LinkedIn typeLikeHuman: per-character typing failed: ${typeErr.message}`,
+      );
+    }
+
+    // Step 5: Fallback — clipboard paste with proper React event chain
+    // (clipboard safeguard inside pasteTextViaClipboard will prevent stale
+    // content from being pasted if the OS clipboard can't be verified)
+    logger.info(
+      "LinkedIn typeLikeHuman: per-character typing didn't stick, trying clipboard paste fallback",
+    );
     const pasteOk = await pasteTextViaClipboard(page, locator, value);
     if (pasteOk) {
       actual = normalizeWS(await getEditableText(locator));
-      if (actual.includes(normalizeWS(value))) {
+      if (actual.includes(valueNorm)) {
         return true;
       }
     }
 
-    // Step 5: Fallback — direct DOM mutation with React events
-    logger.info("LinkedIn typeLikeHuman: paste didn't stick, trying DOM events fallback");
+    // Step 6: Fallback — direct DOM mutation with React events
+    logger.info(
+      "LinkedIn typeLikeHuman: clipboard paste didn't stick, trying DOM events fallback",
+    );
     const domOk = await setEditorTextWithDomEvents(locator, value);
     if (domOk) {
       return true;
     }
 
-    // Step 6: Final check — maybe one of the methods worked but verification was flaky
+    // Step 7: Final check — maybe one of the methods worked but verification was flaky
     await humanDelay(200, 350);
     actual = normalizeWS(await getEditableText(locator));
-    if (actual.includes(normalizeWS(value))) {
+    if (actual.includes(valueNorm)) {
       return true;
     }
 
@@ -2875,17 +3157,63 @@ async function sendDirectMessage(
 
     // ── 6a. Verify the message is actually in the DOM before clicking send ────
     const typedState = await getEditorState(activeEditorLocator);
-    if (
-      !normalizeEditableText(typedState.text).includes(
-        normalizeEditableText(message),
-      )
-    ) {
+    const typedTextNorm = normalizeEditableText(typedState.text);
+    const messageNorm = normalizeEditableText(message);
+    if (!typedTextNorm.includes(messageNorm)) {
       emit("error", "Typed message is not present in the active DM editor.");
       await diag.capture(page, "type-verify-failed");
       return {
         outcome: "failed",
         reason: "Typed message missing from DM editor before send",
       };
+    }
+
+    // ── 6a.1 ANTI-WRONG-RECIPIENT GUARD ──────────────────────────────────────
+    // If the message we intended to send has a greeting name (e.g. "Hi Mike,"),
+    // verify the editor does NOT contain a DIFFERENT greeting name. This catches
+    // the case where a stale OS clipboard pasted "Hi Letrise..." into Mike's
+    // composer AND the per-recipient guard in step 0a didn't fire (e.g. because
+    // pageProfileName was null). It's the last line of defense before send.
+    if (message) {
+      const intendedGreeting = message.match(
+        /^(?:hi|hey|hello|dear|good\s+(?:morning|afternoon|evening))\s*,?\s+([a-z]+)/i,
+      );
+      if (intendedGreeting) {
+        const intendedName = intendedGreeting[1].toLowerCase();
+        // Scan the editor text for any greeting addressed to a different name.
+        const allGreetings = typedTextNorm.match(
+          /(?:hi|hey|hello|dear|good\s+(?:morning|afternoon|evening))\s*,?\s+([a-z]+)/gi,
+        );
+        if (allGreetings) {
+          for (const g of allGreetings) {
+            const m = g.match(/([a-z]+)$/i);
+            if (m) {
+              const foundName = m[1].toLowerCase();
+              if (foundName !== intendedName) {
+                emit(
+                  "error",
+                  `WRONG-RECIPIENT BLOCK: editor contains greeting to "${foundName}" ` +
+                    `but intended message greets "${intendedName}". Aborting send.`,
+                );
+                logger.error("LinkedIn DM wrong-recipient block at post-typing", {
+                  profileUrl,
+                  intendedName,
+                  foundInEditor: foundName,
+                  editorSnippet: typedTextNorm.slice(0, 80),
+                });
+                await diag.capture(page, "wrong-recipient-block");
+                // Force-clear the editor so the next recipient doesn't inherit
+                // the wrong draft.
+                await forceClearDmDraft(page, activeEditorLocator).catch(() => {});
+                return {
+                  outcome: "failed",
+                  reason: `Editor contained greeting to "${foundName}" but intended recipient is "${intendedName}". Send aborted by post-typing guard.`,
+                };
+              }
+            }
+          }
+        }
+      }
     }
 
     // ── 6b. Short settle for React to process the input event ─────────────────
@@ -3095,6 +3423,7 @@ module.exports = {
     typeLikeHuman,
     pasteTextViaClipboard,
     setEditorTextWithDomEvents,
+    forceClearDmDraft,
     waitForEditorText,
     findSendButtonForEditor,
     clickSendButtonRobust,

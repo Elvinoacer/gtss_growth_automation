@@ -42,6 +42,5 @@ google-chrome-stable \
   --user-data-dir="$CDP_PROFILE_DIR" \
   --no-first-run \
   --disable-default-apps \
-  --disable-popup-blocking \
   --start-maximized \
   "$@"
