@@ -1,6 +1,10 @@
 /**
  * renderer.js — control-center UI logic.
  *
+ * The launcher is intentionally minimal. The web app at localhost:3000 is
+ * the real application — this window just starts/stops it, shows status,
+ * shows logs, and surfaces friendly error cards when something goes wrong.
+ *
  * Talks to the main process entirely through window.gtss.* (the preload
  * bridge). No Node access, no filesystem access, no direct IPC.
  */
@@ -21,90 +25,96 @@ $$(".tab").forEach((btn) => {
 
 // ─── Status polling ──────────────────────────────────────────────────────────
 
-const statusIcon = (el, state) => {
+const heroIcon = (state) => {
+  const el = $("#hero-icon");
   el.classList.remove("stopped", "starting", "running", "crashed");
   el.classList.add(state);
 };
 
-const statusLabel = (state) => ({
-  stopped: "Stopped",
-  starting: "Starting...",
-  running: "Running",
-  stopping: "Stopping...",
-  crashed: "Crashed",
-}[state] || state);
+function updateHero(server, cdp) {
+  const state = server.state;
+  heroIcon(state);
 
-const statusMeta = (s) => {
-  if (!s) return "";
-  if (s.state === "running") return `PID ${s.pid} · since ${new Date(s.startedAt).toLocaleTimeString()}`;
-  if (s.state === "crashed") return s.lastError || "See logs for details";
-  if (s.state === "starting") return "Starting...";
-  if (s.state === "stopping") return "Stopping...";
-  return "Not started";
-};
+  const labels = {
+    stopped: "Stopped",
+    starting: "Starting...",
+    running: "Running",
+    stopping: "Stopping...",
+    crashed: "Crashed",
+  };
+  $("#hero-label").textContent = labels[state] || state;
 
-let pollTimer = null;
+  if (state === "running") {
+    const since = server.startedAt ? new Date(server.startedAt).toLocaleTimeString() : "";
+    $("#hero-meta").textContent = `Server up since ${since} · PID ${server.pid} · http://localhost:${server.port}`;
+  } else if (state === "starting") {
+    $("#hero-meta").textContent = "Booting the server... this usually takes 2–3 seconds.";
+  } else if (state === "stopping") {
+    $("#hero-meta").textContent = "Shutting down...";
+  } else if (state === "crashed") {
+    $("#hero-meta").textContent = "The server crashed. See the error above.";
+  } else {
+    $("#hero-meta").textContent = "Click Start to launch the app.";
+  }
+
+  // Show/hide error card.
+  const errorCard = $("#error-card");
+  const statusHero = $("#status-hero");
+  if (state === "crashed" && server.lastDiagnostic) {
+    errorCard.classList.remove("hidden");
+    statusHero.classList.add("hidden");
+    $("#error-title").textContent = server.lastDiagnostic.title;
+    $("#error-message").textContent = server.lastDiagnostic.message;
+    $("#error-remedy").textContent = server.lastDiagnostic.remedy || "";
+  } else {
+    errorCard.classList.add("hidden");
+    statusHero.classList.remove("hidden");
+  }
+
+  // Button states.
+  const isRunning = state === "running";
+  const isStopped = state === "stopped";
+  const isCrashed = state === "crashed";
+  $("#start-btn").disabled = !isStopped && !isCrashed;
+  $("#stop-btn").disabled = !isRunning;
+  $("#open-browser-btn").disabled = !isRunning;
+  $("#server-restart-btn").disabled = !isRunning;
+
+  // CDP controls.
+  $("#cdp-start-btn").disabled = cdp.state === "running";
+  $("#cdp-stop-btn").disabled = cdp.state !== "running";
+
+  // If CDP is running, show a small banner so the user knows.
+  if (cdp.state === "running") {
+    $("#hero-meta").textContent += " · CDP mode active (using your real Chrome)";
+  }
+
+  // About tab — runtime info.
+  $("#about-runtime").textContent = server.nodeRuntime || "—";
+}
 
 async function refreshStatus() {
   try {
     const status = await window.gtss.lifecycle.status();
-    const server = status.server;
-    const cdp = status.cdp;
-
-    statusIcon($("#server-status-icon"), server.state);
-    $("#server-status-value").textContent = statusLabel(server.state);
-    $("#server-status-meta").textContent = statusMeta(server);
-
-    statusIcon($("#cdp-status-icon"), cdp.state);
-    $("#cdp-status-value").textContent = statusLabel(cdp.state);
-    $("#cdp-status-meta").textContent = cdp.state === "running"
-      ? `Port ${cdp.port} · PID ${cdp.pid}`
-      : statusMeta(cdp);
-
-    const overallState = server.state === "running" && cdp.state === "running"
-      ? "running"
-      : (server.state === "crashed" || cdp.state === "crashed")
-        ? "crashed"
-        : (server.state === "starting" || cdp.state === "starting")
-          ? "starting"
-          : "stopped";
-
-    statusIcon($("#overall-status-icon"), overallState);
-    $("#overall-status-value").textContent = statusLabel(overallState);
-    $("#overall-status-meta").textContent = overallState === "running"
-      ? "All services healthy"
-      : overallState === "starting"
-        ? "Please wait..."
-        : overallState === "crashed"
-          ? "Something went wrong — check the Logs tab"
-          : "Click Start to begin";
-
-    // Update button enabled states.
-    const isRunning = overallState === "running";
-    const isStopped = overallState === "stopped";
-    $("#start-btn").disabled = !isStopped;
-    $("#stop-btn").disabled = isStopped;
-    $("#restart-btn").disabled = isStopped;
-    $("#open-browser-btn").disabled = !isRunning;
-    $("#server-start-btn").disabled = server.state === "running";
-    $("#server-stop-btn").disabled = server.state !== "running";
-    $("#cdp-start-btn").disabled = cdp.state === "running";
-    $("#cdp-stop-btn").disabled = cdp.state !== "running";
+    updateHero(status.server, status.cdp);
   } catch (err) {
     console.error("Status refresh failed:", err);
   }
 }
 
-pollTimer = setInterval(refreshStatus, 2000);
+setInterval(refreshStatus, 1500);
 refreshStatus();
 
 // ─── Lifecycle buttons ───────────────────────────────────────────────────────
 
 $("#start-btn").addEventListener("click", async () => {
+  // Clear any previous error.
+  $("#error-card").classList.add("hidden");
+  $("#status-hero").classList.remove("hidden");
   toast("Starting GTSS Growth Engine...", "info");
   const res = await window.gtss.lifecycle.start();
   if (res.ok) {
-    toast("All services started. Opening your browser...", "success");
+    toast("Server is up. Opening your browser...", "success");
   } else {
     toast(`Failed to start: ${res.error}`, "error");
   }
@@ -112,23 +122,12 @@ $("#start-btn").addEventListener("click", async () => {
 });
 
 $("#stop-btn").addEventListener("click", async () => {
-  toast("Stopping services...", "info");
+  toast("Stopping server...", "info");
   const res = await window.gtss.lifecycle.stop();
   if (res.ok) {
-    toast("Services stopped.", "success");
+    toast("Server stopped.", "success");
   } else {
     toast(`Failed to stop: ${res.error}`, "error");
-  }
-  refreshStatus();
-});
-
-$("#restart-btn").addEventListener("click", async () => {
-  toast("Restarting services...", "info");
-  const res = await window.gtss.lifecycle.restart();
-  if (res.ok) {
-    toast("Services restarted.", "success");
-  } else {
-    toast(`Failed to restart: ${res.error}`, "error");
   }
   refreshStatus();
 });
@@ -137,29 +136,54 @@ $("#open-browser-btn").addEventListener("click", async () => {
   await window.gtss.openInBrowser();
 });
 
-// ─── Granular controls ───────────────────────────────────────────────────────
+// ─── Advanced controls ───────────────────────────────────────────────────────
 
-$("#server-start-btn").addEventListener("click", async () => {
-  const res = await window.gtss.server.start();
+$("#server-restart-btn").addEventListener("click", async () => {
+  toast("Restarting server...", "info");
+  const res = await window.gtss.lifecycle.restart();
   if (!res.ok) toast(res.error, "error");
   refreshStatus();
 });
-$("#server-stop-btn").addEventListener("click", async () => {
-  const res = await window.gtss.server.stop();
-  if (!res.ok) toast(res.error, "error");
-  refreshStatus();
-});
+
 $("#cdp-start-btn").addEventListener("click", async () => {
+  toast("Starting Chrome CDP — your normal Chrome will close...", "info");
   const res = await window.gtss.cdp.start();
-  if (!res.ok) toast(res.error, "error");
+  if (res.ok) {
+    toast("CDP started. Automation will now use your real Chrome.", "success");
+  } else {
+    toast(res.error, "error");
+  }
   refreshStatus();
 });
+
 $("#cdp-stop-btn").addEventListener("click", async () => {
   const res = await window.gtss.cdp.stop();
   if (!res.ok) toast(res.error, "error");
   refreshStatus();
 });
+
 $("#open-data-btn").addEventListener("click", () => window.gtss.open.dataFolder());
+
+// ─── Error card actions ──────────────────────────────────────────────────────
+
+$("#error-retry").addEventListener("click", async () => {
+  $("#error-card").classList.add("hidden");
+  $("#status-hero").classList.remove("hidden");
+  await $("#start-btn").click();
+});
+
+$("#error-copy-logs").addEventListener("click", async () => {
+  const logs = await window.gtss.logs.snapshot(200);
+  const text = logs
+    .map((e) => `[${e.ts}] ${e.source}: ${e.line}`)
+    .join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Last 200 log lines copied to clipboard.", "success");
+  } catch (_) {
+    toast("Couldn't copy to clipboard. Open the Logs tab instead.", "error");
+  }
+});
 
 // ─── Logs ────────────────────────────────────────────────────────────────────
 
@@ -181,31 +205,35 @@ function sourceMatchesFilter(source) {
   return true;
 }
 
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function renderLogEntry(entry) {
+  const cls = entry.source.endsWith("stderr") ? " stderr" : "";
+  const sourceCls = entry.source.startsWith("lifecycle") ? " lifecycle" : "";
+  const time = new Date(entry.ts).toLocaleTimeString();
+  const div = document.createElement("div");
+  div.className = `log-line${cls}${sourceCls}`;
+  div.innerHTML = `<span class="log-time">${time}</span>
+    <span class="log-source">${escapeHtml(entry.source)}</span>
+    <span class="log-text">${escapeHtml(entry.line)}</span>`;
+  return div;
+}
+
 function renderLogs() {
   const visible = logEntries.filter((e) => sourceMatchesFilter(e.source));
   if (visible.length === 0) {
     logsPane.innerHTML = '<div class="logs-empty">No logs match the current filters.</div>';
     return;
   }
-  logsPane.innerHTML = visible
-    .map((e) => {
-      const cls = e.source.endsWith("stderr") ? " stderr" : "";
-      const sourceCls = e.source.startsWith("lifecycle") ? " lifecycle" : "";
-      const time = new Date(e.ts).toLocaleTimeString();
-      return `<div class="log-line${cls}${sourceCls}">
-        <span class="log-time">${time}</span>
-        <span class="log-source">${e.source}</span>
-        <span class="log-text">${escapeHtml(e.line)}</span>
-      </div>`;
-    })
-    .join("");
+  logsPane.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  for (const e of visible) frag.appendChild(renderLogEntry(e));
+  logsPane.appendChild(frag);
   logsPane.scrollTop = logsPane.scrollHeight;
-}
-
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  }[c]));
 }
 
 async function loadInitialLogs() {
@@ -217,24 +245,13 @@ window.gtss.logs.onLine((entry) => {
   logEntries.push(entry);
   if (logEntries.length > 5000) logEntries.shift();
   if (sourceMatchesFilter(entry.source)) {
-    // Only re-render if the new entry is visible.
-    if (logsPane.querySelector(".logs-empty")) renderLogs();
-    else {
-      const cls = entry.source.endsWith("stderr") ? " stderr" : "";
-      const sourceCls = entry.source.startsWith("lifecycle") ? " lifecycle" : "";
-      const time = new Date(entry.ts).toLocaleTimeString();
-      const div = document.createElement("div");
-      div.className = `log-line${cls}${sourceCls}`;
-      div.innerHTML = `<span class="log-time">${time}</span>
-        <span class="log-source">${escapeHtml(entry.source)}</span>
-        <span class="log-text">${escapeHtml(entry.line)}</span>`;
-      logsPane.appendChild(div);
-      // Cap at 5000 DOM nodes.
-      while (logsPane.children.length > 5000) {
-        logsPane.removeChild(logsPane.firstChild);
-      }
-      logsPane.scrollTop = logsPane.scrollHeight;
+    const empty = logsPane.querySelector(".logs-empty");
+    if (empty) logsPane.innerHTML = "";
+    logsPane.appendChild(renderLogEntry(entry));
+    while (logsPane.children.length > 5000) {
+      logsPane.removeChild(logsPane.firstChild);
     }
+    logsPane.scrollTop = logsPane.scrollHeight;
   }
 });
 
@@ -244,77 +261,29 @@ $("#logs-clear-btn").addEventListener("click", async () => {
   logEntries = [];
   renderLogs();
 });
-$("#logs-open-folder-btn").addEventListener("click", () => window.gtss.open.logsFolder());
 
-// ─── Settings ────────────────────────────────────────────────────────────────
+// ─── About tab ───────────────────────────────────────────────────────────────
 
-async function loadSettings() {
-  const s = await window.gtss.settings.get();
-  $("#settings-passphrase-status").textContent = s.hasPassphrase ? "Set ✓" : "Not set";
-  $("#settings-gemini-key").value = "";
-  $("#settings-gemini-key").placeholder = s.hasGeminiKey ? "•••••••• (set, leave blank to keep)" : "AIza...";
-  $("#settings-gemini-model").value = s.geminiModel;
-  $("#settings-linkedin-mode").value = s.linkedinOutreachMode;
-  $("#settings-pipeline-mode").value = s.pipelineMode;
-  $("#settings-pipeline-cron").value = s.pipelineCron;
-  $("#settings-qualification-threshold").value = s.qualificationThreshold;
-  $("#settings-port").value = s.port;
-  $("#settings-data-folder").textContent = s.dataRoot;
+$("#about-version").textContent = window.gtss.app.version;
+$("#app-version").textContent = `v${window.gtss.app.version}`;
+$("#about-platform").textContent = `${window.gtss.app.platform} (${window.gtss.app.isMac ? "macOS" : window.gtss.app.isWindows ? "Windows" : "Linux"})`;
+
+async function loadAboutData() {
+  try {
+    const status = await window.gtss.lifecycle.status();
+    $("#about-runtime").textContent = status.server.nodeRuntime || "—";
+  } catch (_) {}
+  try {
+    const dataFolder = await window.gtss.open.dataFolderInfo();
+    if (dataFolder) $("#about-data-folder").textContent = dataFolder;
+  } catch (_) {}
 }
 
-$("#settings-save-passphrase").addEventListener("click", async () => {
-  const newPass = $("#settings-new-passphrase").value;
-  if (!newPass || newPass.length < 6) {
-    toast("Passphrase must be at least 6 characters.", "error");
-    return;
-  }
-  const res = await window.gtss.settings.resetPassphrase(newPass);
-  if (res.ok) {
-    toast("Passphrase updated.", "success");
-    $("#settings-new-passphrase").value = "";
-    loadSettings();
-  } else {
-    toast(res.error, "error");
-  }
+$("#about-check-updates").addEventListener("click", async () => {
+  toast("Checking for updates...", "info");
+  await window.gtss.updater.check();
 });
-
-$("#settings-save-ai").addEventListener("click", async () => {
-  const key = $("#settings-gemini-key").value;
-  const model = $("#settings-gemini-model").value;
-  const patch = { geminiModel: model };
-  if (key) patch.geminiKey = key;
-  const res = await window.gtss.settings.update(patch);
-  if (res.ok) {
-    toast("AI settings saved.", "success");
-    loadSettings();
-  } else {
-    toast(res.error, "error");
-  }
-});
-
-$("#settings-save-outreach").addEventListener("click", async () => {
-  const res = await window.gtss.settings.update({
-    linkedinOutreachMode: $("#settings-linkedin-mode").value,
-    pipelineMode: $("#settings-pipeline-mode").value,
-    pipelineCron: $("#settings-pipeline-cron").value,
-    qualificationThreshold: $("#settings-qualification-threshold").value,
-  });
-  if (res.ok) toast("Outreach settings saved.", "success");
-  else toast(res.error, "error");
-});
-
-$("#settings-port")?.addEventListener("change", async () => {
-  const res = await window.gtss.settings.update({ port: $("#settings-port").value });
-  if (res.ok) toast("Port saved. Restart the server to apply.", "success");
-  else toast(res.error, "error");
-});
-
-$("#settings-open-data").addEventListener("click", () => window.gtss.open.dataFolder());
-
-$("#gemini-keylink").addEventListener("click", (e) => {
-  e.preventDefault();
-  window.gtss.openInBrowser && (window.location.href = "https://aistudio.google.com/apikey");
-});
+$("#about-open-data").addEventListener("click", () => window.gtss.open.dataFolder());
 
 // ─── Updater ─────────────────────────────────────────────────────────────────
 
@@ -344,47 +313,9 @@ function updateUpdateIndicator(state) {
   } else {
     ind.classList.add("hidden");
   }
-
-  // Also update settings tab.
-  const settingsState = $("#settings-update-state");
-  const installBtn = $("#settings-install-update");
-  if (settingsState) {
-    settingsState.textContent = state.status;
-    if (state.status === "available" || state.status === "downloaded") {
-      installBtn.classList.remove("hidden");
-      installBtn.textContent = state.status === "downloaded" ? "Install & restart" : "Download & install";
-    } else {
-      installBtn.classList.add("hidden");
-    }
-  }
 }
 
 window.gtss.updater.onState(updateUpdateIndicator);
-
-$("#settings-check-updates")?.addEventListener("click", async () => {
-  toast("Checking for updates...", "info");
-  await window.gtss.updater.check();
-});
-$("#settings-install-update")?.addEventListener("click", async () => {
-  const state = await window.gtss.updater.status();
-  if (state.status === "available") {
-    await window.gtss.updater.download();
-  } else if (state.status === "downloaded") {
-    await window.gtss.updater.install();
-  }
-});
-
-// ─── About ───────────────────────────────────────────────────────────────────
-
-$("#about-version").textContent = window.gtss.app.version;
-$("#app-version").textContent = `v${window.gtss.app.version}`;
-$("#about-platform").textContent = `${window.gtss.app.platform} (${window.gtss.app.isMac ? "macOS" : window.gtss.app.isWindows ? "Windows" : "Linux"})`;
-["about-docs", "about-support", "about-source"].forEach((id) => {
-  $("#" + id).addEventListener("click", (e) => {
-    e.preventDefault();
-    // Main process intercepts external links — let the default happen.
-  });
-});
 
 // ─── Toast helper ────────────────────────────────────────────────────────────
 
@@ -404,5 +335,5 @@ function toast(message, kind = "info") {
 // ─── Init ────────────────────────────────────────────────────────────────────
 
 loadInitialLogs();
-loadSettings();
 refreshStatus();
+loadAboutData();

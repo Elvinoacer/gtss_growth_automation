@@ -1,17 +1,24 @@
 /**
  * onboarding.js — first-launch wizard logic.
- * Talks to the main process via window.gtss.onboarding.*.
+ *
+ * Three steps:
+ *   1. Set encryption passphrase (required).
+ *   2. Set Gemini API key (optional — can skip).
+ *   3. Finish — main.js then auto-starts the server and opens the web app.
+ *
+ * Platform logins (LinkedIn/X/Facebook/Instagram) are intentionally NOT here.
+ * They happen in the web app's Settings → Platform Sessions, which uses the
+ * project's existing Playwright-based login flow.
  */
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
 let currentStep = 1;
-const totalSteps = 4;
+const totalSteps = 3;
 const collected = {
   passphrase: null,
   geminiKey: null,
-  platforms: new Set(),
 };
 
 function showStep(n) {
@@ -50,12 +57,14 @@ $("#onboard-step1-next").addEventListener("click", () => {
 
 $("#onboard-open-aistudio").addEventListener("click", (e) => {
   e.preventDefault();
-  // The preload intercepts window.open for external links.
+  // Electron's preload intercepts window.open for external links and routes
+  // them to the user's default browser via shell.openExternal.
   window.open("https://aistudio.google.com/apikey", "_blank");
 });
 
 $("#onboard-skip-gemini").addEventListener("change", (e) => {
   $("#onboard-gemini-key").disabled = e.target.checked;
+  if (e.target.checked) $("#onboard-gemini-key").value = "";
 });
 
 $("#onboard-step2-back").addEventListener("click", () => showStep(1));
@@ -75,54 +84,24 @@ $("#onboard-step2-next").addEventListener("click", () => {
   showStep(3);
 });
 
-// ─── Step 3: Platform logins ────────────────────────────────────────────────
-
-$$(".platform-login-btn").forEach((btn) => {
-  btn.addEventListener("click", async () => {
-    const card = btn.closest(".platform-card");
-    const platform = card.dataset.platform;
-    const status = card.querySelector(".platform-status");
-    btn.disabled = true;
-    btn.textContent = "Opening...";
-    const res = await window.gtss.onboarding.openLogin(platform);
-    btn.disabled = false;
-    btn.textContent = "Log in";
-    if (res.ok) {
-      status.textContent = "Opened in browser — log in there";
-      status.classList.add("logged-in");
-      collected.platforms.add(platform);
-      btn.textContent = "Reopen";
-    } else {
-      toast(res.error || "Failed to open login page", "error");
-    }
-  });
-});
-
-$("#onboard-step3-back").addEventListener("click", () => showStep(2));
-$("#onboard-step3-next").addEventListener("click", () => {
-  // Update summary.
-  $("#summary-platforms").textContent = collected.platforms.size > 0
-    ? `✓ Logged in: ${[...collected.platforms].join(", ")}`
-    : "Platform logins: skipped (you can do this later)";
-  showStep(4);
-});
-
-// ─── Step 4: Finish ──────────────────────────────────────────────────────────
+// ─── Step 3: Finish ──────────────────────────────────────────────────────────
 
 $("#onboard-finish").addEventListener("click", async () => {
   const btn = $("#onboard-finish");
   btn.disabled = true;
-  btn.textContent = "Saving...";
+  btn.textContent = "Saving & starting...";
   const res = await window.gtss.onboarding.complete({
     passphrase: collected.passphrase,
     geminiKey: collected.geminiKey,
   });
   if (res.ok) {
     btn.textContent = "Done! ✓";
-    // The main process will swap windows.
+    btn.classList.add("btn-success");
+    // main.js will close this window, open the control panel, and
+    // auto-start the server. We don't need to do anything else here.
   } else {
     btn.disabled = false;
-    btn.textContent = "Finish →";
+    btn.textContent = "Finish & start →";
     toast(res.error || "Failed to save onboarding data.", "error");
   }
 });
@@ -130,13 +109,13 @@ $("#onboard-finish").addEventListener("click", async () => {
 // ─── Toast ────────────────────────────────────────────────────────────────────
 
 function toast(message, kind = "info") {
-  const container = document.getElementById("toast-container") || (() => {
-    const c = document.createElement("div");
-    c.id = "toast-container";
-    c.className = "toast-container";
-    document.body.appendChild(c);
-    return c;
-  })();
+  let container = document.getElementById("toast-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toast-container";
+    container.className = "toast-container";
+    document.body.appendChild(container);
+  }
   const el = document.createElement("div");
   el.className = `toast ${kind}`;
   el.textContent = message;

@@ -92,7 +92,7 @@ app.whenReady().then(async () => {
   logStream = new LogStream({ maxLines: 5000 });
   const serverManager = new ServerManager({ serverRoot: envBootstrap.resolvedServerRoot, dataRoot: DATA_ROOT, logStream });
   const cdpManager = new CdpManager({ dataRoot: DATA_ROOT, logStream });
-  lifecycle = new Lifecycle({ serverManager, cdpManager, logStream });
+  lifecycle = new Lifecycle({ serverManager, cdpManager, envBootstrap, logStream });
 
   firstRun = new FirstRun({ envBootstrap });
   updater = new AutoUpdater({ logStream });
@@ -115,6 +115,17 @@ app.whenReady().then(async () => {
         mainWindow = null;
       }
       await createMainWindow();
+      // Auto-start the server and open the web app — true one-click UX.
+      // The user just finished onboarding; they shouldn't have to click
+      // Start manually. Wrapped in try/catch so a startup failure doesn't
+      // leave them stuck — the error card on the Control tab will surface
+      // whatever went wrong.
+      try {
+        await lifecycle.startAll({ openBrowser: true });
+      } catch (err) {
+        logStream.append("lifecycle:stderr", `Auto-start after onboarding failed: ${err.message}`);
+        logStream.append("lifecycle", "Click Start on the Control tab to retry.");
+      }
     },
   });
 

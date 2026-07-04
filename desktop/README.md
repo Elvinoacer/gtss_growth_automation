@@ -1,8 +1,12 @@
 # GTSS Growth Engine — Desktop App
 
-Electron desktop launcher that wraps the gtss-growth-engine backend in a
-consumer-grade graphical experience. After installation, the user never
-needs to touch a terminal.
+Minimal Electron launcher for the gtss-growth-engine backend.
+
+**Design philosophy:** the web app at `localhost:3000` IS the application.
+This launcher is a small companion that does only what the web app can't do
+for itself: start/stop the Node.js server, surface status, show logs, and
+auto-update. All settings, platform logins, dashboards, and automation
+live in the web app — this window intentionally does NOT duplicate them.
 
 ## Layout
 
@@ -55,17 +59,36 @@ npx playwright install chromium
 
 ## How the server is launched
 
-`ServerManager.start()` spawns `process.execPath` (the Electron binary) with
-`ELECTRON_RUN_AS_NODE=1` as the env var. This makes Electron act as a pure
-Node.js runtime — no separate Node.js install is needed on the user's
-machine.
+`ServerManager.start()` detects and uses the **system Node.js** binary
+(`node` on PATH). This is critical because the server's `node_modules/`
+(especially `better-sqlite3`) are compiled against the system Node.js ABI —
+spawning the server with Electron's bundled Node.js would cause
+`NODE_MODULE_VERSION mismatch` errors.
+
+The user already has Node.js installed (it's required for `npm install` in
+`gtss-growth-engine/`), so this approach works without any extra setup. If
+system Node is somehow missing, we fall back to `ELECTRON_RUN_AS_NODE=1`
+with Electron's bundled Node and emit a clear warning.
 
 The child's `cwd` is the gtss-growth-engine source root, so all of the
 server's `path.join(__dirname, "..", "public")` references resolve
 correctly.
 
-The `.env` file is loaded via `dotenv` (already required by the server),
-pointed at our generated file via `DOTENV_CONFIG_PATH`.
+**Env injection:** the server calls `require('dotenv').config()` without
+args, which reads `.env` from `process.cwd()`. If the user previously ran
+`setup.sh`, that file exists with stale values. To make sure our
+onboarding-generated values win, `ServerManager` loads our `DATA_ROOT/.env`
+and injects every key into the child's process env. Process env vars take
+precedence over dotenv-loaded vars, so our `ENCRYPTION_KEY`,
+`PASSPHRASE_HASH`, `GEMINI_API_KEY`, etc. always win. We also force
+`DB_PATH`, `SESSION_DIR`, and other path keys into `DATA_ROOT` so the
+server reads from the right place regardless of legacy config.
+
+**Crash diagnostics:** when the server exits with a non-zero code,
+`ServerManager` scans the last 200 stderr lines for known error signatures
+(ABI mismatch, port in use, missing module, missing config) and produces a
+friendly `lastDiagnostic` object the UI renders as an error card with a
+"Try again" button and a "Copy logs for support" button.
 
 ## How CDP Chrome is launched
 

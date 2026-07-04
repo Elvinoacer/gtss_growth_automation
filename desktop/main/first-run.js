@@ -1,10 +1,18 @@
 /**
- * FirstRun — decides whether the onboarding wizard should run, and exposes
- * the small set of operations the wizard UI needs (set passphrase, set
- * Gemini key, open platform login pages in the bundled Chrome).
+ * FirstRun — decides whether the onboarding wizard should run.
+ *
+ * Onboarding is intentionally minimal: it only collects the two pieces of
+ * information that MUST exist before the server can boot:
+ *
+ *   1. The encryption passphrase (used as the login for the web app).
+ *   2. The Gemini API key (optional — can be added later in the web app's
+ *      Settings if the user wants to skip it).
+ *
+ * Everything else — platform logins (LinkedIn/X/Facebook/Instagram),
+ * outreach settings, pipeline cron, etc. — is handled by the web app's
+ * Settings page. The launcher does NOT duplicate those.
  */
 
-const { shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 
@@ -27,23 +35,6 @@ class FirstRun {
       this.env.setGeminiKey(geminiKey);
     }
     fs.writeFileSync(this.sentinel, new Date().toISOString(), { mode: 0o600 });
-  }
-
-  /**
-   * Open a platform login page in the user's default browser. The user logs
-   * in normally; the cookies are then available to the bundled Chrome via the
-   * copied profile.
-   */
-  async openPlatformLogin(platform) {
-    const urls = {
-      linkedin: "https://www.linkedin.com/login",
-      x: "https://x.com/i/flow/login",
-      facebook: "https://www.facebook.com/login",
-      instagram: "https://www.instagram.com/accounts/login/",
-    };
-    const url = urls[platform];
-    if (!url) throw new Error(`Unknown platform: ${platform}`);
-    await shell.openExternal(url);
   }
 }
 

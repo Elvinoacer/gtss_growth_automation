@@ -267,22 +267,38 @@
   color: var(--success);
 }
 
-/* ─── Summary ───────────────────────────────────────────────────────────── */
+/* ─── Summary / next steps ──────────────────────────────────────────────── */
 
-.summary {
+.summary,
+.next-steps {
   list-style: none;
   margin: 16px 0;
   font-size: 13px;
   color: var(--text-dim);
-  line-height: 2;
+  line-height: 1.8;
+  padding-left: 0;
 }
 
-.summary li {
-  padding-left: 8px;
+.summary li,
+.next-steps li {
+  padding: 6px 0 6px 24px;
+  position: relative;
+}
+
+.next-steps li::before {
+  content: "→";
+  position: absolute;
+  left: 4px;
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .btn-big {
   width: 100%;
   padding: 14px;
   font-size: 15px;
+}
+
+.btn-success {
+  background: var(--success) !important;
 }

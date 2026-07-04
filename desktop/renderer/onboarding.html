@@ -12,7 +12,7 @@
       <div class="onboard-hero">
         <div class="brand-mark">G</div>
         <h1>Welcome to GTSS Growth Engine</h1>
-        <p>Let's set up your account. This takes about 3 minutes — you only need to do this once.</p>
+        <p>This takes about 2 minutes. You only do this once — after this, just click <strong>Start</strong> to use the app.</p>
       </div>
 
       <div class="stepper">
@@ -26,10 +26,6 @@
         </div>
         <div class="step" data-step="3">
           <span class="step-num">3</span>
-          <span class="step-label">Platform logins</span>
-        </div>
-        <div class="step" data-step="4">
-          <span class="step-num">4</span>
           <span class="step-label">Done</span>
         </div>
       </div>
@@ -38,8 +34,8 @@
       <section class="step-panel active" id="step-1">
         <h2>Choose your passphrase</h2>
         <p>
-          This passphrase protects your stored platform credentials (LinkedIn, X, Facebook,
-          Instagram). You'll enter it each time you log into the GTSS web app.
+          This is the password you'll use to log into the GTSS web app. It also protects your
+          stored platform credentials (LinkedIn, X, Facebook, Instagram).
         </p>
         <label class="field">
           <span>Passphrase</span>
@@ -56,10 +52,11 @@
 
       <!-- ───────── Step 2: Gemini API key ───────── -->
       <section class="step-panel" id="step-2">
-        <h2>Connect your AI</h2>
+        <h2>Connect your AI (optional)</h2>
         <p>
           GTSS uses Google's free Gemini API to qualify leads and draft outreach messages. The free
-          tier gives you 15 requests per minute and 1 million tokens per day — more than enough.
+          tier is generous — 15 requests/minute, 1 million tokens/day. You can skip this and add it
+          later in the web app's Settings.
         </p>
         <ol class="how-to">
           <li>Open <a href="#" id="onboard-open-aistudio">Google AI Studio</a> in your browser.</li>
@@ -73,7 +70,7 @@
         </label>
         <label class="field-inline">
           <input type="checkbox" id="onboard-skip-gemini" />
-          <span>I'll add this later in Settings</span>
+          <span>I'll add this later in the web app's Settings</span>
         </label>
         <div class="step-actions">
           <button class="btn btn-secondary" id="onboard-step2-back">← Back</button>
@@ -81,59 +78,20 @@
         </div>
       </section>
 
-      <!-- ───────── Step 3: Platform logins ───────── -->
+      <!-- ───────── Step 3: Done ───────── -->
       <section class="step-panel" id="step-3">
-        <h2>Log into your social platforms</h2>
-        <p>
-          GTSS automates outreach on these platforms. Log into each one in your browser now —
-          GTSS will remember your sessions. You can do this later, but it's the easiest time.
-        </p>
-        <div class="platform-grid">
-          <div class="platform-card" data-platform="linkedin">
-            <div class="platform-logo linkedin">in</div>
-            <div class="platform-name">LinkedIn</div>
-            <button class="btn btn-mini platform-login-btn">Log in</button>
-            <div class="platform-status">Not logged in</div>
-          </div>
-          <div class="platform-card" data-platform="x">
-            <div class="platform-logo x">𝕏</div>
-            <div class="platform-name">X (Twitter)</div>
-            <button class="btn btn-mini platform-login-btn">Log in</button>
-            <div class="platform-status">Not logged in</div>
-          </div>
-          <div class="platform-card" data-platform="facebook">
-            <div class="platform-logo facebook">f</div>
-            <div class="platform-name">Facebook</div>
-            <button class="btn btn-mini platform-login-btn">Log in</button>
-            <div class="platform-status">Not logged in</div>
-          </div>
-          <div class="platform-card" data-platform="instagram">
-            <div class="platform-logo instagram">IG</div>
-            <div class="platform-name">Instagram</div>
-            <button class="btn btn-mini platform-login-btn">Log in</button>
-            <div class="platform-status">Not logged in</div>
-          </div>
-        </div>
-        <div class="step-actions">
-          <button class="btn btn-secondary" id="onboard-step3-back">← Back</button>
-          <button class="btn btn-primary" id="onboard-step3-next">Continue →</button>
-        </div>
-      </section>
-
-      <!-- ───────── Step 4: Done ───────── -->
-      <section class="step-panel" id="step-4">
         <h2>You're all set! 🎉</h2>
         <p>
-          GTSS Growth Engine is ready to use. Click "Finish" to open the control center, then click
-          the big <strong>Start</strong> button to launch the app.
+          Click <strong>Finish</strong> to start the server and open the GTSS web app in your
+          browser. From there you can:
         </p>
-        <ul class="summary">
-          <li id="summary-passphrase">✓ Passphrase set</li>
-          <li id="summary-gemini">✓ AI key set</li>
-          <li id="summary-platforms">Platform logins: skipped</li>
+        <ul class="next-steps">
+          <li>Log in with the passphrase you just set</li>
+          <li>Connect your social platforms (LinkedIn, X, Facebook, Instagram) in Settings → Platform Sessions</li>
+          <li>Start discovering and qualifying leads</li>
         </ul>
         <div class="step-actions">
-          <button class="btn btn-primary btn-big" id="onboard-finish">Finish →</button>
+          <button class="btn btn-primary btn-big" id="onboard-finish">Finish &amp; start →</button>
         </div>
       </section>
     </div>
