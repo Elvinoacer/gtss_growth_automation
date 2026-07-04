@@ -1,0 +1,166 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# GTSS Growth Engine — electron-builder configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Builds native installers for Windows (NSIS + MSI), Linux (.deb + .rpm +
+# AppImage), and macOS (.dmg). Run from the desktop/ directory.
+#
+#   npx electron-builder --config electron-builder.yml --win nsis msi
+#   npx electron-builder --config electron-builder.yml --linux deb rpm AppImage
+#   npx electron-builder --config electron-builder.yml --mac dmg
+# ─────────────────────────────────────────────────────────────────────────────
+
+appId: systems.growthtoscale.gtss
+productName: GTSS Growth Engine
+copyright: Copyright © 2026 GTSS
+
+# The Node.js server lives outside asar so __dirname / path references resolve
+# exactly as they do in development. better-sqlite3 is rebuilt against
+# Electron's ABI by `electron-builder install-app-deps` (postinstall hook).
+asar: true
+asarUnpack:
+  - "**/*.node"
+  - "**/better-sqlite3/**"
+
+# Bundle the entire gtss-growth-engine/ source tree as extra resources.
+# At runtime this lands at: <AppData>/resources/server/
+extraResources:
+  - from: ../gtss-growth-engine
+    to: server
+    filter:
+      - "**/*"
+      - "!node_modules/**"
+      - "!data/**"
+      - "!sessions/**"
+      - "!profiles/**"
+      - "!artifacts/**"
+      - "!media/**"
+      - "!public/uploads/**"
+      - "!chrome-cdp-profile/**"
+      - "!test/**"
+      - "!test-results/**"
+      - "!playwright-report/**"
+      - "!.env"
+      - "!.env.*"
+      - "!*.log"
+
+directories:
+  output: dist
+  buildResources: build
+
+# ─── Windows ─────────────────────────────────────────────────────────────────
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: msi
+      arch: [x64]
+  icon: build/icon.ico
+  publisherName: GTSS
+  # Signed builds require a code-signing cert; omitted for the open-source build.
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  runAfterFinish: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: GTSS Growth Engine
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  deleteAppDataOnUninstall: false
+
+msi:
+  oneClick: false
+  perMachine: false
+  runAfterFinish: true
+
+# ─── Linux ───────────────────────────────────────────────────────────────────
+linux:
+  target:
+    - target: deb
+      arch: [x64]
+    - target: rpm
+      arch: [x64]
+    - target: AppImage
+      arch: [x64]
+  icon: build/icon.png
+  category: Office
+  maintainer: founder@growthtoscalesocial.systems
+  vendor: GTSS
+  synopsis: Social-media growth and outreach automation for SMEs.
+  description: |
+    GTSS Growth Engine is a local-first desktop application that helps founders
+    discover, qualify, and reach out to potential clients across LinkedIn,
+    X (Twitter), Facebook, and Instagram — without paid SaaS or cloud servers.
+
+deb:
+  depends:
+    - libnss3
+    - libatk1.0-0
+    - libatk-bridge2.0-0
+    - libcups2
+    - libxkbcommon0
+    - libxcomposite1
+    - libxdamage1
+    - libxfixes3
+    - libxrandr2
+    - libgbm1
+    - libpango-1.0-0
+    - libcairo2
+    - libasound2
+
+rpm:
+  depends:
+    - nss
+    - atk
+    - at-spi2-atk
+    - cups-libs
+    - libxkbcommon
+    - libXcomposite
+    - libXdamage
+    - libXfixes
+    - libXrandr
+    - mesa-libgbm
+    - pango
+    - cairo
+    - alsa-lib
+
+AppImage:
+  artifactName: GTSS-Growth-Engine-${version}-${arch}.AppImage
+  license: LICENSE
+
+# ─── macOS ───────────────────────────────────────────────────────────────────
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  icon: build/icon.icns
+  category: public.app-category.business
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  # Notarization requires an Apple Developer ID — left as a CI secret.
+  # notarize:
+  #   teamId: <TEAM_ID>
+
+dmg:
+  title: GTSS Growth Engine ${version}
+  artifactName: GTSS-Growth-Engine-${version}-${arch}.dmg
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# ─── Auto-update ─────────────────────────────────────────────────────────────
+# electron-updater checks the provider below for new releases. Defaults to
+# GitHub Releases — set GH_TOKEN in CI to publish.
+publish:
+  - provider: github
+    owner: gtss
+    repo: growth-automation
+    releaseType: release

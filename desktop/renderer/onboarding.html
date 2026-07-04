@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Welcome to GTSS Growth Engine</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="onboarding.css" />
+  </head>
+  <body class="onboarding-body">
+    <div class="onboard-shell">
+      <div class="onboard-hero">
+        <div class="brand-mark">G</div>
+        <h1>Welcome to GTSS Growth Engine</h1>
+        <p>Let's set up your account. This takes about 3 minutes — you only need to do this once.</p>
+      </div>
+
+      <div class="stepper">
+        <div class="step active" data-step="1">
+          <span class="step-num">1</span>
+          <span class="step-label">Passphrase</span>
+        </div>
+        <div class="step" data-step="2">
+          <span class="step-num">2</span>
+          <span class="step-label">AI Key</span>
+        </div>
+        <div class="step" data-step="3">
+          <span class="step-num">3</span>
+          <span class="step-label">Platform logins</span>
+        </div>
+        <div class="step" data-step="4">
+          <span class="step-num">4</span>
+          <span class="step-label">Done</span>
+        </div>
+      </div>
+
+      <!-- ───────── Step 1: Passphrase ───────── -->
+      <section class="step-panel active" id="step-1">
+        <h2>Choose your passphrase</h2>
+        <p>
+          This passphrase protects your stored platform credentials (LinkedIn, X, Facebook,
+          Instagram). You'll enter it each time you log into the GTSS web app.
+        </p>
+        <label class="field">
+          <span>Passphrase</span>
+          <input type="password" id="onboard-passphrase" placeholder="At least 8 characters" autocomplete="new-password" />
+        </label>
+        <label class="field">
+          <span>Confirm passphrase</span>
+          <input type="password" id="onboard-passphrase2" placeholder="Re-enter your passphrase" autocomplete="new-password" />
+        </label>
+        <div class="step-actions">
+          <button class="btn btn-primary" id="onboard-step1-next">Continue →</button>
+        </div>
+      </section>
+
+      <!-- ───────── Step 2: Gemini API key ───────── -->
+      <section class="step-panel" id="step-2">
+        <h2>Connect your AI</h2>
+        <p>
+          GTSS uses Google's free Gemini API to qualify leads and draft outreach messages. The free
+          tier gives you 15 requests per minute and 1 million tokens per day — more than enough.
+        </p>
+        <ol class="how-to">
+          <li>Open <a href="#" id="onboard-open-aistudio">Google AI Studio</a> in your browser.</li>
+          <li>Sign in with any Google account.</li>
+          <li>Click <strong>"Get API key"</strong> → <strong>"Create API key"</strong>.</li>
+          <li>Copy the key (starts with <code>AIza...</code>) and paste it below.</li>
+        </ol>
+        <label class="field">
+          <span>Gemini API key</span>
+          <input type="password" id="onboard-gemini-key" placeholder="AIza..." />
+        </label>
+        <label class="field-inline">
+          <input type="checkbox" id="onboard-skip-gemini" />
+          <span>I'll add this later in Settings</span>
+        </label>
+        <div class="step-actions">
+          <button class="btn btn-secondary" id="onboard-step2-back">← Back</button>
+          <button class="btn btn-primary" id="onboard-step2-next">Continue →</button>
+        </div>
+      </section>
+
+      <!-- ───────── Step 3: Platform logins ───────── -->
+      <section class="step-panel" id="step-3">
+        <h2>Log into your social platforms</h2>
+        <p>
+          GTSS automates outreach on these platforms. Log into each one in your browser now —
+          GTSS will remember your sessions. You can do this later, but it's the easiest time.
+        </p>
+        <div class="platform-grid">
+          <div class="platform-card" data-platform="linkedin">
+            <div class="platform-logo linkedin">in</div>
+            <div class="platform-name">LinkedIn</div>
+            <button class="btn btn-mini platform-login-btn">Log in</button>
+            <div class="platform-status">Not logged in</div>
+          </div>
+          <div class="platform-card" data-platform="x">
+            <div class="platform-logo x">𝕏</div>
+            <div class="platform-name">X (Twitter)</div>
+            <button class="btn btn-mini platform-login-btn">Log in</button>
+            <div class="platform-status">Not logged in</div>
+          </div>
+          <div class="platform-card" data-platform="facebook">
+            <div class="platform-logo facebook">f</div>
+            <div class="platform-name">Facebook</div>
+            <button class="btn btn-mini platform-login-btn">Log in</button>
+            <div class="platform-status">Not logged in</div>
+          </div>
+          <div class="platform-card" data-platform="instagram">
+            <div class="platform-logo instagram">IG</div>
+            <div class="platform-name">Instagram</div>
+            <button class="btn btn-mini platform-login-btn">Log in</button>
+            <div class="platform-status">Not logged in</div>
+          </div>
+        </div>
+        <div class="step-actions">
+          <button class="btn btn-secondary" id="onboard-step3-back">← Back</button>
+          <button class="btn btn-primary" id="onboard-step3-next">Continue →</button>
+        </div>
+      </section>
+
+      <!-- ───────── Step 4: Done ───────── -->
+      <section class="step-panel" id="step-4">
+        <h2>You're all set! 🎉</h2>
+        <p>
+          GTSS Growth Engine is ready to use. Click "Finish" to open the control center, then click
+          the big <strong>Start</strong> button to launch the app.
+        </p>
+        <ul class="summary">
+          <li id="summary-passphrase">✓ Passphrase set</li>
+          <li id="summary-gemini">✓ AI key set</li>
+          <li id="summary-platforms">Platform logins: skipped</li>
+        </ul>
+        <div class="step-actions">
+          <button class="btn btn-primary btn-big" id="onboard-finish">Finish →</button>
+        </div>
+      </section>
+    </div>
+    <script src="onboarding.js"></script>
+  </body>
+</html>

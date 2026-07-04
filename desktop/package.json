@@ -1,0 +1,42 @@
+{
+  "name": "gtss-growth-desktop",
+  "version": "1.0.0",
+  "description": "GTSS Growth Engine — desktop launcher and control center.",
+  "main": "main/main.js",
+  "author": {
+    "name": "GTSS",
+    "email": "founder@growthtoscalesocial.systems"
+  },
+  "license": "ISC",
+  "homepage": "https://github.com/gtss/growth-automation",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gtss/growth-automation.git"
+  },
+  "bin": {
+    "gtss-growth": "./cli/gtss-growth.js"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "dist:win": "electron-builder --win nsis msi",
+    "dist:linux": "electron-builder --linux deb rpm AppImage",
+    "dist:mac": "electron-builder --mac dmg",
+    "dist:all": "electron-builder --win nsis msi --linux deb rpm AppImage --mac dmg",
+    "publish": "electron-builder --publish always",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
