@@ -21,6 +21,10 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const net = require("net");
+<<<<<<< HEAD
+=======
+const http = require("http");
+>>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
 
 const DEFAULT_PORT = 9222;
 const CDP_PROFILE_DIRNAME = "chrome-cdp-profile";
@@ -69,7 +73,20 @@ class CdpManager {
     };
   }
 
+<<<<<<< HEAD
   async start() {
+=======
+  /**
+   * Start the CDP Chrome.
+   *
+   * @param {object} opts
+   * @param {string} [opts.openUrl] — URL to open in a new tab when Chrome
+   *   launches. This is how the launcher opens the web app INSIDE the CDP
+   *   Chrome instead of the user's default browser — so the web app and the
+   *   automation share the same Chrome instance.
+   */
+  async start({ openUrl } = {}) {
+>>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
     if (this.child) {
       throw new Error(`CDP Chrome already running (pid ${this.child.pid})`);
     }
@@ -103,6 +120,16 @@ class CdpManager {
       "--disable-features=ChromeWhatsNewUI",
     ];
 
+<<<<<<< HEAD
+=======
+    // If a URL was provided, Chrome will open it in a new tab on launch.
+    // This is how the web app opens INSIDE the CDP Chrome.
+    if (openUrl) {
+      args.push(openUrl);
+      this.logStream.append("cdp", `Will open ${openUrl} on launch.`);
+    }
+
+>>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
     this.logStream.append("cdp", `Launching Chrome on port ${this.port}...`);
     this.child = spawn(this.chromePath, args, {
       cwd: this.cdpProfileDir,
@@ -159,6 +186,41 @@ class CdpManager {
     }
   }
 
+<<<<<<< HEAD
+=======
+  /**
+   * Open a new tab in the running CDP Chrome via the DevTools HTTP API.
+   * Used by the "Open Web App" button — this way the web app opens in the
+   * SAME Chrome that handles automation, not the user's default browser.
+   *
+   * Returns true on success, false if CDP isn't running or the request fails.
+   */
+  async openTab(url) {
+    if (!this.isRunning()) return false;
+    return new Promise((resolve) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: this.port,
+          path: `/json/new?${encodeURIComponent(url)}`,
+          method: "PUT",
+          timeout: 3000,
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode === 200);
+        },
+      );
+      req.on("error", () => resolve(false));
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(false);
+      });
+      req.end();
+    });
+  }
+
+>>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
   async stop(reason = "user") {
     if (!this.child) {
       this.state = "stopped";

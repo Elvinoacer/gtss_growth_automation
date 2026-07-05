@@ -52,7 +52,6 @@ desktop/dist/
 desktop/out/
 desktop/.cache/
 desktop/build/tmp/
-# Bundled Chromium cache (when downloaded by Playwright at runtime)
 desktop/chrome-cdp-profile/
 
 # Allow the final deliverable zip (download/ folder) but ignore stray zips

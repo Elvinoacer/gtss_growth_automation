@@ -77,6 +77,7 @@ function registerIpcHandlers({
     }
   });
 
+<<<<<<< HEAD
   // ─── Open the web app in the user's default browser ────────────────────
 
   ipcMain.handle("app:open-in-browser", async () => {
@@ -84,6 +85,20 @@ function registerIpcHandlers({
     const port = serverManager.port || 3000;
     await shell.openExternal(`http://localhost:${port}`);
     return { ok: true };
+=======
+  // ─── Open the web app ───────────────────────────────────────────────────
+  //
+  // If CDP Chrome is running, open a new tab IN the CDP Chrome (via the
+  // DevTools HTTP API). Otherwise, fall back to the default browser.
+
+  ipcMain.handle("app:open-in-browser", async () => {
+    try {
+      await lifecycle.openWebApp();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+>>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
   });
 
   // ─── Logs ────────────────────────────────────────────────────────────────

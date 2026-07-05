@@ -86,8 +86,20 @@ class EnvBootstrap {
       AUTOMATION_ARTIFACTS_DIR: path.join(this.dataRoot, "artifacts", "automation"),
       GEMINI_IMAGE_SAVE_DIR: path.join(this.dataRoot, "artifacts", "gemini-images"),
       AUTOMATION_LOCKS_DIR: path.join(this.dataRoot, "data", "browser-locks"),
+<<<<<<< HEAD
       BROWSER_MODE: "persistent",
       BROWSER_CHANNEL: "chrome",
+=======
+      // CDP is the default browser mode. The launcher starts a CDP Chrome
+      // (the user's real Chrome with --remote-debugging-port and a copied
+      // profile) and opens the web app inside it. This way the web app and
+      // automation share the same Chrome instance — no friction, no "two
+      // Chrome windows" confusion.
+      BROWSER_MODE: "cdp",
+      BROWSER_CHANNEL: "chrome",
+      CDP_ENDPOINT: "http://127.0.0.1:9222",
+      CDP_PORT: "9222",
+>>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
       PLAYWRIGHT_TRACE: "true",
       ALLOW_HEADLESS_SOCIAL: "false",
       SESSION_MAX_AGE_HOURS: "720",
@@ -101,8 +113,11 @@ class EnvBootstrap {
       QUALIFICATION_MANUAL_SCORE: "75",
       MESSAGE_AUTO_APPROVE_VARIANT: "B",
       PIPELINE_DISCOVERY_KEYWORDS_FILE: path.join(this.serverRoot, "src", "config", "keywords.json"),
+<<<<<<< HEAD
       // CDP endpoint — populated by CdpManager when the user starts the CDP browser.
       CDP_ENDPOINT: "",
+=======
+>>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
       // User must set these via onboarding or Settings.
       PASSPHRASE_HASH: "",
       GEMINI_API_KEY: "",
