@@ -1,32 +1,6 @@
 /**
  * Lifecycle — high-level orchestration of the server + CDP browser.
  *
-<<<<<<< HEAD
- * ─── Strategy revision ─────────────────────────────────────────────────────
- *
- * The "one-click Start" the user wants is just: start the server, then open
- * the browser to localhost:PORT. That's it. The web app at localhost:PORT is
- * the actual application — it handles logins, settings, automation, etc.
- *
- * CDP is NOT auto-started. The project's default is BROWSER_MODE=persistent,
- * which means Playwright launches its own isolated Chromium per platform and
- * the user logs in via the web app's Settings → Platform Sessions. CDP is
- * an advanced opt-in for power users who want to use their REAL Chrome (with
- * existing logins) instead of Playwright's isolated Chromium. We never
- * override the user's BROWSER_MODE setting.
- *
- * When the user explicitly clicks "Start CDP" (granular control), we:
- *   1. Launch Chrome with --remote-debugging-port.
- *   2. Write CDP_ENDPOINT and BROWSER_MODE=cdp into the .env.
- *   3. Restart the server so it picks up the new BROWSER_MODE.
- *
- * When the user clicks "Stop CDP", we:
- *   1. Stop Chrome.
- *   2. Reset BROWSER_MODE=persistent in .env.
- *   3. Restart the server.
- *
- * This way the user is always in control of which browser mode is active.
-=======
  * ─── Strategy: CDP-unified flow ────────────────────────────────────────────
  *
  * The user's workflow is built around CDP. The project's automation connects
@@ -53,7 +27,6 @@
  *   - BROWSER_MODE=persistent (Playwright launches its own Chromium)
  *   - Open the web app in the user's default browser via shell.openExternal
  *   - Show a warning that automation will use an isolated browser
->>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
  */
 
 const { shell } = require("electron");
@@ -71,17 +44,6 @@ class Lifecycle {
   }
 
   /**
-<<<<<<< HEAD
-   * One-click startup. Starts the server and opens the user's default
-   * browser to the web app. Does NOT touch CDP — the user opts into CDP
-   * separately via the granular controls if they want it.
-   */
-  async startAll({ openBrowser = true } = {}) {
-    this.log.append("lifecycle", "Starting GTSS Growth Engine...");
-
-    const port = this.server.port || 3000;
-
-=======
    * One-click startup.
    *
    * 1. Start CDP Chrome with the web app URL — Chrome opens localhost:3000
@@ -133,7 +95,6 @@ class Lifecycle {
     }
 
     // ─── 3. Start the server ─────────────────────────────────────────────
->>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
     if (!this.server.isRunning()) {
       await this.server.start({ port });
     }
@@ -141,29 +102,16 @@ class Lifecycle {
     // Give Express a beat to finish mounting routes.
     await new Promise((r) => setTimeout(r, 400));
 
-<<<<<<< HEAD
-    if (openBrowser) {
-      const url = `http://localhost:${port}`;
-      this.log.append("lifecycle", `Opening ${url} in your default browser...`);
-      await shell.openExternal(url);
-    }
-
-    this.log.append("lifecycle", "Server is ready. The web app should now be open in your browser.");
-=======
     if (cdpActive) {
       this.log.append("lifecycle", "Ready. The web app is open in the CDP Chrome window.");
     } else {
       this.log.append("lifecycle", "Ready. The web app is open in your default browser.");
     }
->>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
   }
 
   async stopAll(reason = "user") {
     this.log.append("lifecycle", `Stopping services (reason: ${reason})...`);
-<<<<<<< HEAD
-=======
     // Stop server first so it can clean up browser connections gracefully.
->>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
     if (this.server.isRunning()) {
       await this.server.stop(reason);
     }
@@ -195,19 +143,11 @@ class Lifecycle {
     }
   }
 
-<<<<<<< HEAD
-  // ─── CDP controls (advanced, opt-in) ───────────────────────────────────
-  //
-  // Starting CDP also flips BROWSER_MODE=cdp in the .env and restarts the
-  // server so it picks up the new mode. Stopping CDP reverts to persistent
-  // mode.
-=======
   // ─── CDP-only controls ─────────────────────────────────────────────────
   //
   // These are for the rare case where the user wants to start/stop CDP
   // without restarting the server. In normal use, startAll() handles
   // everything.
->>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
 
   async startCdpOnly() {
     if (this.cdp.isRunning()) return;
@@ -233,8 +173,6 @@ class Lifecycle {
     }
   }
 
-<<<<<<< HEAD
-=======
   /**
    * Open the web app. If CDP Chrome is running, open a new tab in it.
    * Otherwise, open in the user's default browser.
@@ -249,7 +187,7 @@ class Lifecycle {
     await shell.openExternal(url);
   }
 
->>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
+
   getStatus() {
     return {
       server: this.server.getState(),

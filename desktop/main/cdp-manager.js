@@ -21,10 +21,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const net = require("net");
-<<<<<<< HEAD
-=======
 const http = require("http");
->>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
 
 const DEFAULT_PORT = 9222;
 const CDP_PROFILE_DIRNAME = "chrome-cdp-profile";
@@ -73,9 +70,6 @@ class CdpManager {
     };
   }
 
-<<<<<<< HEAD
-  async start() {
-=======
   /**
    * Start the CDP Chrome.
    *
@@ -86,7 +80,6 @@ class CdpManager {
    *   automation share the same Chrome instance.
    */
   async start({ openUrl } = {}) {
->>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
     if (this.child) {
       throw new Error(`CDP Chrome already running (pid ${this.child.pid})`);
     }
@@ -120,8 +113,6 @@ class CdpManager {
       "--disable-features=ChromeWhatsNewUI",
     ];
 
-<<<<<<< HEAD
-=======
     // If a URL was provided, Chrome will open it in a new tab on launch.
     // This is how the web app opens INSIDE the CDP Chrome.
     if (openUrl) {
@@ -129,7 +120,7 @@ class CdpManager {
       this.logStream.append("cdp", `Will open ${openUrl} on launch.`);
     }
 
->>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
+
     this.logStream.append("cdp", `Launching Chrome on port ${this.port}...`);
     this.child = spawn(this.chromePath, args, {
       cwd: this.cdpProfileDir,
@@ -186,8 +177,6 @@ class CdpManager {
     }
   }
 
-<<<<<<< HEAD
-=======
   /**
    * Open a new tab in the running CDP Chrome via the DevTools HTTP API.
    * Used by the "Open Web App" button — this way the web app opens in the
@@ -220,7 +209,7 @@ class CdpManager {
     });
   }
 
->>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
+
   async stop(reason = "user") {
     if (!this.child) {
       this.state = "stopped";

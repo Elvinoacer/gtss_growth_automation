@@ -46,14 +46,10 @@ function updateHero(server, cdp) {
 
   if (state === "running") {
     const since = server.startedAt ? new Date(server.startedAt).toLocaleTimeString() : "";
-<<<<<<< HEAD
-    $("#hero-meta").textContent = `Server up since ${since} · PID ${server.pid} · http://localhost:${server.port}`;
-=======
     const cdpInfo = cdp.state === "running"
       ? ` · Chrome CDP on port ${cdp.port}`
       : " · CDP inactive (isolated browser mode)";
     $("#hero-meta").textContent = `Server up since ${since} · PID ${server.pid} · http://localhost:${server.port}${cdpInfo}`;
->>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
   } else if (state === "starting") {
     $("#hero-meta").textContent = "Booting the server... this usually takes 2–3 seconds.";
   } else if (state === "stopping") {
@@ -61,11 +57,7 @@ function updateHero(server, cdp) {
   } else if (state === "crashed") {
     $("#hero-meta").textContent = "The server crashed. See the error above.";
   } else {
-<<<<<<< HEAD
-    $("#hero-meta").textContent = "Click Start to launch the app.";
-=======
     $("#hero-meta").textContent = "Click Start to launch the app in Chrome.";
->>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
   }
 
   // Show/hide error card.
@@ -122,17 +114,10 @@ $("#start-btn").addEventListener("click", async () => {
   // Clear any previous error.
   $("#error-card").classList.add("hidden");
   $("#status-hero").classList.remove("hidden");
-<<<<<<< HEAD
-  toast("Starting GTSS Growth Engine...", "info");
-  const res = await window.gtss.lifecycle.start();
-  if (res.ok) {
-    toast("Server is up. Opening your browser...", "success");
-=======
   toast("Launching Chrome and starting the server...", "info");
   const res = await window.gtss.lifecycle.start();
   if (res.ok) {
     toast("Ready! The web app is open in the Chrome window.", "success");
->>>>>>> e833c74 (feat: add Windows and Linux installers for GTSS Growth Engine)
   } else {
     toast(`Failed to start: ${res.error}`, "error");
   }
