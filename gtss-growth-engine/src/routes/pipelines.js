@@ -857,7 +857,7 @@ router.post('/:id/force-clear', (req, res) => {
     previous_status: result.previousStatus || null,
     message: result.cleared > 0
       ? `Cleared stuck execution ${result.executionId} (was ${result.previousStatus}). You can now Run / Retry / Resume.`
-      : 'No active execution to clear. State is already idle.',
+      : 'Pipeline state reset to idle.',
   });
 });
 

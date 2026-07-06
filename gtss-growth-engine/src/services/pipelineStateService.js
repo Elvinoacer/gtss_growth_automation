@@ -537,9 +537,9 @@ function forceClearExecution(pipelineId, reason = "manual") {
          SET current_state = 'idle',
              current_execution_id = NULL,
              updated_at = CURRENT_TIMESTAMP
-         WHERE id = ? AND current_state IN ('running', 'paused', 'resuming', 'stopping', 'retrying')`,
+         WHERE id = ?`,
       ).run(String(pipelineId));
-      return { ok: true, cleared: 0, message: "No active execution to clear." };
+      return { ok: true, cleared: 0, message: "Pipeline state has been reset to idle." };
     }
 
     const now = new Date().toISOString();
