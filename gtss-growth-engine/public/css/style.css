@@ -1455,6 +1455,24 @@ body[data-page-title="Automation"] .page-content > div > header {
   50% { box-shadow: 0 0 0 5px rgba(34, 197, 94, 0); }
 }
 
+/* Running pipeline card — subtle left-border pulse so the user can see at
+   a glance which pipeline is currently active. Combined with the live-dot
+   inside the status badge, this gives strong at-a-glance feedback. */
+.pipeline-card--running {
+  position: relative;
+  animation: pipeline-running-pulse 2.4s ease-in-out infinite;
+}
+@keyframes pipeline-running-pulse {
+  0%, 100% { box-shadow: 0 14px 40px rgba(0,0,0,0.18), inset 0 0 0 1px rgba(34,197,94,0.0); }
+  50% { box-shadow: 0 14px 40px rgba(0,0,0,0.18), inset 0 0 0 1px rgba(34,197,94,0.45); }
+}
+
+/* Spinner used inside action buttons while a fetch is in flight. */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 @keyframes fade-up {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }

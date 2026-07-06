@@ -308,9 +308,43 @@ function initializeSchema(database) {
     database.exec("ALTER TABLE posts ADD COLUMN location_tag TEXT");
   } catch (_) {}
   try {
+    // Per-platform captions: JSON map of { platform: captionString }.
+    // The content pipeline writes one caption per platform here, and the
+    // publisher reads the platform-specific caption instead of re-using
+    // the primary platform's caption (and truncating it for shorter-limit
+    // platforms like X).
+    database.exec("ALTER TABLE posts ADD COLUMN captions_json TEXT");
+  } catch (_) {}
+  try {
     database.exec(
       "ALTER TABLE ig_follow_tracker ADD COLUMN follow_source TEXT",
     );
+  } catch (_) {}
+
+  // ── Asset grouping migrations ─────────────────────────────────────────
+  // Add group_id + position columns to existing asset_library rows so the
+  // user can group uploaded images into multi-image posts / carousels.
+  try {
+    database.exec("ALTER TABLE asset_library ADD COLUMN group_id INTEGER");
+  } catch (_) {}
+  try {
+    database.exec("ALTER TABLE asset_library ADD COLUMN position INTEGER DEFAULT 0");
+  } catch (_) {}
+  try {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS asset_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        label TEXT,
+        post_type TEXT DEFAULT 'carousel',
+        times_used INTEGER DEFAULT 0,
+        last_used_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+  } catch (_) {}
+  try {
+    database.exec("CREATE INDEX IF NOT EXISTS idx_asset_library_group_id ON asset_library(group_id)");
   } catch (_) {}
 
   try {
@@ -643,10 +677,23 @@ function initializeSchema(database) {
         tags TEXT,
         times_used INTEGER DEFAULT 0,
         last_used_at DATETIME,
+        group_id INTEGER,
+        position INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS idx_asset_library_media_type ON asset_library(media_type);
       CREATE INDEX IF NOT EXISTS idx_asset_library_times_used ON asset_library(times_used ASC);
+      CREATE INDEX IF NOT EXISTS idx_asset_library_group_id ON asset_library(group_id);
+
+      CREATE TABLE IF NOT EXISTS asset_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        label TEXT,
+        post_type TEXT DEFAULT 'carousel',
+        times_used INTEGER DEFAULT 0,
+        last_used_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
 
       CREATE TABLE IF NOT EXISTS asset_usage_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

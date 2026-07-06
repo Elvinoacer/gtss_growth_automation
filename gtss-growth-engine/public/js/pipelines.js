@@ -280,13 +280,32 @@ function showPipelineActionInfo(pipelineId, action, msg, type = 'info') {
  * Wrap any pipeline action in a button-loading state + structured error
  * handling + immediate reload. Returns the raw fetch promise so callers
  * can chain on success.
+ *
+ * Optimistic feedback: when the action is one of run/restart/resume/pause/stop,
+ * we patch the affected card's action buttons immediately so the user sees
+ * instant state feedback instead of waiting for the server round-trip.
  */
 async function withActionFeedback(pipelineId, action, btn, fetchPromise) {
   if (btn) {
     btn.disabled = true;
     btn.dataset.originalHtml = btn.innerHTML;
+    btn.dataset.gtssLoading = '1';
     btn.innerHTML = `<span class="spinner" style="display:inline-block;animation:spin 1.4s linear infinite">⟳</span> ${btn.innerHTML}`;
     btn.style.opacity = '0.7';
+  }
+  // ── Optimistic state patch ───────────────────────────────────────────
+  // Flip the cached pipeline state immediately so the action buttons
+  // (Run/Stop/Pause) update their labels + disabled state before the
+  // server even responds. The next loadPipelines() will reconcile with
+  // ground truth.
+  const optimistic = optimisticStateForAction(pipelineId, action);
+  if (optimistic) {
+    const pipeline = pipelinesData.find((p) => p.id === pipelineId);
+    if (pipeline) {
+      Object.assign(pipeline, optimistic);
+      const card = document.querySelector(`[data-pipeline-id="${pipelineId}"]`);
+      if (card) patchPipelineCardInPlace(card, pipeline, { preserveLoadingButton: btn });
+    }
   }
   try {
     const result = await fetchPromise;
@@ -306,12 +325,42 @@ async function withActionFeedback(pipelineId, action, btn, fetchPromise) {
         btn.innerHTML = btn.dataset.originalHtml;
         delete btn.dataset.originalHtml;
       }
+      delete btn.dataset.gtssLoading;
       btn.style.opacity = '';
     }
     // Always refresh pipelines list immediately + again after 1s, so the
     // user sees the new state without having to wait for the socket event.
     loadPipelines();
     setTimeout(loadPipelines, 1000);
+  }
+}
+
+/**
+ * Map a user action to the optimistic state patch we should apply to the
+ * cached pipeline. Returns null for actions that don't have a clear
+ * optimistic state (e.g., save, history, logs).
+ */
+function optimisticStateForAction(pipelineId, action) {
+  const base = { id: pipelineId };
+  switch (action) {
+    case 'Run Now':
+    case 'Restart':
+      return {
+        ...base,
+        state: 'running',
+        paused: false,
+        progress: 0,
+        current_message: action === 'Restart' ? 'Restarting…' : 'Starting…',
+        active_execution_id: null,
+      };
+    case 'Stop':
+      return { ...base, state: 'stopping', current_message: 'Stopping…' };
+    case 'Pause':
+      return { ...base, state: 'paused', paused: true, current_message: 'Pausing…' };
+    case 'Resume':
+      return { ...base, state: 'resuming', paused: false, current_message: 'Resuming…' };
+    default:
+      return null;
   }
 }
 
@@ -855,25 +904,88 @@ function renderDynamicBanners(pipeline, displayStatus, hasFailedStage) {
   return parts.join('');
 }
 
+/**
+ * Render the action button row for a pipeline card.
+ *
+ * Extracted into its own function so the in-place patcher can refresh
+ * button labels + disabled state without rebuilding the whole card.
+ * The buttons are wrapped in a `data-slot="action-buttons"` span so
+ * the patcher can swap them out atomically.
+ */
+function renderActionButtons(pipeline) {
+  const meta = PIPELINE_META[pipeline.id] || {};
+  const limits = pipeline.limits || {};
+  const enabled = Boolean(pipeline.enabled);
+  const displayStatus = pipeline.state || (pipeline.paused ? 'paused' : pipeline.last_status) || (enabled ? 'idle' : 'disabled');
+  const needsTopic = pipeline.id === 'content' && (!limits.topic || !limits.topic.trim());
+  const canRun = pipeline.can_run !== undefined ? pipeline.can_run : displayStatus !== 'running' && !pipeline.paused;
+  const canPause = pipeline.can_pause !== undefined ? pipeline.can_pause : enabled && !pipeline.paused;
+  const canResume = pipeline.can_resume !== undefined ? pipeline.can_resume : Boolean(pipeline.paused);
+  const canStop = pipeline.can_stop !== undefined ? pipeline.can_stop : displayStatus === 'running' || displayStatus === 'stopping' || displayStatus === 'resuming' || displayStatus === 'retrying';
+  const isRunningLike = ['running', 'stopping', 'resuming', 'retrying'].includes(displayStatus);
+  const pauseAction = pipeline.paused ? 'resume' : 'pause';
+  const pauseEnabled = pipeline.paused ? canResume : canPause;
+
+  // Dynamic labels: when running, the primary button becomes "Running…";
+  // when stopping, the Stop button becomes "Stopping…". This gives the
+  // user a clear visual signal of what's happening right now.
+  const runLabel = isRunningLike ? (displayStatus === 'stopping' ? '⟳ Stopping…' : '● Running…') : '▶ Start';
+  const stopLabel = displayStatus === 'stopping' ? '⟳ Stopping…' : '■ Stop';
+  const pauseLabel = pipeline.paused ? '▶ Resume' : 'Ⅱ Pause';
+
+  return `
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button type="button" class="pipeline-action-btn" data-action="run" data-pipeline="${pipeline.id}"
+          style="${actionStyle({ border: isRunningLike ? 'rgba(148,163,184,0.3)' : 'rgba(34,197,94,0.3)', bg: isRunningLike ? 'rgba(148,163,184,0.08)' : 'rgba(34,197,94,0.1)', text: isRunningLike ? '#94a3b8' : '#22c55e' }, canRun)}" title="${canRun ? 'Start this pipeline now' : 'Cannot start while paused, disabled, or already running'}"${disabledAttr(canRun)}>
+          ${runLabel}
+        </button>
+        <button type="button" class="pipeline-action-btn" data-action="restart" data-pipeline="${pipeline.id}"
+          style="${actionStyle({ border: 'rgba(56,189,248,0.3)', bg: 'rgba(56,189,248,0.1)', text: '#38bdf8' }, true)}" title="Stop current run (if any) and start fresh">
+          ↻ Restart
+        </button>
+        <button type="button" class="pipeline-action-btn" data-action="${pauseAction}" data-pipeline="${pipeline.id}"
+          style="${actionStyle({ border: 'rgba(245,158,11,0.3)', bg: 'rgba(245,158,11,0.1)', text: '#fbbf24' }, pauseEnabled)}" title="${pauseEnabled ? (pipeline.paused ? 'Resume this pipeline' : 'Pause this pipeline') : 'Pause is only available for enabled pipelines'}"${disabledAttr(pauseEnabled)}>
+          ${pauseLabel}
+        </button>
+        <button type="button" class="pipeline-action-btn" data-action="stop" data-pipeline="${pipeline.id}"
+          style="${actionStyle({ border: 'rgba(248,113,113,0.3)', bg: 'rgba(248,113,113,0.1)', text: '#f87171' }, canStop)}" title="${canStop ? 'Stop the active run' : 'No active run to stop'}"${disabledAttr(canStop)}>
+          ${stopLabel}
+        </button>
+        <button type="button" class="pipeline-action-btn" data-action="executions" data-pipeline="${pipeline.id}"
+          style="padding:8px 14px;border-radius:10px;border:1px solid rgba(148,163,184,0.2);
+          background:rgba(148,163,184,0.06);color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;
+          transition:all 150ms" title="View execution history">
+          📋 History
+        </button>
+        <button type="button" class="pipeline-action-btn" data-action="logs" data-pipeline="${pipeline.id}"
+          style="padding:8px 14px;border-radius:10px;border:1px solid rgba(148,163,184,0.2);
+          background:rgba(148,163,184,0.06);color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;
+          transition:all 150ms" title="View structured logs">
+          📜 Logs
+        </button>
+        <button type="button" class="pipeline-action-btn" data-action="save" data-pipeline="${pipeline.id}"
+          style="padding:8px 14px;border-radius:10px;border:1px solid rgba(14,165,233,0.3);
+          background:rgba(14,165,233,0.1);color:#38bdf8;font-size:12px;font-weight:600;cursor:pointer;
+          transition:all 150ms" title="Save changes">
+          💾 Save
+        </button>
+      </div>`;
+}
+
 function renderPipelineCard(pipeline) {
   const meta = PIPELINE_META[pipeline.id] || {};
   const limits = pipeline.limits || {};
   const enabled = Boolean(pipeline.enabled);
   const displayStatus = pipeline.state || (pipeline.paused ? 'paused' : pipeline.last_status) || (enabled ? 'idle' : 'disabled');
-  const activeJobs = Array.isArray(pipeline.active_jobs) ? pipeline.active_jobs : [];
   const needsTopic = pipeline.id === 'content' && (!limits.topic || !limits.topic.trim());
-  const canRun = pipeline.can_run !== undefined ? pipeline.can_run : displayStatus !== 'running' && !pipeline.paused;
-  const canPause = pipeline.can_pause !== undefined ? pipeline.can_pause : enabled && !pipeline.paused;
-  const canResume = pipeline.can_resume !== undefined ? pipeline.can_resume : Boolean(pipeline.paused);
-  const canStop = pipeline.can_stop !== undefined ? pipeline.can_stop : displayStatus === 'running';
-  const pauseAction = pipeline.paused ? 'resume' : 'pause';
-  const pauseEnabled = pipeline.paused ? canResume : canPause;
-  const isExpanded = expandedPipelines.has(pipeline.id);
-  const hasFailedStage = pipeline.state === 'failed';
+  const isRunningLike = ['running', 'stopping', 'resuming', 'retrying'].includes(displayStatus);
+
+  // Card border pulses left-edge color while running, for at-a-glance status.
+  const borderColor = isRunningLike ? '#22c55e' : (meta.color || '#94a3b8');
 
   return `
-  <article class="pipeline-card glass-panel animate-card" data-pipeline-id="${pipeline.id}"
-    style="border-radius:24px;padding:24px 28px;border-left:4px solid ${meta.color || '#94a3b8'}">
+  <article class="pipeline-card glass-panel animate-card${isRunningLike ? ' pipeline-card--running' : ''}" data-pipeline-id="${pipeline.id}"
+    style="border-radius:24px;padding:24px 28px;border-left:4px solid ${borderColor}">
 
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:12px;min-width:0">
@@ -916,16 +1028,16 @@ function renderPipelineCard(pipeline) {
     <div data-slot="stage-progress">${renderStageProgress(meta, pipeline)}</div>
 
     <div data-slot="dynamic-banners">
-      ${renderDynamicBanners(pipeline, displayStatus, hasFailedStage)}
+      ${renderDynamicBanners(pipeline, displayStatus, pipeline.state === 'failed')}
     </div>
 
-    <details class="pipeline-section" ${isExpanded ? 'open' : ''} data-pipeline-section="${pipeline.id}" style="margin-top:8px">
+    <details class="pipeline-section" ${expandedPipelines.has(pipeline.id) ? 'open' : ''} data-pipeline-section="${pipeline.id}" style="margin-top:8px">
       <summary style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;cursor:pointer">
         <span style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#cbd5e1">
           <span class="chevron" style="color:#64748b">▸</span>
           Pipeline Health & Metrics
         </span>
-        <span style="font-size:11px;color:#64748b">click to ${isExpanded ? 'collapse' : 'expand'}</span>
+        <span style="font-size:11px;color:#64748b">click to ${expandedPipelines.has(pipeline.id) ? 'collapse' : 'expand'}</span>
       </summary>
       <div data-health-section="${pipeline.id}" style="padding-top:4px">
         ${renderHealthSection(pipeline)}
@@ -961,41 +1073,8 @@ function renderPipelineCard(pipeline) {
         <span>Next: <strong style="color:#94a3b8">${pipeline.enabled ? formatRelative(pipeline.next_run_at) : 'Disabled'}</strong></span>
         <span>Runs: <strong style="color:#94a3b8">${pipeline.run_count || 0}</strong></span>
       </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button type="button" class="pipeline-action-btn" data-action="run" data-pipeline="${pipeline.id}"
-          style="${actionStyle({ border: 'rgba(34,197,94,0.3)', bg: 'rgba(34,197,94,0.1)', text: '#22c55e' }, canRun)}" title="${canRun ? 'Run this pipeline now' : 'Cannot run while paused or already running'}"${disabledAttr(canRun)}>
-          ▶ Run Now
-        </button>
-        <button type="button" class="pipeline-action-btn" data-action="restart" data-pipeline="${pipeline.id}"
-          style="${actionStyle({ border: 'rgba(56,189,248,0.3)', bg: 'rgba(56,189,248,0.1)', text: '#38bdf8' }, true)}" title="Stop current run (if any) and start fresh">
-          ↻ Restart
-        </button>
-        <button type="button" class="pipeline-action-btn" data-action="${pauseAction}" data-pipeline="${pipeline.id}"
-          style="${actionStyle({ border: 'rgba(245,158,11,0.3)', bg: 'rgba(245,158,11,0.1)', text: '#fbbf24' }, pauseEnabled)}" title="${pauseEnabled ? (pipeline.paused ? 'Resume this pipeline' : 'Pause this pipeline') : 'Pause is only available for enabled pipelines'}"${disabledAttr(pauseEnabled)}>
-          ${pipeline.paused ? '▶ Resume' : 'Ⅱ Pause'}
-        </button>
-        <button type="button" class="pipeline-action-btn" data-action="stop" data-pipeline="${pipeline.id}"
-          style="${actionStyle({ border: 'rgba(248,113,113,0.3)', bg: 'rgba(248,113,113,0.1)', text: '#f87171' }, canStop)}" title="${canStop ? 'Stop the active run' : 'No active run to stop'}"${disabledAttr(canStop)}>
-          ■ Stop
-        </button>
-        <button type="button" class="pipeline-action-btn" data-action="executions" data-pipeline="${pipeline.id}"
-          style="padding:8px 14px;border-radius:10px;border:1px solid rgba(148,163,184,0.2);
-          background:rgba(148,163,184,0.06);color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;
-          transition:all 150ms" title="View execution history">
-          📋 History
-        </button>
-        <button type="button" class="pipeline-action-btn" data-action="logs" data-pipeline="${pipeline.id}"
-          style="padding:8px 14px;border-radius:10px;border:1px solid rgba(148,163,184,0.2);
-          background:rgba(148,163,184,0.06);color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;
-          transition:all 150ms" title="View structured logs">
-          📜 Logs
-        </button>
-        <button type="button" class="pipeline-action-btn" data-action="save" data-pipeline="${pipeline.id}"
-          style="padding:8px 14px;border-radius:10px;border:1px solid rgba(14,165,233,0.3);
-          background:rgba(14,165,233,0.1);color:#38bdf8;font-size:12px;font-weight:600;cursor:pointer;
-          transition:all 150ms" title="Save changes">
-          💾 Save
-        </button>
+      <div data-slot="action-buttons">
+        ${renderActionButtons(pipeline)}
       </div>
     </div>
   </article>`;
@@ -1099,19 +1178,26 @@ function renderPipelines(pipelines) {
  * older version of renderPipelineCard), we bail out and let the caller
  * fall back to a full re-render.
  */
-function patchPipelineCardInPlace(card, pipeline) {
+function patchPipelineCardInPlace(card, pipeline, opts = {}) {
   if (!card || !pipeline) return false;
 
   const meta = PIPELINE_META[pipeline.id] || {};
   const enabled = Boolean(pipeline.enabled);
   const displayStatus = pipeline.state || (pipeline.paused ? 'paused' : pipeline.last_status) || (enabled ? 'idle' : 'disabled');
   const hasFailedStage = pipeline.state === 'failed';
+  const isRunningLike = ['running', 'stopping', 'resuming', 'retrying'].includes(displayStatus);
 
   // 1. Status badge.
   const badgeSlot = card.querySelector('[data-slot="status-badge"]');
   if (badgeSlot) {
     badgeSlot.innerHTML = statusBadge(displayStatus);
   }
+
+  // 1b. Card border + running class — visual signal that the pipeline is live.
+  const targetBorderColor = isRunningLike ? '#22c55e' : (meta.color || '#94a3b8');
+  card.style.borderLeftColor = targetBorderColor;
+  if (isRunningLike) card.classList.add('pipeline-card--running');
+  else card.classList.remove('pipeline-card--running');
 
   // 2. Toggle switch state (only patch if changed — preserves click handler).
   const toggleInput = card.querySelector('[data-toggle-pipeline]');
@@ -1178,16 +1264,47 @@ function patchPipelineCardInPlace(card, pipeline) {
     }
   }
 
+  // 8. Action buttons — re-render the row so labels (Start ↔ Running… ↔
+  //    Stopping…) and disabled state (Run disabled while running, Stop
+  //    enabled while running) stay in sync with the live pipeline state.
+  //    This was the single biggest UX complaint: after clicking Run, the
+  //    button stayed labelled "Run Now" and re-enabled, so the user had
+  //    no idea whether the pipeline was actually running.
+  const actionsSlot = card.querySelector('[data-slot="action-buttons"]');
+  if (actionsSlot) {
+    // Find the button currently in a loading state (if any) so we don't
+    // clobber its spinner while the fetch is still in flight.
+    const loadingBtn = actionsSlot.querySelector('[data-gtss-loading="1"]');
+    const preserveLoadingAction = loadingBtn ? loadingBtn.dataset.action : null;
+
+    const newActionsHtml = renderActionButtons(pipeline);
+    actionsSlot.innerHTML = newActionsHtml;
+    attachActionBtnListeners(actionsSlot);
+
+    // If we just nuked a button that was mid-fetch, restore its loading
+    // appearance on the freshly-rendered counterpart so the spinner
+    // doesn't vanish mid-click.
+    if (preserveLoadingAction && opts && opts.preserveLoadingButton) {
+      const freshBtn = actionsSlot.querySelector(`[data-action="${preserveLoadingAction}"]`);
+      if (freshBtn) {
+        freshBtn.disabled = true;
+        freshBtn.dataset.gtssLoading = '1';
+        freshBtn.dataset.originalHtml = freshBtn.innerHTML;
+        freshBtn.innerHTML = `<span class="spinner" style="display:inline-block;animation:spin 1.4s linear infinite">⟳</span> ${freshBtn.innerHTML}`;
+        freshBtn.style.opacity = '0.7';
+        // Rewire the original button reference so the finally block in
+        // withActionFeedback still clears the right element.
+        // (We can't reassign the const, but we can transplant its dataset
+        //  and let the finally block operate on the new button by id.)
+        opts.preserveLoadingButton.dataset.action = preserveLoadingAction;
+      }
+    }
+  }
+
   // Note: We deliberately DO NOT touch the "Schedule & Configuration"
   // <details> section here — the user might be mid-edit in the cron input
   // or a limit field. The server-side values will be reconciled the next
   // time the user clicks Save.
-
-  // Note: We also DO NOT touch the per-card action buttons' disabled
-  // state. Their disabled state is derived from can_run / can_pause / etc.,
-  // but flipping it mid-typing would feel jumpy. The user will see the
-  // right state on the next full re-render (e.g., after they click Save
-  // or after a longer idle period).
 
   return true;
 }

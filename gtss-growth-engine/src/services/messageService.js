@@ -4,7 +4,7 @@ const { getDb } = require("../db/database");
 const { getPrimaryPlatform } = require("./platformCatalog");
 const { callGeminiText, unwrapGeminiText } = require("./aiService");
 const logger = require("../utils/logger");
-const { stageMode, autoApproveVariant } = require("../config/pipelineConfig");
+const { stageMode, autoApproveVariant, messageGenerationSource } = require("../config/pipelineConfig");
 const { getContext } = require("./contextService");
 
 // ---------------------------------------------------------------------------
@@ -222,16 +222,159 @@ function generateFromTemplate(lead) {
 }
 
 // ---------------------------------------------------------------------------
+// Core: generateViaAI
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate outreach DMs via Gemini (API key first, Gemini Web fallback).
+ *
+ * Builds a per-platform prompt using the lead's profile + product context,
+ * calls Gemini via callGeminiText, and inserts two A/B variants (both the
+ * same AI-generated body — the variant distinction is preserved for
+ * backward-compat with the review UI but the body is identical because the
+ * prompt asks for a single best message).
+ *
+ * On any AI failure, falls back to generateFromTemplate so the pipeline
+ * doesn't deadlock when Gemini is rate-limited or the Web session is
+ * unavailable. The fallback rows are stamped generated_by='template-fallback'.
+ *
+ * @param {Object} lead - Lead row from DB
+ * @returns {Promise<{variantA: {id, body}, variantB: {id, body}}>}
+ */
+async function generateViaAI(lead) {
+  const db = getDb();
+  const ctx = getContext();
+  const resolvedPlatform = lead.platform || getPrimaryPlatform();
+  const messageType = resolvedPlatform === "linkedin" ? "connect" : "dm";
+  const limit = getCharLimit(resolvedPlatform, messageType);
+  const painPoints = Array.isArray(ctx.ctx_product_pain_points)
+    ? ctx.ctx_product_pain_points
+    : [];
+  const geographies = Array.isArray(ctx.ctx_audience_geographies)
+    ? ctx.ctx_audience_geographies
+    : [];
+
+  // ── Pre-flight: skip AI when no Gemini source is available ─────────────
+  // If neither the Gemini API key nor a shared Chrome CDP endpoint is
+  // configured, the AI path will hang trying to launch a browser that
+  // doesn't exist (or fail immediately and fall back anyway). Short-circuit
+  // to the template path so the pipeline keeps moving and tests don't hang.
+  const hasApiKey = Boolean(process.env.GEMINI_API_KEY);
+  const hasCdp = Boolean(
+    process.env.GEMINI_CDP_ENDPOINT ||
+      process.env.CDP_ENDPOINT ||
+      process.env.LINKEDIN_CDP_ENDPOINT ||
+      process.env.INSTAGRAM_CDP_ENDPOINT ||
+      process.env.FACEBOOK_CDP_ENDPOINT ||
+      process.env.X_CDP_ENDPOINT,
+  );
+  if (!hasApiKey && !hasCdp) {
+    logger.info("MESSAGES", "Skipping AI message generation — no GEMINI_API_KEY and no CDP endpoint; using template");
+    const result = generateFromTemplate(lead);
+    try {
+      db.prepare(
+        `UPDATE messages SET generated_by = 'template-fallback'
+         WHERE id IN (?, ?)`,
+      ).run(result.variantA.id, result.variantB.id);
+    } catch (_) {}
+    return result;
+  }
+
+  const prompt = `Write a short, genuine outreach ${messageType === "connect" ? "connection note" : "direct message"} for ${resolvedPlatform}.
+Lead name: ${lead.name || "there"}
+Lead role: ${lead.role || "unknown"}
+Lead company: ${lead.company || "their business"}
+Lead location: ${lead.location || geographies[0] || "Kenya"}
+Product: ${ctx.ctx_product_name} — ${ctx.ctx_product_tagline}
+Value proposition: ${ctx.ctx_product_value_prop}
+Relevant pain point: ${extractPainPoint(lead.score_reason, painPoints)}
+Sender: ${ctx.ctx_sender_name}
+Sign-off: ${ctx.ctx_sender_sign_off}
+Call to action: ${ctx.ctx_content_cta}
+
+Rules:
+- Max ${limit} characters including spaces.
+- Plain text only, no markdown, no emojis unless they fit the tone naturally.
+- Open with the lead's first name, end with the sign-off.
+- Be specific about the pain point — don't be generic.
+- One clear CTA, low friction.
+Return ONLY the message body, no explanations or quotes.`;
+
+  try {
+    const generation = await callGeminiText(prompt, { timeoutMs: 25_000 });
+    const raw = unwrapGeminiText(generation);
+    let body = stripCodeFences(raw).replace(/^["']|["']$/g, "");
+    if (body.length > limit) body = body.slice(0, limit);
+
+    logger.db("info", "outreach", "message_ai", "AI outreach message generated", {
+      leadId: lead.id,
+      platform: resolvedPlatform,
+      source: generation.source || "unknown",
+      model: generation.model,
+    });
+
+    const insertStmt = db.prepare(
+      `INSERT INTO messages (lead_id, platform, body, variant, status, generated_by, generated_at)
+       VALUES (?, ?, ?, ?, 'pending', 'ai', CURRENT_TIMESTAMP)`,
+    );
+    const resultA = insertStmt.run(lead.id, resolvedPlatform, body, "A");
+    const resultB = insertStmt.run(lead.id, resolvedPlatform, body, "B");
+    return {
+      variantA: { id: resultA.lastInsertRowid, body },
+      variantB: { id: resultB.lastInsertRowid, body },
+    };
+  } catch (err) {
+    logger.warn("MESSAGES", `AI message generation failed for lead ${lead.id}, falling back to template`, {
+      error: err.message,
+    });
+    // Fall back to template so the pipeline keeps moving. The rows are
+    // stamped 'template-fallback' so the review UI can show the user that
+    // AI wasn't actually used for this lead.
+    const result = generateFromTemplate(lead);
+    // Re-stamp the rows so the user can see they came from the fallback path.
+    try {
+      db.prepare(
+        `UPDATE messages SET generated_by = 'template-fallback'
+         WHERE id IN (?, ?)`,
+      ).run(result.variantA.id, result.variantB.id);
+    } catch (_) {}
+    return result;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Core: generateMessages
 // ---------------------------------------------------------------------------
 
-async function generateMessages(leadId, platform, productPitch, tone) {
+/**
+ * Generate outreach messages for a single lead.
+ *
+ * Dispatches to generateViaAI or generateFromTemplate based on the
+ * message_generation_source setting (DB: 'message_generation_source',
+ * env: MESSAGE_GENERATION_SOURCE, default 'ai').
+ *
+ * The user explicitly requested that AI be the default for the full
+ * lead-discovery pipeline, with the option to switch to manual templates.
+ *
+ * @param {number} leadId
+ * @param {string} platform - optional override; falls back to lead.platform
+ * @param {string} _productPitch - deprecated, kept for backward-compat
+ * @param {string} _tone - deprecated, kept for backward-compat
+ * @returns {Promise<{variantA: {id, body}, variantB: {id, body}}>}
+ */
+async function generateMessages(leadId, platform, _productPitch, _tone) {
   const db = getDb();
   const lead = db.prepare("SELECT * FROM leads WHERE id = ?").get(leadId);
   if (!lead) throw new Error(`Lead ${leadId} not found`);
+  if (platform && lead.platform !== platform) {
+    lead.platform = platform;
+  }
 
-  // Always use template - productPitch parameter is deprecated, context is the source of truth
-  return generateFromTemplate(lead);
+  const source = messageGenerationSource();
+  if (source === 'template') {
+    return generateFromTemplate(lead);
+  }
+  return generateViaAI(lead);
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +540,7 @@ async function generateAllMessages(jobId, productPitch, tone) {
 async function runMessageStage(jobId, emit, platforms = []) {
   const db = getDb();
   const mode = stageMode("message");
+  const source = messageGenerationSource();
   const variant = autoApproveVariant();
   const selectedPlatforms = Array.isArray(platforms)
     ? platforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean)
@@ -429,7 +573,7 @@ async function runMessageStage(jobId, emit, platforms = []) {
 
   emit({
     type: "info",
-    message: `Generating messages for ${leads.length} leads (mode: ${mode}, auto-approve: variant ${variant})`,
+    message: `Generating messages for ${leads.length} leads (source: ${source}, mode: ${mode}, auto-approve: variant ${variant})`,
   });
 
   for (let i = 0; i < leads.length; i++) {
@@ -449,10 +593,16 @@ async function runMessageStage(jobId, emit, platforms = []) {
 
     try {
       let result;
-      if (mode === "manual") {
+      // Source dispatch: 'ai' (default) → generateViaAI, 'template' →
+      // generateFromTemplate. The old `mode === 'manual'` branch is kept
+      // only as an additional escape hatch — when both are set, manual
+      // mode wins so the operator can force templates even if the source
+      // says 'ai'.
+      if (mode === "manual" || source === "template") {
         result = generateFromTemplate(lead);
       } else {
-        // AI mode with automatic template fallback (handled inside generateMessages)
+        // AI mode — generateViaAI handles its own template fallback on
+        // Gemini failure, so this never deadlocks.
         result = await generateMessages(lead.id, lead.platform);
       }
 
@@ -508,6 +658,7 @@ async function runMessageStage(jobId, emit, platforms = []) {
 
 module.exports = {
   generateMessages,
+  generateViaAI,
   generateFollowUp,
   generateAllMessages,
   generateFromTemplate,

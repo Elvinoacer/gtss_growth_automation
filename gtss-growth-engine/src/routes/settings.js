@@ -186,6 +186,10 @@ apiRouter.patch("/", (req, res) => {
     "content_library_media_type",
     "retry_max_attempts",
     "retry_delay_preset",
+    // Per-user choice of AI vs template for outreach DM generation.
+    // 'ai' = use Gemini (API key first, Gemini Web fallback) — default.
+    // 'template' = use canonical templates from Settings (manual control).
+    "message_generation_source",
   ]);
   const updates = req.body || {};
   Object.entries(updates).forEach(([key, value]) => {

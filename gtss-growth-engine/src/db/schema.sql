@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS posts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   platforms TEXT, -- JSON array e.g. ["linkedin","x"]
   body TEXT,
+  captions_json TEXT, -- JSON map of { platform: caption } so the publisher can use a per-platform caption
   media_path TEXT,
   media_paths TEXT,
   location_tag TEXT,
@@ -339,11 +340,32 @@ CREATE TABLE IF NOT EXISTS asset_library (
   tags TEXT,
   times_used INTEGER DEFAULT 0,
   last_used_at DATETIME,
+  -- Asset grouping: an asset may belong to one group (e.g. a carousel
+  -- set or a multi-image post). group_id + position let the user
+  -- decide which images belong together as a single post and in what
+  -- order. NULL group_id = standalone asset (legacy behaviour).
+  group_id INTEGER REFERENCES asset_groups(id) ON DELETE SET NULL,
+  position INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_asset_library_media_type ON asset_library(media_type);
 CREATE INDEX IF NOT EXISTS idx_asset_library_times_used ON asset_library(times_used ASC);
+CREATE INDEX IF NOT EXISTS idx_asset_library_group_id ON asset_library(group_id);
+
+CREATE TABLE IF NOT EXISTS asset_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  label TEXT,
+  -- post_type hints the publisher about how to use the group:
+  --   'carousel'  → multi-image post (Instagram carousel, etc.)
+  --   'video'     → group contains a video (and optional thumbnail)
+  --   'single'    → group has one asset (treat as a normal single post)
+  post_type TEXT DEFAULT 'carousel',
+  times_used INTEGER DEFAULT 0,
+  last_used_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE IF NOT EXISTS asset_usage_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

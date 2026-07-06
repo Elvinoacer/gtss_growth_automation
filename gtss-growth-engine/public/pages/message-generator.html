@@ -1034,6 +1034,24 @@
       </div>
 
       <div class="setting-group">
+        <div class="setting-label">Message Source</div>
+        <p style="color: var(--gtss-muted); font-size: 12px; line-height: 1.5; margin: 0 0 8px 0">
+          Choose how outreach DMs are drafted. AI uses Gemini (API key first,
+          Gemini Web fallback) — recommended for full lead-discovery runs.
+          Template uses the canonical templates from Settings (manual control,
+          no AI calls).
+        </p>
+        <div class="radio-group" id="message-source-group">
+          <button class="radio-pill selected" data-value="ai">
+            ⚡ AI (Gemini)
+          </button>
+          <button class="radio-pill" data-value="template">
+            📝 Template
+          </button>
+        </div>
+      </div>
+
+      <div class="setting-group">
         <div class="setting-label">Tone</div>
         <div class="radio-group" id="tone-group">
           <button class="radio-pill selected" data-value="friendly">

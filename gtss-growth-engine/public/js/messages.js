@@ -705,6 +705,50 @@
     selectedTone = pill.dataset.value;
   });
 
+  // Message source selector (AI vs Template)
+  const messageSourceGroup = document.getElementById("message-source-group");
+  if (messageSourceGroup) {
+    // Load the persisted preference on init.
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then((settings) => {
+        const stored = settings.message_generation_source || "ai";
+        messageSourceGroup
+          .querySelectorAll(".radio-pill")
+          .forEach((p) => p.classList.remove("selected"));
+        const match = messageSourceGroup.querySelector(
+          `.radio-pill[data-value="${stored}"]`,
+        );
+        if (match) match.classList.add("selected");
+      })
+      .catch(() => {});
+
+    messageSourceGroup.addEventListener("click", (e) => {
+      const pill = e.target.closest(".radio-pill");
+      if (!pill) return;
+      messageSourceGroup
+        .querySelectorAll(".radio-pill")
+        .forEach((p) => p.classList.remove("selected"));
+      pill.classList.add("selected");
+      const value = pill.dataset.value; // 'ai' | 'template'
+      // Persist to settings so the backend messageService picks it up.
+      fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message_generation_source: value }),
+      })
+        .then(() => {
+          showToast(
+            value === "ai"
+              ? "AI message generation enabled. New drafts will use Gemini."
+              : "Template mode enabled. New drafts will use your saved templates.",
+            "info",
+          );
+        })
+        .catch((err) => showToast(err.message, "error"));
+    });
+  }
+
   // Product selector
   productGroup.addEventListener("click", (e) => {
     const pill = e.target.closest(".radio-pill");

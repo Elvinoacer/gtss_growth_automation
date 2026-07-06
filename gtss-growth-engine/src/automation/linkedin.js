@@ -2749,12 +2749,128 @@ async function typeFast(page, locator, text) {
 }
 
 /**
+ * Chunked typing helper for long-form text in LinkedIn's contenteditable
+ * editors.
+ *
+ * Splits the text into ~chunkSize-char chunks at whitespace boundaries and
+ * calls page.keyboard.insertText(chunk) per chunk, with a small settle
+ * delay between chunks. Between chunks we re-locate the editor (in case
+ * React re-rendered it) and verify the cumulative text matches the prefix
+ * we've typed so far. If a chunk fails to land, we abort and let the
+ * caller fall back to per-character typing or clipboard paste.
+ *
+ * This addresses the long-text truncation bug where a single atomic
+ * insertText of a 3000+ char message would silently fail past LinkedIn's
+ * editor buffer or React's beforeinput handler.
+ *
+ * @returns {Promise<boolean>} true if all chunks landed and the final
+ *   editor text contains the full value.
+ */
+async function typeInChunks(page, locatorOrSelector, text, opts = {}) {
+  const chunkSize = Number(opts.chunkSize) > 0 ? Number(opts.chunkSize) : 500;
+  const settleMs = Number(opts.settleMs) >= 0 ? Number(opts.settleMs) : 120;
+
+  const locator =
+    typeof locatorOrSelector === "string"
+      ? page.locator(locatorOrSelector)
+      : locatorOrSelector;
+
+  const value = String(text || "");
+  if (!value) return false;
+
+  // Split into chunks at whitespace boundaries, never exceeding chunkSize.
+  const chunks = [];
+  let cursor = 0;
+  while (cursor < value.length) {
+    let end = Math.min(cursor + chunkSize, value.length);
+    // If we're not at the end, advance to the next whitespace boundary so
+    // we don't split a word in half — React's editor can occasionally drop
+    // a chunk that ends mid-word.
+    if (end < value.length) {
+      // Look for the next newline (preferred) or any whitespace within
+      // the last 30% of the chunk window.
+      const searchStart = end - Math.floor(chunkSize * 0.3);
+      const nlIdx = value.indexOf("\n", searchStart);
+      if (nlIdx > -1 && nlIdx <= end + Math.floor(chunkSize * 0.3)) {
+        end = nlIdx + 1;
+      } else {
+        const wsMatch = value.slice(searchStart).match(/\s/);
+        if (wsMatch && wsMatch.index !== undefined) {
+          end = searchStart + wsMatch.index + 1;
+        }
+      }
+    }
+    chunks.push(value.slice(cursor, end));
+    cursor = end;
+  }
+
+  const normalizeWS = (s) => String(s).replace(/\s+/g, " ").trim();
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    // Re-locate the editor between chunks in case React re-rendered it.
+    let currentLocator = locator;
+    try {
+      const stillVisible = await locator.isVisible({ timeout: 1500 }).catch(() => false);
+      if (!stillVisible) {
+        // Try to recover by re-activating the editor.
+        await activateDmEditor(page, locator).catch(() => {});
+      }
+    } catch (_) { /* keep currentLocator */ }
+    currentLocator = locator;
+
+    try {
+      await ensureSelectionInEditor(currentLocator);
+      await page.keyboard.insertText(chunk);
+    } catch (insertErr) {
+      logger.warn("LinkedIn typeInChunks: insertText failed mid-chunk", {
+        chunkIndex: i,
+        chunkLength: chunk.length,
+        error: insertErr.message,
+      });
+      return false;
+    }
+    await humanDelay(settleMs, settleMs + 80);
+
+    // Verify cumulative prefix landed. If the editor's text doesn't contain
+    // what we've typed so far, abort and let the caller fall back.
+    const expectedSoFar = chunks.slice(0, i + 1).join("");
+    const actual = normalizeWS(await getEditableText(currentLocator));
+    if (!actual.includes(normalizeWS(expectedSoFar))) {
+      // If only the last chunk is missing, retry it once. Otherwise abort.
+      if (i > 0) {
+        const expectedPrev = chunks.slice(0, i).join("");
+        const actualPrev = normalizeWS(await getEditableText(currentLocator));
+        if (actualPrev.includes(normalizeWS(expectedPrev))) {
+          // Previous chunks landed — retry just this chunk.
+          try {
+            await ensureSelectionInEditor(currentLocator);
+            await page.keyboard.insertText(chunk);
+            await humanDelay(settleMs, settleMs + 80);
+            const actual2 = normalizeWS(await getEditableText(currentLocator));
+            if (!actual2.includes(normalizeWS(expectedSoFar))) {
+              return false;
+            }
+            continue;
+          } catch (_) {
+            return false;
+          }
+        }
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Reliable message entry for LinkedIn's DM composer.
  *
  * Uses atomic text injection strategies that work with React's contenteditable:
  *   1. Primary: page.keyboard.insertText() — single CDP command, atomic
- *   2. Fallback: pasteTextViaClipboard() — synthetic paste with proper events
- *   3. Fallback: setEditorTextWithDomEvents() — direct DOM + React events
+ *   2. Fallback: typeInChunks() — chunked insertText for long messages
+ *   3. Fallback: pasteTextViaClipboard() — synthetic paste with proper events
+ *   4. Fallback: setEditorTextWithDomEvents() — direct DOM + React events
  *
  * Previous version used pressSequentially() which fired rapid key-by-key
  * events, causing React to unmount/remount the editor mid-sequence and
@@ -2807,6 +2923,36 @@ async function typeLikeHuman(page, locatorOrSelector, text) {
       // recipient (e.g. clipboard paste wrote the wrong text), this catches
       // it before we return success.
       return true;
+    }
+
+    // Step 3b: Chunked insertText — for long messages, a single atomic
+    // insertText call can silently truncate past LinkedIn's editor buffer
+    // (or React's beforeinput handler may preventDefault on long inserts).
+    // Splitting into ~500-char chunks at whitespace boundaries and
+    // re-locating the editor between chunks gives the editor time to
+    // reconcile React state with the DOM. This is the missing middle
+    // ground between "atomic single shot" and "per-character loop".
+    if (value.length > 600) {
+      logger.info(
+        "LinkedIn typeLikeHuman: long text detected, trying chunked insertText",
+        { length: value.length },
+      );
+      try {
+        const chunkedOk = await typeInChunks(page, locator, value, {
+          chunkSize: 500,
+          settleMs: 120,
+        });
+        if (chunkedOk) {
+          actual = normalizeWS(await getEditableText(locator));
+          if (actual.includes(valueNorm)) {
+            return true;
+          }
+        }
+      } catch (chunkErr) {
+        logger.warn(
+          `LinkedIn typeLikeHuman: chunked insertText failed: ${chunkErr.message}`,
+        );
+      }
     }
 
     // Step 4: Fallback — per-character typing with human-like delays.
@@ -3916,6 +4062,7 @@ module.exports = {
     activateDmEditor,
     typeFast,
     typeLikeHuman,
+    typeInChunks,
     pasteTextViaClipboard,
     setEditorTextWithDomEvents,
     forceClearDmDraft,

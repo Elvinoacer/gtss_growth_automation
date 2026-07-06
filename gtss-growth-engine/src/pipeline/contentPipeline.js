@@ -20,7 +20,7 @@ const {
   publishPost,
 } = require("../services/schedulerService");
 const { runImageGenJob } = require("../services/imageGenService");
-const { pickNextAsset, markAssetUsed } = require("../services/assetRotationService");
+const { pickNextAsset, pickNextAssetGroup, markAssetUsed, markAssetGroupUsed } = require("../services/assetRotationService");
 const { logActivity } = require("../services/auditService");
 const { withRetry } = require("../utils/retryHelper");
 const jobRegistry = require("../jobs/jobRegistry");
@@ -216,18 +216,42 @@ async function runContentPipelineNow(config = {}) {
         }
 
         let mediaRelPath;
+        let mediaRelPaths = null; // array when group / multi-image, null otherwise
         let selectedAsset = null;
+        let selectedGroup = null;
         const assetSource = getSetting("content_asset_source", "ai");
         if (assetSource === "library") {
           const mediaType = getSetting("content_library_media_type", "image");
-          selectedAsset = pickNextAsset({ mediaType });
-          if (!selectedAsset) throw new Error("Asset library is empty");
-          mediaRelPath = selectedAsset.file_url;
-          emit({
-            stage: "asset_library",
-            message: `Selected library asset: ${selectedAsset.name}`,
-          });
-          updateLifecycle("asset_library", `Selected library asset: ${selectedAsset.name}`, 25, 1);
+          // ── Prefer groups when the user has created them ──────────────────
+          // A group lets the user mark which images belong together as one
+          // multi-image post (carousel) or which video to post. If no
+          // groups exist, fall back to single-asset rotation.
+          const groupResult = pickNextAssetGroup({ postType: "any" });
+          if (groupResult && groupResult.assets && groupResult.assets.length > 0) {
+            selectedGroup = groupResult.group;
+            mediaRelPaths = groupResult.assets.map((a) => a.file_url);
+            mediaRelPath = mediaRelPaths[0];
+            emit({
+              stage: "asset_library",
+              message: `Selected asset group: ${selectedGroup.name} (${groupResult.assets.length} asset(s), type: ${selectedGroup.post_type})`,
+            });
+            updateLifecycle(
+              "asset_library",
+              `Selected asset group: ${selectedGroup.name} (${groupResult.assets.length} asset(s))`,
+              25,
+              1,
+            );
+          } else {
+            selectedAsset = pickNextAsset({ mediaType });
+            if (!selectedAsset) throw new Error("Asset library is empty");
+            mediaRelPath = selectedAsset.file_url;
+            mediaRelPaths = null;
+            emit({
+              stage: "asset_library",
+              message: `Selected library asset: ${selectedAsset.name}`,
+            });
+            updateLifecycle("asset_library", `Selected library asset: ${selectedAsset.name}`, 25, 1);
+          }
         } else {
           // ── Stage 1: Generate image ──────────────────────────────────────
           checkAbort();
@@ -303,6 +327,22 @@ async function runContentPipelineNow(config = {}) {
         }
 
         // ── Stage 2: Generate captions per platform ──────────────────────
+        // Resolve the on-disk image path for image-aware captioning. When
+        // the asset is a library upload or AI-generated file under
+        // /uploads, resolve it relative to the public dir so Gemini Web
+        // can actually open and upload it. When the asset is a video or
+        // missing, we skip image-aware captioning and fall back to the
+        // text-only path.
+        let imageFsPath = null;
+        try {
+          if (mediaRelPath && /\.(jpe?g|png|gif|webp)$/i.test(mediaRelPath)) {
+            const candidate = mediaRelPath.startsWith("/")
+              ? path.resolve(__dirname, "../../public", mediaRelPath.replace(/^\//, ""))
+              : path.resolve(__dirname, "../../public", mediaRelPath);
+            if (fs.existsSync(candidate)) imageFsPath = candidate;
+          }
+        } catch (_) { /* fall back to text-only */ }
+
         const captions = {};
         const skipCaptions = lifecycleExecId && checkpointService.isStageComplete(lifecycleExecId, "caption_gen");
         if (!skipCaptions) {
@@ -310,11 +350,14 @@ async function runContentPipelineNow(config = {}) {
             checkAbort();
             emit({
               stage: "caption_gen",
-              message: `Generating caption for ${platform}...`,
+              message: `Generating caption for ${platform}${imageFsPath ? " (image-aware)" : ""}...`,
             });
             updateLifecycle("caption_gen", `Generating caption for ${platform}…`, 30 + (platforms.indexOf(platform) * 10), 1);
-            const caption = await withRetry(
-              () => generateCaption(topic, platform, null),
+            const captionResult = await withRetry(
+              () => generateCaption(topic, platform, null, {
+                imagePath: imageFsPath,
+                emit: (kind, msg) => emit({ stage: "caption_gen", type: kind, message: msg }),
+              }),
               {
                 signal,
                 label: `content:caption:${platform}`,
@@ -343,10 +386,20 @@ async function runContentPipelineNow(config = {}) {
                 },
               },
             );
-            captions[platform] = caption;
+            // generateCaption now returns { text, source, model, ok, error }.
+            // If generation failed, surface the error and abort the run
+            // rather than silently posting a placeholder. The previous
+            // behaviour posted the literal `${topic} — [Edit this caption
+            // before posting]` string, which the user saw live on their
+            // social accounts.
+            if (!captionResult || !captionResult.ok || !captionResult.text) {
+              const errMsg = (captionResult && captionResult.error) || 'unknown error';
+              throw new Error(`Caption generation failed for ${platform}: ${errMsg}`);
+            }
+            captions[platform] = captionResult.text;
             emit({
               stage: "caption_gen",
-              message: `Caption ready for ${platform}`,
+              message: `Caption ready for ${platform} (${captionResult.source})`,
             });
           }
           if (lifecycleExecId) {
@@ -363,20 +416,41 @@ async function runContentPipelineNow(config = {}) {
         }
         updateLifecycle("caption_gen", "Captions ready", 60, 2);
 
-        // Use the primary platform's caption as the post body
+        // Persist ALL per-platform captions on the post row so the publisher
+        // can pick the right one for each platform. Previously only the
+        // primary platform's caption was stored in `posts.body`, and the
+        // other N-1 captions were silently discarded — so an Instagram-style
+        // caption (2200 chars, hashtags) would get truncated to 280 chars
+        // at publish time on X, instead of using the X-tailored caption
+        // that was actually generated for X.
         const primaryCaption =
           captions[platforms[0]] || Object.values(captions)[0] || "";
+        const captionsJson = JSON.stringify(captions);
 
         // ── Stage 3: Create post record ──────────────────────────────────
         checkAbort();
+        // media_paths: JSON array of all asset URLs for this post (multi-image
+        // carousel, video + thumbnail, etc.). When the user picked a single
+        // asset or generated via AI, this is a one-element array. The
+        // publisher uses media_paths to drive Instagram carousel posts and
+        // to pass the correct single asset to LinkedIn / X / Facebook.
+        const mediaPathsForPost = mediaRelPaths && mediaRelPaths.length > 0
+          ? JSON.stringify(mediaRelPaths)
+          : JSON.stringify(mediaRelPath ? [mediaRelPath] : []);
         const insertResult = db
           .prepare(
             `
-          INSERT INTO posts (platforms, body, media_path, status, scheduled_at)
-          VALUES (?, ?, ?, 'draft', CURRENT_TIMESTAMP)
+          INSERT INTO posts (platforms, body, captions_json, media_path, media_paths, status, scheduled_at)
+          VALUES (?, ?, ?, ?, ?, 'draft', CURRENT_TIMESTAMP)
         `,
           )
-          .run(JSON.stringify(platforms), primaryCaption, mediaRelPath);
+          .run(
+            JSON.stringify(platforms),
+            primaryCaption,
+            captionsJson,
+            mediaRelPath,
+            mediaPathsForPost,
+          );
 
         const postId = insertResult.lastInsertRowid;
         emit({
@@ -403,8 +477,18 @@ async function runContentPipelineNow(config = {}) {
         updateLifecycle("publish", `Publishing to: ${platforms.join(", ")}…`, 80, 3);
 
         const publishResult = await publishPost(postId, emit, { trace: false });
-        if (selectedAsset && Array.isArray(publishResult.success) && publishResult.success.length > 0) {
-          markAssetUsed(selectedAsset.id, postId);
+        // Bump rotation counters for whichever asset(s) we used. Groups
+        // mark every asset in the group as used; single assets just bump
+        // their own row.
+        if (
+          Array.isArray(publishResult.success) &&
+          publishResult.success.length > 0
+        ) {
+          if (selectedGroup) {
+            markAssetGroupUsed(selectedGroup.id, postId);
+          } else if (selectedAsset) {
+            markAssetUsed(selectedAsset.id, postId);
+          }
         }
 
         const publishedPlatforms = Array.isArray(publishResult.success)

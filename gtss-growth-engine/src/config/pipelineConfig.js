@@ -86,6 +86,25 @@ function keywordsFilePath() {
   return process.env.PIPELINE_DISCOVERY_KEYWORDS_FILE || './src/config/keywords.json';
 }
 
+/**
+ * Resolve the source for outreach message generation.
+ * 'ai' = use Gemini (API key first, Gemini Web fallback) — the user's
+ *        preferred default for full lead-discovery runs.
+ * 'template' = use the canonical templates from settings/templates.json
+ *              (manual control, no AI calls).
+ *
+ * The setting is read from `message_generation_source` (DB) or
+ * MESSAGE_GENERATION_SOURCE env var. Default: 'ai'.
+ *
+ * @returns {'ai'|'template'}
+ */
+function messageGenerationSource() {
+  const v = envOrSetting('MESSAGE_GENERATION_SOURCE', 'message_generation_source', 'ai')
+    .trim()
+    .toLowerCase();
+  return v === 'template' ? 'template' : 'ai';
+}
+
 module.exports = {
   stageMode,
   autoApproveVariant,
@@ -93,4 +112,5 @@ module.exports = {
   manualQualificationScore,
   pipelineCron,
   keywordsFilePath,
+  messageGenerationSource,
 };

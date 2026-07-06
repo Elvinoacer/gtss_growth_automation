@@ -701,16 +701,27 @@ router.post("/api/scheduler/generate-caption", async (req, res) => {
       return res.status(400).json({ error: "Topic is required" });
     }
 
-    const caption = await generateCaption(
+    const captionResult = await generateCaption(
       topic.trim(),
       platform || getPrimaryPlatform(),
       tone || "engaging",
     );
     clearTimeout(routeTimer);
     if (!res.headersSent) {
+      // generateCaption returns { text, source, model, ok, error }. Surface
+      // the structured result so the client can show a meaningful error
+      // when AI generation actually failed (instead of silently posting
+      // a placeholder like the old `${topic} — [Edit this caption]` stub).
+      if (!captionResult || !captionResult.ok) {
+        return res.status(503).json({
+          error: (captionResult && captionResult.error) || "Caption generation failed",
+          generatedBy: "failed",
+        });
+      }
       res.json({
-        caption,
-        generatedBy: caption.includes("[Edit this caption") ? "fallback" : "gemini",
+        caption: captionResult.text,
+        generatedBy: captionResult.source || "gemini",
+        model: captionResult.model || null,
       });
     }
   } catch (error) {

@@ -379,6 +379,23 @@ function updateExecutionProgress(executionId, update = {}) {
 }
 
 function markExecutionFailed(executionId, error, failedStage = null) {
+  // If the execution is already in a terminal "stopped" state (because the
+  // user clicked Stop and the abort propagated up the call stack as a
+  // thrown error), do NOT overwrite it with "failed". The previous
+  // behaviour was inconsistent: Stop set last_status='stopped' at the
+  // schedule level, but the execution row got flipped to 'failed' by the
+  // runner's catch block, leaving the UI showing two different states.
+  // Now: once stopped, stay stopped.
+  try {
+    const db = getDb();
+    const row = db
+      .prepare("SELECT status FROM pipeline_executions WHERE id = ?")
+      .get(String(executionId));
+    if (row && (row.status === STATES.STOPPED || row.status === STATES.STOPPING)) {
+      return false;
+    }
+  } catch (_) { /* fall through to normal path */ }
+
   const err = error instanceof Error ? error : new Error(String(error || "Unknown error"));
   return transitionExecution(executionId, STATES.FAILED, {
     errorMessage: err.message,
@@ -529,6 +546,19 @@ function requestStop(pipelineId) {
     ).run(String(pipelineId));
     ABORT_FLAGS.delete(String(stuck.id));
     PAUSE_FLAGS.delete(String(stuck.id));
+    // Also clear the schedule-level pause flag — the user explicitly asked
+    // to Stop, which is a stronger intent than Pause. Leaving the pause
+    // flag set here (the previous behaviour) caused a deadlock: the user
+    // paused → runner died → user clicked Stop → schedule-level pause
+    // stayed on → every subsequent Run returned 409 "Pipeline is paused"
+    // and the only escape was Force Clear. Now Stop fully resets the
+    // pipeline so the user can immediately re-Run.
+    try {
+      db.prepare(
+        `INSERT INTO settings (key, value) VALUES (?, 'false')
+         ON CONFLICT(key) DO UPDATE SET value = 'false'`,
+      ).run(`pipeline_${pipelineId}_paused`);
+    } catch (_) {}
     pipelineLogger.log({
       pipelineId,
       executionId: stuck.id,

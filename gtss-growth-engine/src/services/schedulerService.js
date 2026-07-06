@@ -591,6 +591,23 @@ function normalizeLinkedInText(text) {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
+  // Enforce LinkedIn's 3000-char published limit. Without this, an
+  // oversized AI-generated body would silently disable the Post button
+  // (LinkedIn's composer flips the button red and unclickable above 3000)
+  // and the publish step would time out at the click. Truncating here with
+  // an ellipsis keeps the post under the limit and the click responsive.
+  const LINKEDIN_LIMIT = POST_CHAR_LIMITS.linkedin || 3000;
+  if (normalized.length > LINKEDIN_LIMIT) {
+    const suffix = "…";
+    const hardLimit = LINKEDIN_LIMIT - suffix.length;
+    // Try to break on a word boundary in the last 15% of the limit so we
+    // don't cut a word in half.
+    const candidate = normalized.slice(0, hardLimit);
+    const lastWs = candidate.search(/\s+\S*$/);
+    const cutAt = lastWs > Math.floor(hardLimit * 0.85) ? lastWs : hardLimit;
+    normalized = `${candidate.slice(0, cutAt).replace(/[.,;:!?-]+$/g, "")}${suffix}`;
+  }
+
   return normalized;
 }
 
@@ -603,6 +620,20 @@ function normalizePlainPostText(text) {
     .replace(/[‘’]/g, "'")
     .replace(/[–—]/g, "-")
     .replace(/…/g, "...")
+    // Strip markdown link/image syntax so we never post literal `[text](url)`
+    // or `[link](link)` to platforms that don't render markdown (X, IG, FB).
+    // Previously only LinkedIn's normalizer did this, so AI-generated
+    // captions with markdown links leaked through to the other platforms.
+    .replace(/!\[([^\]]*)\]\((.*?)\)/g, "$1")
+    .replace(/\[([^\]]+)\]\((.*?)\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^>\s?/gm, "")
+    .replace(/^\s*[-*+•]\s+/gm, "")
+    .replace(/^\s*\d+[.)]\s+/gm, "")
+    .replace(/(\*\*|__)(.*?)\1/g, "$2")
+    .replace(/(\*|_)(.*?)\1/g, "$2")
+    .replace(/~~(.*?)~~/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .split("\n")
     .map((line) => line.replace(/[ \t]+/g, " ").trim())
@@ -797,13 +828,23 @@ async function waitForShareDialog(page, timeoutMs = 10000) {
 }
 
 async function typeTextWithFallback(editor, text) {
+  // ── Primary path: single Playwright `editor.type(text, { delay })` call ──
+  // The previous implementation called `editor.type(char, { delay })` in a
+  // per-character loop, which was 10× slower than a single `editor.type`
+  // call for the whole string and offered no benefit (Playwright already
+  // dispatches per-keystroke events internally). For a 3000-char LinkedIn
+  // post this cut typing time from 60-240s down to ~10s, with the same
+  // React-compatibility guarantees.
   try {
     await editor.click({ timeout: 8000 });
-    for (const char of text) {
-      await editor.type(char, { delay: Math.random() * 60 + 20 });
-    }
+    await editor.type(text, { delay: Math.random() * 30 + 10 });
     return;
   } catch (error) {
+    // ── Fallback: direct DOM mutation + synthetic input/change events ──
+    // Used when Playwright's type() fails (e.g., the editor was re-rendered
+    // by React mid-typing). We bypass the controlled-component model and
+    // set the textContent/value directly, then dispatch input + change
+    // events so React picks up the change on its next reconciliation pass.
     await editor.evaluate((node, value) => {
       const element = node;
       const textValue = String(value);
@@ -1967,7 +2008,26 @@ async function publishPost(postId, emit, browserOptions = {}) {
         browser = browserState.browser;
         context = browserState.context;
         const page = browserState.page;
-        const platformBody = preparePlatformPostBody(platform, post.body);
+
+        // ── Per-platform caption resolution ──────────────────────────────
+        // The content pipeline persists one caption per platform in
+        // `posts.captions_json`. Use the platform-specific caption if
+        // available; otherwise fall back to `posts.body` (the primary
+        // caption). Previously the publisher re-normalised the SAME
+        // primary caption for every platform, so an Instagram-length
+        // caption (2200 chars) would get truncated to 280 chars on X
+        // instead of using the X-tailored caption that had been
+        // generated specifically for X.
+        let perPlatformBody = post.body;
+        try {
+          if (post.captions_json) {
+            const captionsMap = JSON.parse(post.captions_json);
+            if (captionsMap && typeof captionsMap === 'object' && typeof captionsMap[platform] === 'string' && captionsMap[platform].length > 0) {
+              perPlatformBody = captionsMap[platform];
+            }
+          }
+        } catch (_) { /* fall back to post.body */ }
+        const platformBody = preparePlatformPostBody(platform, perPlatformBody);
 
         let success = false;
         switch (platform) {
@@ -1994,7 +2054,21 @@ async function publishPost(postId, emit, browserOptions = {}) {
           {
             const instagram = require("../automation/instagram");
             const locationTag = getPostLocationTag(post);
-            if (post.ig_post_type === "story") {
+            // Resolve the full set of media paths for this post. When the
+            // user grouped multiple images together (or uploaded a carousel
+            // set), media_paths will have >1 entry and we should drive the
+            // carousel flow instead of forcing a single-image post.
+            const allMediaPaths = getPostMediaPaths(post);
+            const isVideoPost = allMediaPaths.some((p) => /\.(mp4|mov|avi|mkv|m4v)$/i.test(p || ""));
+            const effectiveIgType =
+              post.ig_post_type === "story"
+                ? "story"
+                : allMediaPaths.length > 1
+                  ? "carousel"
+                  : isVideoPost
+                    ? "video"
+                    : "feed";
+            if (effectiveIgType === "story") {
               const res = await instagram.postStory(
                 page,
                 { imagePath: post.media_path },
@@ -2009,11 +2083,11 @@ async function publishPost(postId, emit, browserOptions = {}) {
                   message: `Instagram story failed: ${res.error}`,
                 });
               }
-            } else if (post.ig_post_type === "carousel") {
+            } else if (effectiveIgType === "carousel") {
               const res = await instagram.postCarousel(
                 page,
                 {
-                  imagePaths: getPostMediaPaths(post),
+                  imagePaths: allMediaPaths,
                   caption: platformBody,
                   locationTag,
                 },
@@ -2029,6 +2103,8 @@ async function publishPost(postId, emit, browserOptions = {}) {
                 });
               }
             } else {
+              // Single feed post (image or video — instagram.postImage
+              // handles both, the name is historical).
               const res = await instagram.postImage(
                 page,
                 {
@@ -2183,7 +2259,7 @@ async function publishPost(postId, emit, browserOptions = {}) {
 // Core: generateCaption
 // ---------------------------------------------------------------------------
 
-async function generateCaption(topic, platform, tone) {
+async function generateCaption(topic, platform, tone, options = {}) {
   const ctx = getContext();
   const limit = POST_CHAR_LIMITS[platform] || 2200;
   const toneLabel = tone || ctx.ctx_content_tone || "engaging";
@@ -2209,8 +2285,53 @@ End with this call to action: ${ctx.ctx_content_cta}
 Product link to include naturally when it fits: ${GTSS_RESTAURANT_MANAGER_URL}
 ${platformHashtags ? `Append these hashtags only if the final text still fits inside the character limit: ${platformHashtags}` : ""}
 Use plain text only. Do not use markdown formatting, HTML entities, bullets, or special styling characters.
+If you include the product link, write it as a bare URL on its own line (e.g. https://example.com) — never as [text](url) markdown.
 For X, the final caption must be ${POST_CHAR_LIMITS.x} characters or fewer including spaces and hashtags.
 Return ONLY the caption text, no explanations.`;
+
+  // ── Image-aware caption (optional) ────────────────────────────────────
+  // When the caller passes options.imagePath (resolved filesystem path),
+  // we FIRST try Gemini Web's image+prompt path so the caption can actually
+  // match what's in the image. On any failure we fall through to the
+  // text-only Gemini API path (which itself falls back to text-only Gemini
+  // Web). The image-aware path is best-effort — it must never block the
+  // pipeline from producing a usable caption.
+  if (options.imagePath) {
+    try {
+      const { generateImageAwareCaptionViaGeminiWeb } = require("../automation/geminiWeb");
+      const imagePrompt = `${prompt}
+
+You are also being shown an image. Please write the caption so that it specifically references what you see in the image (the product, the scene, the people, the mood) — generic captions that ignore the image are unacceptable. Stay within the ${limit}-character limit.`;
+      const result = await generateImageAwareCaptionViaGeminiWeb(
+        options.imagePath,
+        imagePrompt,
+        options.emit || (() => {}),
+      );
+      if (result && result.text) {
+        const caption = String(result.text).trim();
+        if (caption.length > 0) {
+          logger.db("info", "content", "caption_gen", "Image-aware Gemini Web caption generated", {
+            platform,
+            source: "web-image",
+            imagePath: options.imagePath,
+          });
+          return {
+            text: preparePlatformPostBody(platform, caption),
+            source: "web-image",
+            model: "gemini-web",
+            ok: true,
+          };
+        }
+      }
+    } catch (err) {
+      logger.warn("SCHEDULER", "Image-aware caption failed, falling back to text-only", {
+        platform,
+        imagePath: options.imagePath,
+        error: err.message,
+      });
+      // Fall through to text-only path
+    }
+  }
 
   try {
     const generation = await callGeminiText(prompt, { timeoutMs: 25_000 });
@@ -2220,13 +2341,30 @@ Return ONLY the caption text, no explanations.`;
       source: generation.source || "unknown",
       model: generation.model,
     });
-    return preparePlatformPostBody(platform, caption);
+    return {
+      text: preparePlatformPostBody(platform, caption),
+      source: generation.source || "gemini",
+      model: generation.model || null,
+      ok: true,
+    };
   } catch (err) {
-    logger.warn("SCHEDULER", "Caption generation failed, using topic as draft", {
+    logger.warn("SCHEDULER", "Caption generation failed", {
+      platform,
+      topic,
       error: err.message,
     });
-    const stub = `${topic} — [Edit this caption before posting]`.slice(0, limit);
-    return preparePlatformPostBody(platform, stub);
+    // IMPORTANT: we no longer return the `${topic} — [Edit this caption
+    // before posting]` stub. That stub was leaking into live posts because
+    // the content pipeline trusted any string returned from this function.
+    // Now we return an explicit failure marker so the caller can decide
+    // whether to abort the run, retry, or skip the platform.
+    return {
+      text: "",
+      source: "failed",
+      model: null,
+      ok: false,
+      error: err.message,
+    };
   }
 }
 

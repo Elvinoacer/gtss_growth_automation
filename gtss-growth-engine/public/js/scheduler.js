@@ -946,9 +946,14 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         postBody.value = data.caption;
         updateCharCounters();
-        if (data.generatedBy === "fallback") {
+        if (data.generatedBy === "failed") {
           showToast(
-            "Gemini unavailable — a draft has been pre-filled. Please edit before posting.",
+            "Gemini caption generation failed. Please edit the topic or write a caption manually.",
+            "error",
+          );
+        } else if (data.generatedBy === "fallback" || data.generatedBy === "web") {
+          showToast(
+            "Caption generated via Gemini Web fallback — please review before posting.",
             "warn",
           );
         } else {
