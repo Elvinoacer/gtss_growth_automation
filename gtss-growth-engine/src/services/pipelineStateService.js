@@ -485,7 +485,67 @@ function requestStop(pipelineId) {
   if (!pipelineId) return { ok: false, error: "pipelineId required" };
   const execId = ACTIVE_EXECUTIONS.get(pipelineId);
   if (!execId) {
-    return { ok: true, stopped: 0, message: "No active execution to stop." };
+    // No in-memory active execution. But the DB may still hold a row in a
+    // transient state (running/paused/resuming/stopping/retrying) — this
+    // happens when the runner died without ever calling
+    // markExecutionFailed/Completed, or after a server restart that hasn't
+    // yet called recoverOnStartup. Previously, Stop returned
+    // `{ stopped: 0 }` in this case, which made the user think Stop was
+    // broken (the UI kept showing "Running" forever). Now we sweep the
+    // stale row too, so Stop ALWAYS results in a visible state change
+    // whenever there's anything to stop.
+    const db = getDb();
+    const stuck = db
+      .prepare(
+        `SELECT id, status FROM pipeline_executions
+         WHERE pipeline_id = ?
+           AND status IN ('running', 'paused', 'resuming', 'stopping', 'retrying')
+         ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(String(pipelineId));
+    if (!stuck) {
+      return {
+        ok: true,
+        stopped: 0,
+        message: "No active execution to stop.",
+      };
+    }
+    const now = new Date().toISOString();
+    db.prepare(
+      `UPDATE pipeline_executions
+       SET status = 'stopped',
+           state = 'stopped',
+           finished_at = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    ).run(now, stuck.id);
+    db.prepare(
+      `UPDATE pipeline_schedules
+       SET current_state = 'idle',
+           current_execution_id = NULL,
+           last_status = 'stopped',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    ).run(String(pipelineId));
+    ABORT_FLAGS.delete(String(stuck.id));
+    PAUSE_FLAGS.delete(String(stuck.id));
+    pipelineLogger.log({
+      pipelineId,
+      executionId: stuck.id,
+      level: "warn",
+      stage: "lifecycle",
+      message: `Stop requested for stuck DB row (was ${stuck.status}, no in-memory runner). Marked as stopped.`,
+      context: { previousStatus: stuck.status },
+      source: "system",
+    });
+    broadcastState(pipelineId, stuck.id, "stopped", { stopped: true, sweptDb: true });
+    return {
+      ok: true,
+      stopped: 1,
+      executionId: stuck.id,
+      sweptDb: true,
+      message: `Stopped stuck execution ${stuck.id} (was ${stuck.status}).`,
+    };
   }
   ABORT_FLAGS.set(String(execId), true);
   transitionExecution(execId, STATES.STOPPING);
@@ -501,36 +561,69 @@ function requestStop(pipelineId) {
  * "running" in DB and ACTIVE_EXECUTIONS keeps the pipeline locked forever.
  *
  * This function:
- *   1. Transitions the active execution row to 'failed' with a clear
+ *   1. Aborts any registered jobRegistry jobs for this pipeline so that
+ *      in-flight browser/network operations receive an AbortSignal.
+ *   2. Transitions the active execution row to 'failed' with a clear
  *      error_message recording that it was force-cleared.
- *   2. Clears ACTIVE_EXECUTIONS / ABORT_FLAGS / PAUSE_FLAGS for the pipeline.
- *   3. Resets the schedule-level current_state to 'idle' so the UI stops
+ *   3. Clears ACTIVE_EXECUTIONS / ABORT_FLAGS / PAUSE_FLAGS for the pipeline.
+ *   4. Resets the schedule-level current_state to 'idle' so the UI stops
  *      showing the pipeline as "running".
+ *   5. Clears the schedule-level pause flag so the user can immediately
+ *      re-run the pipeline. (Previously, a paused-then-stuck pipeline
+ *      would refuse all subsequent Run/Restart calls with "Pipeline is
+ *      paused" — even after force-clear. Now force-clear always leaves
+ *      the pipeline in a fully usable state.)
  *
  * After this returns, the user can immediately trigger a fresh Run / Retry /
  * Resume without having to restart the server.
  *
- * Returns: { ok, cleared, executionId, previousStatus } or
+ * Returns: { ok, cleared, executionId, previousStatus, jobsKilled } or
  *          { ok: true, cleared: 0, message: 'No active execution to clear.' }
  */
 function forceClearExecution(pipelineId, reason = "manual") {
   if (!pipelineId) return { ok: false, error: "pipelineId required" };
+
+  // Kill any registered job-registry jobs for this pipeline so that any
+  // in-flight AbortController-listening operations actually receive the
+  // abort signal. This is the missing "kill switch" that was causing the
+  // user's "stop doesn't actually stop" complaint.
+  let jobsKilled = 0;
+  try {
+    const jobRegistry = require("../jobs/jobRegistry");
+    jobsKilled = jobRegistry.stopJobsByPipeline(pipelineId);
+  } catch (_) {}
+
+  // Always clear the schedule-level pause flag — force-clear means "make
+  // this pipeline fully usable again", not just "clear the active run".
+  // The previous behavior left the paused flag set if the user had paused
+  // before the runner got stuck, which made every subsequent Run / Restart
+  // fail with 409 "Pipeline is paused" — the exact "buttons don't work"
+  // frustration the user reported.
+  const db = getDb();
+  try {
+    db.prepare(
+      `INSERT INTO settings (key, value) VALUES (?, 'false')
+       ON CONFLICT(key) DO UPDATE SET value = 'false'`,
+    ).run(`pipeline_${pipelineId}_paused`);
+  } catch (_) {}
+
   const execId = ACTIVE_EXECUTIONS.get(pipelineId);
   if (!execId) {
     // Even if the in-memory map is empty, the DB might still hold a row
     // marked 'running' (e.g., from a previous server restart that didn't
-    // run recoverOnStartup, or a crash mid-recovery). Sweep those too.
-    const db = getDb();
-    const stuck = db
+    // run recoverOnStartup, or a crash mid-recovery). Sweep ALL stuck rows
+    // for this pipeline — not just the latest — so the user isn't chasing
+    // a ghost execution through multiple clicks.
+    const stuckRows = db
       .prepare(
         `SELECT id, status, started_at FROM pipeline_executions
          WHERE pipeline_id = ?
            AND status IN ('running', 'paused', 'resuming', 'stopping', 'retrying')
-         ORDER BY started_at DESC LIMIT 1`,
+         ORDER BY started_at DESC`,
       )
-      .get(String(pipelineId));
+      .all(String(pipelineId));
 
-    if (!stuck) {
+    if (stuckRows.length === 0) {
       // Just ensure the schedule-level state is sane.
       db.prepare(
         `UPDATE pipeline_schedules
@@ -539,23 +632,43 @@ function forceClearExecution(pipelineId, reason = "manual") {
              updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
       ).run(String(pipelineId));
-      return { ok: true, cleared: 0, message: "Pipeline state has been reset to idle." };
+      return {
+        ok: true,
+        cleared: 0,
+        jobsKilled,
+        message: "Pipeline state has been reset to idle. No stuck execution found.",
+      };
     }
 
     const now = new Date().toISOString();
-    db.prepare(
-      `UPDATE pipeline_executions
-       SET status = 'failed',
-           state = 'failed',
-           error_message = ?,
-           finished_at = ?,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
-    ).run(
-      `Force-cleared by user (reason: ${reason}). Previous state: '${stuck.status}'. The runner process is no longer making progress.`,
-      now,
-      stuck.id,
-    );
+    // Mark ALL stuck rows as failed (so the history is accurate), not just
+    // the most recent one. The user shouldn't have to click Force Clear
+    // multiple times to clean up several ghost executions.
+    for (const stuck of stuckRows) {
+      db.prepare(
+        `UPDATE pipeline_executions
+         SET status = 'failed',
+             state = 'failed',
+             error_message = ?,
+             finished_at = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      ).run(
+        `Force-cleared by user (reason: ${reason}). Previous state: '${stuck.status}'. The runner process is no longer making progress.`,
+        now,
+        stuck.id,
+      );
+
+      pipelineLogger.log({
+        pipelineId,
+        executionId: stuck.id,
+        level: "warn",
+        stage: "lifecycle",
+        message: `Execution force-cleared by user (was ${stuck.status}, reason: ${reason}).`,
+        context: { previousStatus: stuck.status, reason, startedAt: stuck.started_at },
+        source: "system",
+      });
+    }
 
     db.prepare(
       `UPDATE pipeline_schedules
@@ -566,28 +679,22 @@ function forceClearExecution(pipelineId, reason = "manual") {
        WHERE id = ?`,
     ).run(String(pipelineId));
 
-    pipelineLogger.log({
-      pipelineId,
-      executionId: stuck.id,
-      level: "warn",
-      stage: "lifecycle",
-      message: `Execution force-cleared by user (was ${stuck.status}, reason: ${reason}).`,
-      context: { previousStatus: stuck.status, reason, startedAt: stuck.started_at },
-      source: "system",
-    });
-
     try { recomputeAggregates(pipelineId); } catch (_) {}
 
-    broadcastState(pipelineId, stuck.id, "failed", {
+    const latest = stuckRows[0];
+    broadcastState(pipelineId, latest.id, "failed", {
       forced: true,
       reason,
-      previousStatus: stuck.status,
+      previousStatus: latest.status,
+      jobsKilled,
+      clearedCount: stuckRows.length,
     });
     return {
       ok: true,
-      cleared: 1,
-      executionId: stuck.id,
-      previousStatus: stuck.status,
+      cleared: stuckRows.length,
+      executionId: latest.id,
+      previousStatus: latest.status,
+      jobsKilled,
     };
   }
 
@@ -596,7 +703,6 @@ function forceClearExecution(pipelineId, reason = "manual") {
   const execRow = getExecutionState(execId);
   const previousStatus = execRow?.status || "running";
   const now = new Date().toISOString();
-  const db = getDb();
 
   db.prepare(
     `UPDATE pipeline_executions
@@ -634,7 +740,7 @@ function forceClearExecution(pipelineId, reason = "manual") {
     level: "warn",
     stage: "lifecycle",
     message: `Execution force-cleared by user (was ${previousStatus}, reason: ${reason}).`,
-    context: { previousStatus, reason, startedAt: execRow?.started_at || null },
+    context: { previousStatus, reason, startedAt: execRow?.started_at || null, jobsKilled },
     source: "system",
   });
 
@@ -644,9 +750,10 @@ function forceClearExecution(pipelineId, reason = "manual") {
     forced: true,
     reason,
     previousStatus,
+    jobsKilled,
   });
 
-  return { ok: true, cleared: 1, executionId: execId, previousStatus };
+  return { ok: true, cleared: 1, executionId: execId, previousStatus, jobsKilled };
 }
 
 function isPaused(executionId) {

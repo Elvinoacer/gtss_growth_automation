@@ -94,6 +94,17 @@ function buildRuntimeState(row, paused) {
   if (state === 'idle' && row.last_status === 'failed') state = 'failed';
   if (state === 'idle' && row.last_status === 'completed') state = 'completed';
 
+  // "Stuck" detection: the schedule-level state says the pipeline is
+  // running/paused/resuming/etc. but there is no in-memory ACTIVE_EXECUTIONS
+  // entry and no jobRegistry jobs. This means the runner died without
+  // ever finalizing the execution — the UI should proactively show a
+  // "Force Clear" hint so the user knows to click it.
+  const transientStates = new Set(['running', 'paused', 'resuming', 'stopping', 'retrying']);
+  const likelyStuck = !isRunning
+    && transientStates.has(state)
+    && !activeExec
+    && activeJobs.length === 0;
+
   const currentJob = activeJobs[0] || null;
   return {
     state,
@@ -108,8 +119,10 @@ function buildRuntimeState(row, paused) {
     can_run: Boolean(row.enabled) && !paused && !isRunning,
     can_pause: Boolean(row.enabled) && !paused,
     can_resume: Boolean(paused) || (isRunning && (activeExec?.status === 'paused')),
-    can_stop: isRunning,
+    can_stop: isRunning || likelyStuck,
     can_restart: true,
+    can_force_clear: likelyStuck || isRunning,
+    likely_stuck: likelyStuck,
   };
 }
 
@@ -316,11 +329,15 @@ router.post('/:id/run', async (req, res) => {
   if (isPipelinePaused(id)) {
     return res.status(409).json({ error: 'Pipeline is paused. Resume it before running manually.' });
   }
+  // If there's a stuck "running" execution in memory (the runner died
+  // without ever calling markExecutionFailed/Completed), auto-clear it
+  // instead of refusing — the user clicked Run Now because they want
+  // progress. The previous behavior returned 409 "already running" and
+  // forced the user to click Force Clear first, then click Run again.
+  // That second-click dance was the original "buttons don't work" complaint.
   if (pipelineState.getActiveExecution(id)) {
-    return res.status(409).json({
-      error: 'Pipeline is already running. Wait for it to finish or stop it first.',
-      execution_id: pipelineState.getActiveExecution(id)?.id,
-    });
+    logger.warn('PIPELINES-API', `Run of "${id}": auto force-clearing stuck execution before run.`);
+    pipelineState.forceClearExecution(id, `run (auto-cleared by user action)`);
   }
 
   if (id === 'content' && (!limits.topic || !String(limits.topic).trim())) {
@@ -357,15 +374,27 @@ router.post('/:id/restart', async (req, res) => {
   const row = db.prepare('SELECT * FROM pipeline_schedules WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: 'Pipeline not found' });
 
-  if (isPipelinePaused(id)) {
-    return res.status(409).json({ error: 'Pipeline is paused. Resume it before restarting.' });
-  }
+  // Restart is the user's "I want this pipeline to start over RIGHT NOW"
+  // button. We previously refused if paused — but that forced the user
+  // to click Resume first, then click Restart, which is the exact
+  // "buttons don't work" frustration they reported. Now restart auto-
+  // clears the pause flag and proceeds. (forceClearExecution also clears
+  // it below, but we do it here too so the explicit pause-check at the
+  // top doesn't bail out.)
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, 'false')
+     ON CONFLICT(key) DO UPDATE SET value = 'false'`,
+  ).run(`pipeline_${id}_paused`);
 
   // If there's an active execution, attempt a graceful stop first. If the
   // grace period elapses without the runner noticing the abort flag (i.e.,
   // the runner is truly stuck), we force-clear the execution so the new run
   // can start. Previously, a stuck execution would block restart forever —
   // now restart is always able to recover.
+  //
+  // The force-clear also kills any registered jobRegistry jobs for this
+  // pipeline AND clears the schedule-level pause flag — so restart works
+  // even when the pipeline was paused before the runner got stuck.
   const active = pipelineState.getActiveExecution(id);
   if (active) {
     pipelineState.requestStop(id);
@@ -373,9 +402,13 @@ router.post('/:id/restart', async (req, res) => {
     await new Promise((r) => setTimeout(r, 600));
     const stillActive = pipelineState.getActiveExecution(id);
     if (stillActive && stillActive.id === active.id) {
-      logger.warn('PIPELINES-API', `Restart of "${id}": stuck execution ${active.id} did not respond to stop — force-clearing.`);
+      logger.warn('PIPELINES-API', `Restart of "${id}": stuck execution ${active.id} did not respond to stop — force-clearing (also kills background jobs and clears pause flag).`);
       pipelineState.forceClearExecution(id, `restart (stuck execution did not respond to stop)`);
     }
+  } else {
+    // Even without an in-memory active execution, the DB may have stale
+    // "running" rows that would block createExecution. Sweep them now.
+    pipelineState.forceClearExecution(id, `restart (preemptive sweep of any stale DB rows)`);
   }
 
   // Clear any checkpoints for the previous execution so the new run starts fresh
@@ -466,13 +499,22 @@ router.post('/:id/retry-stage', async (req, res) => {
     });
   }
   if (pipelineState.getActiveExecution(id)) {
-    // If there's a stuck "running" execution in memory, refuse to start a
-    // retry on top of it — the user should force-clear it first. We point
-    // them at the right endpoint so they don't have to guess.
-    return res.status(409).json({
-      error: 'Another execution is already running. Stop it or use POST /api/pipelines/:id/force-clear to clear a stuck state.',
-      hint: 'force_clear',
-    });
+    // If there's a stuck "running" execution in memory, auto-clear it
+    // instead of refusing — the user clicked Retry because they want to
+    // make progress, and the previous behavior (return 409 with hint)
+    // forced them to click Force Clear first, then click Retry again,
+    // which is exactly the "buttons don't work" frustration they
+    // reported. The `force` body flag still allows opt-out for callers
+    // that want the old strict behavior.
+    const force = req.body?.force !== false; // default: auto-clear
+    if (!force) {
+      return res.status(409).json({
+        error: 'Another execution is already running. Re-send with { "force": true } in the body to auto-clear and retry.',
+        hint: 'force_clear',
+      });
+    }
+    logger.warn('PIPELINES-API', `Retry-stage for "${id}": auto force-clearing stuck execution before retry.`);
+    pipelineState.forceClearExecution(id, `retry-stage (auto-cleared by user action)`);
   }
 
   // Determine the stage to retry:
@@ -789,22 +831,49 @@ router.post('/:id/resume', (req, res) => {
 
 router.post('/:id/stop', (req, res) => {
   const { id } = req.params;
+  const row = getDb().prepare('SELECT id FROM pipeline_schedules WHERE id = ?').get(id);
+  if (!row) return res.status(404).json({ error: 'Pipeline not found' });
   const result = pipelineState.requestStop(id);
   const stopped = result.stopped || 0;
   if (stopped > 0) {
     getDb().prepare(`UPDATE pipeline_schedules SET last_status = 'stopped', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
   }
+  // Also kill any registered jobRegistry jobs for this pipeline so that
+  // any in-flight AbortController-listening browser operations actually
+  // receive the abort signal. Previously, requestStop only set the abort
+  // flag — which the runner checks cooperatively between stages — but a
+  // runner stuck INSIDE a stage (e.g., waiting for a browser selector)
+  // never re-checked the flag. Killing the job registry jobs gives the
+  // abort a real "teeth" for the first time.
+  let jobsKilled = 0;
+  try { jobsKilled = jobRegistry.stopJobsByPipeline(id); } catch (_) {}
+
   logActivity({
     activityType: 'user_action',
     entityType: 'pipeline',
     entityId: id,
     actor: 'manual',
     status: stopped > 0 ? 'success' : 'skipped',
-    summary: `Stop requested for pipeline ${id}`,
-    details: { stopped },
+    summary: `Stop requested for pipeline ${id}${jobsKilled > 0 ? ` (also killed ${jobsKilled} background job(s))` : ''}`,
+    details: { stopped, jobsKilled, sweptDb: result.sweptDb || false, executionId: result.executionId || null },
   });
-  broadcastPipelineStatus(id, { status: stopped > 0 ? 'stopped' : 'idle', state: stopped > 0 ? 'stopped' : 'idle' });
-  res.json({ ok: true, stopped, message: stopped > 0 ? 'Stop requested for active run.' : 'No active run to stop.' });
+  broadcastPipelineStatus(id, {
+    status: stopped > 0 ? 'stopped' : 'idle',
+    state: stopped > 0 ? 'stopped' : 'idle',
+    jobsKilled,
+  });
+  res.json({
+    ok: true,
+    stopped,
+    jobsKilled,
+    sweptDb: result.sweptDb || false,
+    execution_id: result.executionId || null,
+    message: stopped > 0
+      ? (result.sweptDb
+          ? `Stopped stuck execution ${result.executionId} (no live runner was found — cleared DB state).`
+          : `Stop requested for active run${jobsKilled > 0 ? ` and ${jobsKilled} background job(s) killed` : ''}.`)
+      : 'No active run to stop.',
+  });
 });
 
 // ── POST /api/pipelines/:id/force-clear ── Force-clear a stuck execution
@@ -827,6 +896,18 @@ router.post('/:id/force-clear', (req, res) => {
   const row = getDb().prepare('SELECT id FROM pipeline_schedules WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: 'Pipeline not found' });
 
+  // Capture pre-clear DB state for the response, so the UI can show the
+  // user exactly what was cleared (and confirm the action was effective).
+  const db = getDb();
+  const preClearStuck = db
+    .prepare(
+      `SELECT id, status, started_at FROM pipeline_executions
+       WHERE pipeline_id = ?
+         AND status IN ('running', 'paused', 'resuming', 'stopping', 'retrying')
+       ORDER BY started_at DESC`,
+    )
+    .all(id);
+
   const result = pipelineState.forceClearExecution(id, reason);
 
   logActivity({
@@ -835,12 +916,14 @@ router.post('/:id/force-clear', (req, res) => {
     entityId: id,
     actor: 'manual',
     status: result.cleared > 0 ? 'success' : 'skipped',
-    summary: `Force-clear requested for pipeline ${id} (cleared ${result.cleared} execution(s))`,
+    summary: `Force-clear requested for pipeline ${id} (cleared ${result.cleared} execution(s), killed ${result.jobsKilled || 0} job(s))`,
     details: {
       cleared: result.cleared,
       previousStatus: result.previousStatus || null,
       executionId: result.executionId || null,
+      jobsKilled: result.jobsKilled || 0,
       reason,
+      stuckRowsBefore: preClearStuck.map((r) => ({ id: r.id, status: r.status })),
     },
   });
 
@@ -848,6 +931,7 @@ router.post('/:id/force-clear', (req, res) => {
     status: result.cleared > 0 ? 'failed' : 'idle',
     state: result.cleared > 0 ? 'failed' : 'idle',
     forced: result.cleared > 0,
+    jobsKilled: result.jobsKilled || 0,
   });
 
   res.json({
@@ -855,9 +939,11 @@ router.post('/:id/force-clear', (req, res) => {
     cleared: result.cleared || 0,
     execution_id: result.executionId || null,
     previous_status: result.previousStatus || null,
+    jobs_killed: result.jobsKilled || 0,
+    stuck_rows_before: preClearStuck.map((r) => ({ id: r.id, status: r.status })),
     message: result.cleared > 0
-      ? `Cleared stuck execution ${result.executionId} (was ${result.previousStatus}). You can now Run / Retry / Resume.`
-      : 'Pipeline state reset to idle.',
+      ? `Cleared ${result.cleared} stuck execution(s)${result.jobsKilled ? ` and killed ${result.jobsKilled} background job(s)` : ''}. Previous state: ${result.previousStatus}. You can now Run / Retry / Resume.`
+      : 'Pipeline state reset to idle (no stuck execution found in DB). Pause flag also cleared.',
   });
 });
 

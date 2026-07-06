@@ -33,17 +33,23 @@ async function fetchJSON(url, options = {}) {
   return data;
 }
 
-function showToast(message, type = "info") {
+function showToast(message, type = "info", duration = 4000) {
   const toast = document.createElement("div");
   toast.className = `gtss-toast ${type}`;
   toast.innerHTML = `<span>${escapeHtml(message)}</span><span class="toast-progress" aria-hidden="true"></span>`;
   document.body.appendChild(toast);
 
+  // Allow click-to-dismiss so long-lived error toasts don't overstay.
+  toast.addEventListener("click", () => {
+    toast.classList.remove("visible");
+    window.setTimeout(() => toast.remove(), 220);
+  });
+
   requestAnimationFrame(() => toast.classList.add("visible"));
   window.setTimeout(() => {
     toast.classList.remove("visible");
     window.setTimeout(() => toast.remove(), 220);
-  }, 4000);
+  }, duration);
 }
 
 function initSSE(url, onMessage) {

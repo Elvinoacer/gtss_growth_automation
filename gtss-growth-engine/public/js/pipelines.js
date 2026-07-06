@@ -101,6 +101,122 @@ async function loadPipelines() {
   }
 }
 
+/**
+ * Show a detailed, persistent error message for pipeline action failures.
+ *
+ * The previous behavior just called gtss.showToast(err.message, 'error'),
+ * which disappeared after a few seconds and gave the user no way to read
+ * the actual error (e.g., "Another execution is already running").
+ *
+ * Now we:
+ *   - Show the toast (preserving existing UX).
+ *   - Also log to console with full context.
+ *   - If the error response includes a `hint` or `details`, render an
+ *     inline banner above the affected pipeline card so the user can
+ *     actually read what went wrong and what to do next.
+ */
+function showPipelineActionError(pipelineId, action, err) {
+  // eslint-disable-next-line no-console
+  console.error(`[pipelines] Action "${action}" failed for pipeline "${pipelineId}":`, err);
+  const msg = err?.message || String(err);
+  gtss.showToast(`${action} failed: ${msg}`, 'error', 8000);
+  // Try to render an inline banner above the affected card.
+  try {
+    const card = document.querySelector(`[data-pipeline-id="${pipelineId}"]`);
+    if (card) {
+      const existing = card.querySelector('.pipeline-action-error-banner');
+      if (existing) existing.remove();
+      const banner = document.createElement('div');
+      banner.className = 'pipeline-action-error-banner';
+      banner.style.cssText = 'padding:10px 14px;border-radius:10px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.35);margin:8px 0;font-size:12px;color:#fca5a5;display:flex;align-items:flex-start;gap:10px;cursor:pointer';
+      banner.innerHTML = `
+        <span style="font-size:14px;flex-shrink:0">⚠</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;margin-bottom:2px">${gtss.escapeHtml(action)} failed</div>
+          <div style="word-break:break-word">${gtss.escapeHtml(msg)}</div>
+        </div>
+        <span style="font-size:18px;color:#64748b;flex-shrink:0;line-height:1">✕</span>
+      `;
+      banner.addEventListener('click', () => banner.remove());
+      // Insert at the top of the card, just inside
+      card.insertBefore(banner, card.firstChild);
+      // Auto-remove after 30s
+      setTimeout(() => { try { banner.remove(); } catch (_) {} }, 30000);
+    }
+  } catch (_) {}
+}
+
+/**
+ * Show a persistent success/info banner above the card for action confirmations.
+ */
+function showPipelineActionInfo(pipelineId, action, msg, type = 'info') {
+  try {
+    const card = document.querySelector(`[data-pipeline-id="${pipelineId}"]`);
+    if (!card) return;
+    const existing = card.querySelector('.pipeline-action-error-banner');
+    if (existing) existing.remove();
+    const colors = {
+      info:    { bg: 'rgba(56,189,248,0.1)',  border: 'rgba(56,189,248,0.35)',  text: '#7dd3fc' },
+      success: { bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.35)',   text: '#86efac' },
+      warn:    { bg: 'rgba(245,158,11,0.1)',  border: 'rgba(245,158,11,0.35)',  text: '#fcd34d' },
+    };
+    const c = colors[type] || colors.info;
+    const banner = document.createElement('div');
+    banner.className = 'pipeline-action-error-banner';
+    banner.style.cssText = `padding:10px 14px;border-radius:10px;background:${c.bg};border:1px solid ${c.border};margin:8px 0;font-size:12px;color:${c.text};display:flex;align-items:flex-start;gap:10px;cursor:pointer`;
+    banner.innerHTML = `
+      <span style="font-size:14px;flex-shrink:0">${type === 'success' ? '✓' : type === 'warn' ? '⚠' : 'ℹ'}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700;margin-bottom:2px">${gtss.escapeHtml(action)}</div>
+        <div style="word-break:break-word">${gtss.escapeHtml(msg)}</div>
+      </div>
+      <span style="font-size:18px;color:#64748b;flex-shrink:0;line-height:1">✕</span>
+    `;
+    banner.addEventListener('click', () => banner.remove());
+    card.insertBefore(banner, card.firstChild);
+    setTimeout(() => { try { banner.remove(); } catch (_) {} }, 15000);
+  } catch (_) {}
+}
+
+/**
+ * Wrap any pipeline action in a button-loading state + structured error
+ * handling + immediate reload. Returns the raw fetch promise so callers
+ * can chain on success.
+ */
+async function withActionFeedback(pipelineId, action, btn, fetchPromise) {
+  if (btn) {
+    btn.disabled = true;
+    btn.dataset.originalHtml = btn.innerHTML;
+    btn.innerHTML = `<span class="spinner" style="display:inline-block;animation:spin 1.4s linear infinite">⟳</span> ${btn.innerHTML}`;
+    btn.style.opacity = '0.7';
+  }
+  try {
+    const result = await fetchPromise;
+    if (result && result.message) {
+      const type = result.ok ? 'success' : 'info';
+      gtss.showToast(result.message, type, 6000);
+      showPipelineActionInfo(pipelineId, action, result.message, type);
+    }
+    return result;
+  } catch (err) {
+    showPipelineActionError(pipelineId, action, err);
+    throw err;
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      if (btn.dataset.originalHtml) {
+        btn.innerHTML = btn.dataset.originalHtml;
+        delete btn.dataset.originalHtml;
+      }
+      btn.style.opacity = '';
+    }
+    // Always refresh pipelines list immediately + again after 1s, so the
+    // user sees the new state without having to wait for the socket event.
+    loadPipelines();
+    setTimeout(loadPipelines, 1000);
+  }
+}
+
 async function loadHealth() {
   try {
     const data = await gtss.fetchJSON('/api/pipelines/health');
@@ -169,78 +285,66 @@ async function togglePipeline(id, enabled) {
   }
 }
 
-async function runNow(id) {
+async function runNow(id, btn) {
   try {
-    const result = await gtss.fetchJSON(`/api/pipelines/${id}/run`, { method: 'POST' });
-    gtss.showToast(result.message || 'Pipeline triggered', 'success');
-    setTimeout(loadPipelines, 400);
-  } catch (err) {
-    gtss.showToast(err.message, 'error');
-  }
+    await withActionFeedback(id, 'Run Now', btn,
+      gtss.fetchJSON(`/api/pipelines/${id}/run`, { method: 'POST' })
+    );
+  } catch (_) { /* error already shown by withActionFeedback */ }
 }
 
-async function restartPipeline(id) {
-  if (!confirm(`Restart pipeline "${id}"? This will stop the current run (if any) and start a fresh execution from the first step.`)) return;
+async function restartPipeline(id, btn) {
+  if (!confirm(`Restart pipeline "${id}"?\n\nThis will stop the current run (if any) and start a fresh execution from the first step. If the pipeline is paused, the pause flag will also be cleared.`)) return;
   try {
-    const result = await gtss.fetchJSON(`/api/pipelines/${id}/restart`, { method: 'POST' });
-    gtss.showToast(result.message || 'Pipeline restarting', 'success');
-    setTimeout(loadPipelines, 400);
-  } catch (err) {
-    gtss.showToast(err.message, 'error');
-  }
+    await withActionFeedback(id, 'Restart', btn,
+      gtss.fetchJSON(`/api/pipelines/${id}/restart`, { method: 'POST' })
+    );
+  } catch (_) { /* error already shown */ }
 }
 
-async function pausePipeline(id, paused) {
+async function pausePipeline(id, paused, btn) {
   try {
-    await gtss.fetchJSON(`/api/pipelines/${id}/${paused ? 'pause' : 'resume'}`, { method: 'POST' });
-    gtss.showToast(`Pipeline ${paused ? 'paused' : 'resumed'}`, 'success');
-    setTimeout(loadPipelines, 300);
-  } catch (err) {
-    gtss.showToast(err.message, 'error');
-  }
+    await withActionFeedback(id, paused ? 'Pause' : 'Resume', btn,
+      gtss.fetchJSON(`/api/pipelines/${id}/${paused ? 'pause' : 'resume'}`, { method: 'POST' })
+    );
+  } catch (_) { /* error already shown */ }
 }
 
-async function stopPipeline(id) {
-  if (!confirm(`Stop the active execution of pipeline "${id}"? This will gracefully terminate the current run. Checkpoints for completed stages will be preserved.`)) return;
+async function stopPipeline(id, btn) {
+  if (!confirm(`Stop the active execution of pipeline "${id}"?\n\nThis will gracefully terminate the current run (and kill any background jobs that don't respond to the abort signal within a few seconds). Checkpoints for completed stages will be preserved so you can Resume from Checkpoint later.`)) return;
   try {
-    const result = await gtss.fetchJSON(`/api/pipelines/${id}/stop`, { method: 'POST' });
-    gtss.showToast(`Stop requested (${result.stopped || 0} active job(s))`, 'info');
-    setTimeout(loadPipelines, 300);
-  } catch (err) {
-    gtss.showToast(err.message, 'error');
-  }
+    await withActionFeedback(id, 'Stop', btn,
+      gtss.fetchJSON(`/api/pipelines/${id}/stop`, { method: 'POST' })
+    );
+  } catch (_) { /* error already shown */ }
 }
 
-async function retryStage(id, stage, executionId) {
+async function retryStage(id, stage, executionId, btn) {
   try {
-    const result = await gtss.fetchJSON(`/api/pipelines/${id}/retry-stage`, {
-      method: 'POST',
-      body: JSON.stringify({ stage, executionId }),
-    });
-    gtss.showToast(result.message || 'Retrying stage', 'success');
-    setTimeout(loadPipelines, 400);
-  } catch (err) {
-    gtss.showToast(err.message, 'error');
-  }
+    await withActionFeedback(id, 'Retry Stage', btn,
+      gtss.fetchJSON(`/api/pipelines/${id}/retry-stage`, {
+        method: 'POST',
+        body: JSON.stringify({ stage, executionId }),
+      })
+    );
+  } catch (_) { /* error already shown */ }
 }
 
-async function resumeFromCheckpoint(id, executionId) {
-  if (!confirm(`Resume pipeline "${id}" from the last successful checkpoint? Earlier completed stages will be skipped.`)) return;
+async function resumeFromCheckpoint(id, executionId, btn) {
+  if (!confirm(`Resume pipeline "${id}" from the last successful checkpoint?\n\nEarlier completed stages will be skipped. If there's a stuck execution in memory, it will be force-cleared first so the resume can proceed.`)) return;
   try {
     // We send `force: true` so that if there's a stuck "running" execution
     // in memory (the user's main complaint: pipeline shows Running forever
     // even though no real work is happening), the server will clear it
     // first and then proceed with the resume. This avoids the previous
     // "Another execution is already running" dead-end.
-    const result = await gtss.fetchJSON(`/api/pipelines/${id}/resume-from-checkpoint`, {
-      method: 'POST',
-      body: JSON.stringify({ executionId, force: true }),
-    });
-    gtss.showToast(result.message || 'Resuming from checkpoint', 'success');
-    setTimeout(loadPipelines, 400);
-  } catch (err) {
-    gtss.showToast(err.message, 'error');
-  }
+    await withActionFeedback(id, 'Resume from Checkpoint', btn,
+      gtss.fetchJSON(`/api/pipelines/${id}/resume-from-checkpoint`, {
+        method: 'POST',
+        body: JSON.stringify({ executionId, force: true }),
+      })
+    );
+  } catch (_) { /* error already shown */ }
 }
 
 /**
@@ -250,23 +354,23 @@ async function resumeFromCheckpoint(id, executionId) {
  * being made (the runner died without ever calling markExecutionFailed /
  * markExecutionCompleted). After force-clearing, the user can immediately
  * Run / Retry / Resume.
+ *
+ * The backend now:
+ *   - Kills any registered jobRegistry jobs for this pipeline.
+ *   - Marks ALL stuck DB rows as 'failed' (not just the latest one).
+ *   - Clears the schedule-level pause flag, so subsequent runs work.
+ *   - Returns detailed info about what was cleared.
  */
-async function forceClearPipeline(id) {
-  if (!confirm(`Force-clear pipeline "${id}"?\n\nThis marks the current execution as failed and resets the pipeline to idle, even if the runner is still (theoretically) running. Use this when the pipeline is stuck on "Running" forever and Retry / Resume / Stop are all refusing to work.`)) return;
+async function forceClearPipeline(id, btn) {
+  if (!confirm(`Force-clear pipeline "${id}"?\n\nThis will:\n  • Mark the current execution (and any stuck DB rows) as 'failed'\n  • Kill any background jobs registered for this pipeline\n  • Clear the pause flag\n  • Reset the pipeline to idle so you can Run / Retry / Resume\n\nUse this when the pipeline is stuck on "Running" forever and Retry / Resume / Stop are all refusing to work.`)) return;
   try {
-    const result = await gtss.fetchJSON(`/api/pipelines/${id}/force-clear`, {
-      method: 'POST',
-      body: JSON.stringify({ reason: 'manual-ui' }),
-    });
-    if (result.cleared > 0) {
-      gtss.showToast(`Cleared stuck execution ${result.execution_id} (was ${result.previous_status}). You can now Run / Retry / Resume.`, 'success');
-    } else {
-      gtss.showToast(result.message || 'No active execution to clear.', 'info');
-    }
-    setTimeout(loadPipelines, 400);
-  } catch (err) {
-    gtss.showToast(err.message, 'error');
-  }
+    await withActionFeedback(id, 'Force Clear', btn,
+      gtss.fetchJSON(`/api/pipelines/${id}/force-clear`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'manual-ui' }),
+      })
+    );
+  } catch (_) { /* error already shown */ }
 }
 
 async function loadExecutions(id) {
@@ -675,6 +779,22 @@ function renderPipelineCard(pipeline) {
       </div>
     ` : ''}
 
+    ${(pipeline.likely_stuck) ? `
+      <div style="padding:12px 14px;border-radius:10px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.4);
+        margin:10px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#fca5a5;flex:1;min-width:0">
+          <span style="font-size:14px;flex-shrink:0">⚠</span>
+          <span style="word-break:break-word"><strong>This pipeline appears stuck.</strong> The schedule-level state is "${displayStatus}" but there is no live runner in memory. Click <strong>Force Clear</strong> to reset and recover — this also kills any orphaned background jobs and clears the pause flag.</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button type="button" class="pipeline-action-btn" data-action="force-clear" data-pipeline="${pipeline.id}"
+            style="${actionStyle({ border: 'rgba(248,113,113,0.4)', bg: 'rgba(248,113,113,0.18)', text: '#fca5a5' }, true)}" title="Force-clear the stuck execution. Marks DB rows as 'failed', kills background jobs, clears pause flag.">
+            ✕ Force Clear Now
+          </button>
+        </div>
+      </div>
+    ` : ''}
+
     <details class="pipeline-section" ${isExpanded ? 'open' : ''} data-pipeline-section="${pipeline.id}" style="margin-top:8px">
       <summary style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;cursor:pointer">
         <span style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#cbd5e1">
@@ -811,16 +931,16 @@ function attachCardListeners() {
       const action = btn.dataset.action;
       const id = btn.dataset.pipeline;
       const stage = btn.dataset.stage;
-      if (action === 'run') runNow(id);
-      else if (action === 'restart') restartPipeline(id);
+      if (action === 'run') runNow(id, btn);
+      else if (action === 'restart') restartPipeline(id, btn);
       else if (action === 'executions') loadExecutions(id);
       else if (action === 'logs') openLogsModal(id);
-      else if (action === 'pause') pausePipeline(id, true);
-      else if (action === 'resume') pausePipeline(id, false);
-      else if (action === 'stop') stopPipeline(id);
-      else if (action === 'retry-stage') retryStage(id, stage || null, null);
-      else if (action === 'resume-checkpoint') resumeFromCheckpoint(id, null);
-      else if (action === 'force-clear') forceClearPipeline(id);
+      else if (action === 'pause') pausePipeline(id, true, btn);
+      else if (action === 'resume') pausePipeline(id, false, btn);
+      else if (action === 'stop') stopPipeline(id, btn);
+      else if (action === 'retry-stage') retryStage(id, stage || null, null, btn);
+      else if (action === 'resume-checkpoint') resumeFromCheckpoint(id, null, btn);
+      else if (action === 'force-clear') forceClearPipeline(id, btn);
       else if (action === 'save') savePipeline(id);
     });
   });
@@ -1048,7 +1168,7 @@ function renderExecutionDetailModal(pipelineId, data) {
       const pid = btn.dataset.pipeline;
       const eid = btn.dataset.exec;
       const stage = btn.dataset.stage || null;
-      retryStage(pid, stage, eid);
+      retryStage(pid, stage, eid, btn);
       overlay.remove();
     });
   });
@@ -1056,14 +1176,14 @@ function renderExecutionDetailModal(pipelineId, data) {
     btn.addEventListener('click', () => {
       const pid = btn.dataset.pipeline;
       const eid = btn.dataset.exec;
-      resumeFromCheckpoint(pid, eid);
+      resumeFromCheckpoint(pid, eid, btn);
       overlay.remove();
     });
   });
   overlay.querySelectorAll('[data-action="force-clear-detail"]').forEach(btn => {
     btn.addEventListener('click', () => {
       const pid = btn.dataset.pipeline;
-      forceClearPipeline(pid);
+      forceClearPipeline(pid, btn);
       overlay.remove();
     });
   });
@@ -1219,6 +1339,23 @@ function attachLogsModalListeners(pipelineId) {
 
 // ── Socket.IO Live Updates ───────────────────────────────────────────────────
 
+// Debounce rapid socket events so a flurry of progress updates doesn't
+// trigger dozens of concurrent /api/pipelines reloads. The previous
+// behavior called loadPipelines() on EVERY progress event, which could
+// cause UI flicker and re-render while the user was mid-click on a
+// button — sometimes losing the loading spinner before the API call
+// finished. Now we coalesce progress events into at most one reload
+// per 600ms.
+let progressReloadTimer = null;
+function scheduleProgressReload() {
+  if (progressReloadTimer) return;
+  progressReloadTimer = setTimeout(() => {
+    progressReloadTimer = null;
+    const scrollY = window.scrollY;
+    loadPipelines().then(() => { window.scrollTo(0, scrollY); });
+  }, 600);
+}
+
 function initPipelineSocket() {
   const sub = gtss.initSocket({
     'pipeline:status': ({ id, status, state, error, last_run_at }) => {
@@ -1228,7 +1365,9 @@ function initPipelineSocket() {
       if (status === 'completed') {
         gtss.showToast(`Pipeline "${id}" completed successfully`, 'success');
       } else if (status === 'failed') {
-        gtss.showToast(`Pipeline "${id}" failed: ${error || 'unknown error'}`, 'error');
+        const errMsg = error || 'unknown error';
+        gtss.showToast(`Pipeline "${id}" failed: ${errMsg}`, 'error', 8000);
+        showPipelineActionInfo(id, 'Pipeline Failed', errMsg, 'warn');
       } else if (state === 'paused') {
         gtss.showToast(`Pipeline "${id}" paused`, 'info');
       } else if (state === 'resuming' || status === 'resumed') {
@@ -1253,8 +1392,7 @@ function initPipelineSocket() {
         // Re-render just the progress + stages sections
         const progressContainer = card.querySelector('.progress-track')?.parentElement?.parentElement;
         // For simplicity, do a full card refresh on every progress event (cheap enough at the rate we emit)
-        const scrollY = window.scrollY;
-        loadPipelines().then(() => { window.scrollTo(0, scrollY); });
+        scheduleProgressReload();
       }
     },
     'pipeline:log': (log) => {
@@ -1271,4 +1409,13 @@ document.addEventListener('DOMContentLoaded', () => {
   initPipelineSocket();
   // Refresh health every 30 seconds
   setInterval(loadHealth, 30_000);
+
+  // Polling fallback: refresh pipelines every 8 seconds as a safety net.
+  // The previous behavior relied 100% on Socket.IO `pipeline:status` and
+  // `pipeline:progress` events to update the UI. If the socket connection
+  // dropped (network blip, server restart, etc.) the UI would silently go
+  // stale and the user would think the buttons weren't working. Now we
+  // poll /api/pipelines every 8s as a defensive refresh — and the socket
+  // still provides instant updates when connected.
+  setInterval(loadPipelines, 8_000);
 });
