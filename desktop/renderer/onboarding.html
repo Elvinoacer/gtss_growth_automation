@@ -6,13 +6,14 @@
     <title>Welcome to GTSS Growth Engine</title>
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="onboarding.css" />
+    <link rel="stylesheet" href="onboarding-sessions.css" />
   </head>
   <body class="onboarding-body">
     <div class="onboard-shell">
       <div class="onboard-hero">
         <div class="brand-mark">G</div>
         <h1>Welcome to GTSS Growth Engine</h1>
-        <p>This takes about 2 minutes. You only do this once — after this, just click <strong>Start</strong> to use the app.</p>
+        <p>This takes about 3 minutes. You only do this once — after this, just click <strong>Start</strong> to use the app.</p>
       </div>
 
       <div class="stepper">
@@ -26,6 +27,10 @@
         </div>
         <div class="step" data-step="3">
           <span class="step-num">3</span>
+          <span class="step-label">Sign in</span>
+        </div>
+        <div class="step" data-step="4">
+          <span class="step-num">4</span>
           <span class="step-label">Done</span>
         </div>
       </div>
@@ -78,8 +83,41 @@
         </div>
       </section>
 
-      <!-- ───────── Step 3: Done ───────── -->
+      <!-- ───────── Step 3: Sign in to your accounts ───────── -->
       <section class="step-panel" id="step-3">
+        <h2>Sign in to your accounts</h2>
+        <p>
+          We'll launch Chrome (the same one automation will use) with your existing profile. Sign
+          in to <strong>Google / Gemini</strong> (required — Gemini won't trust a copied profile
+          without an active Google login) and the social platforms inside that Chrome window. We
+          automatically detect logins as you complete them.
+        </p>
+
+        <div id="sessions-status-bar" class="sessions-status-bar">
+          <span id="sessions-cdp-state" class="sessions-cdp-state">Chrome: not started</span>
+          <button type="button" id="sessions-launch-chrome" class="btn btn-primary btn-mini">Launch Chrome</button>
+          <button type="button" id="sessions-reopen-tabs" class="btn btn-secondary btn-mini" disabled>Reopen login tabs</button>
+          <button type="button" id="sessions-refresh" class="btn btn-secondary btn-mini" disabled>Refresh</button>
+        </div>
+
+        <div id="sessions-grid" class="sessions-grid">
+          <!-- cards rendered dynamically by onboarding.js -->
+        </div>
+
+        <div id="sessions-hint" class="sessions-hint">
+          Sign in to each platform in the Chrome window that just opened. This page polls every
+          3 seconds — green checkmarks appear automatically once a session is detected.
+        </div>
+
+        <div class="step-actions">
+          <button class="btn btn-secondary" id="onboard-step3-back">← Back</button>
+          <button class="btn btn-secondary" id="onboard-step3-skip" title="Skip platform sign-in for now. You can complete it later in the web app's Settings, but automation will fail until you do.">Skip for now</button>
+          <button class="btn btn-primary" id="onboard-step3-next" disabled>Continue →</button>
+        </div>
+      </section>
+
+      <!-- ───────── Step 4: Done ───────── -->
+      <section class="step-panel" id="step-4">
         <h2>You're all set! 🎉</h2>
         <p>
           Click <strong>Finish</strong> to launch Chrome and start the GTSS server. The web app

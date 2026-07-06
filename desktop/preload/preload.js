@@ -29,6 +29,19 @@ contextBridge.exposeInMainWorld("gtss", {
   cdp: {
     start: () => ipcRenderer.invoke("cdp:start"),
     stop: () => ipcRenderer.invoke("cdp:stop"),
+    // Onboarding-only: launch CDP Chrome WITHOUT the web app URL (the
+    // server isn't up yet). The user signs into each platform inside this
+    // Chrome; cookies are then available to automation once the server
+    // boots.
+    startStandalone: () => ipcRenderer.invoke("cdp:start-standalone"),
+    // Open each platform's login page in the running CDP Chrome.
+    openLoginTabs: (platforms) => ipcRenderer.invoke("cdp:open-login-tabs", platforms),
+    // Poll current session state via CDP cookies. Returns:
+    //   { ok, sessions: { google:{loggedIn,cookies,label}, linkedin:..., ... }, running }
+    // or { ok:false, sessions:null, running } if the CDP query failed.
+    checkSessions: () => ipcRenderer.invoke("cdp:check-sessions"),
+    // Lightweight state poll — used by onboarding to know when Chrome is up.
+    state: () => ipcRenderer.invoke("cdp:state"),
   },
 
   // ─── Open the web app in the user's default browser ─────────────────────

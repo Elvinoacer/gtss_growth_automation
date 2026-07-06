@@ -105,6 +105,62 @@ function registerIpcHandlers({
     }
   });
 
+  // ─── CDP session checking (onboarding "Sign in to your accounts") ──────
+  //
+  // These channels support the new onboarding step that gates "Continue"
+  // on the user being logged into Google (required for Gemini) plus the
+  // other social platforms. We expose:
+  //   - cdp:start-standalone: launch CDP Chrome WITHOUT the web app URL
+  //     (the web app isn't up yet during onboarding). Uses the copied
+  //     profile so existing logins carry over.
+  //   - cdp:open-login-tabs: open each platform's login page in the CDP
+  //     Chrome so the user can sign in.
+  //   - cdp:check-sessions: poll cookies via CDP and return a map of
+  //     platform -> { loggedIn, cookies, label }.
+  //   - cdp:state: lightweight poll for the CDP state (used by onboarding
+  //     to know when Chrome is up).
+
+  ipcMain.handle("cdp:start-standalone", async () => {
+    try {
+      if (!cdpManager.isRunning()) {
+        // Start CDP Chrome WITHOUT a URL — we just need the browser up so
+        // the user can sign in. openLoginTabs() will open the actual login
+        // pages in new tabs.
+        await cdpManager.start({});
+        // Persist the CDP endpoint into .env so when the server boots
+        // later it picks up the same Chrome.
+        envBootstrap.upsert("CDP_ENDPOINT", `http://127.0.0.1:${cdpManager.port}`);
+        envBootstrap.upsert("BROWSER_MODE", "cdp");
+      }
+      return { ok: true, status: cdpManager.getState() };
+    } catch (err) {
+      return { ok: false, error: err.message, status: cdpManager.getState() };
+    }
+  });
+
+  ipcMain.handle("cdp:open-login-tabs", async (_event, platforms) => {
+    try {
+      const list = Array.isArray(platforms) && platforms.length > 0
+        ? platforms
+        : ["google", "linkedin", "facebook", "x"];
+      const result = await cdpManager.openLoginTabs(list);
+      return { ok: true, ...result };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle("cdp:check-sessions", async () => {
+    try {
+      const sessions = await cdpManager.checkSessions();
+      return { ok: true, sessions, running: cdpManager.isRunning() };
+    } catch (err) {
+      return { ok: false, error: err.message, sessions: null, running: cdpManager.isRunning() };
+    }
+  });
+
+  ipcMain.handle("cdp:state", () => cdpManager.getState());
+
   // ─── Open the web app ───────────────────────────────────────────────────
   //
   // If CDP Chrome is running, open a new tab IN the CDP Chrome (via the

@@ -14,6 +14,13 @@
  *   - If no Chrome is installed: log an error and tell the user to install
  *     Google Chrome (we intentionally do NOT bundle Chrome to keep the
  *     installer small and respect Google's distribution terms).
+ *
+ * Session checking:
+ *   - checkSessions() opens a transient CDP WebSocket to the running Chrome
+ *     and calls Network.getAllCookies, then reports which platforms have
+ *     active login cookies. Used by the onboarding wizard to gate "Continue"
+ *     on the user being logged into Google (required for Gemini to work in
+ *     a copied profile) plus LinkedIn / Facebook / X.
  */
 
 const { spawn } = require("child_process");
@@ -22,6 +29,61 @@ const path = require("path");
 const os = require("os");
 const net = require("net");
 const http = require("http");
+const { EventEmitter } = require("events");
+
+// ─── Session-detection config ───────────────────────────────────────────────
+//
+// Cookie names per platform. We require AT LEAST one auth cookie per platform
+// to consider the session "live". These are the same cookies the platforms
+// themselves use to identify an authenticated browser session, so presence of
+// any one of them is a strong signal the user is logged in.
+//
+// Gemini (Google) is special: the copied CDP profile does NOT inherit the
+// trusted-machine state for Google, so Gemini web (gemini.google.com) will
+// refuse to operate until the user signs into at least one Google account
+// FROM INSIDE the CDP Chrome. That's why onboarding gates completion on the
+// google session being detected.
+const SESSION_COOKIE_SIGNATURES = {
+  google: {
+    label: "Google (Gemini)",
+    domains: [".google.com", "google.com", ".accounts.google.com"],
+    cookies: ["SID", "HSID", "SSID", "APISID", "SAPISID", "__Secure-1PSID", "LSID"],
+    requiredFor: "Gemini image generation in the CDP Chrome",
+  },
+  linkedin: {
+    label: "LinkedIn",
+    domains: [".linkedin.com", "linkedin.com"],
+    cookies: ["li_at", "liap", "JSESSIONID", "bscookie"],
+  },
+  facebook: {
+    label: "Facebook",
+    domains: [".facebook.com", "facebook.com"],
+    cookies: ["c_user", "xs", "fr", "datr"],
+  },
+  x: {
+    label: "X (Twitter)",
+    domains: [".x.com", "x.com", ".twitter.com", "twitter.com"],
+    cookies: ["auth_token", "ct0", "twid"],
+  },
+  instagram: {
+    label: "Instagram",
+    domains: [".instagram.com", "instagram.com"],
+    cookies: ["sessionid", "ds_user_id", "csrftoken", "ig_did"],
+  },
+};
+
+// Login URLs used by the onboarding "Sign in to your accounts" step to
+// pre-open each platform's sign-in page inside the CDP Chrome. We pick the
+// plain homepage for each platform so that if the user is already logged in
+// (session copied from their real profile), they see their feed/homepage —
+// and if not, the page itself shows a login form.
+const PLATFORM_LOGIN_URLS = {
+  google: "https://gemini.google.com/",
+  linkedin: "https://www.linkedin.com/",
+  facebook: "https://www.facebook.com/",
+  x: "https://x.com/",
+  instagram: "https://www.instagram.com/",
+};
 
 const DEFAULT_PORT = 9222;
 const CDP_PROFILE_DIRNAME = "chrome-cdp-profile";
@@ -206,6 +268,220 @@ class CdpManager {
         resolve(false);
       });
       req.end();
+    });
+  }
+
+  /**
+   * Open the platform login pages inside the running CDP Chrome. Used by
+   * the onboarding wizard's "Sign in to your accounts" step.
+   *
+   * We open them sequentially with a small gap so Chrome doesn't get
+   * overwhelmed and the user can see each tab appear. Tabs are opened in
+   * the SAME Chrome that handles automation, so cookies set during these
+   * manual logins are immediately available to the automation layer.
+   *
+   * @param {string[]} platforms - list of platform keys (google/linkedin/...)
+   * @returns {Promise<{opened: string[], failed: string[]}>}
+   */
+  async openLoginTabs(platforms) {
+    const opened = [];
+    const failed = [];
+    if (!this.isRunning()) {
+      this.logStream.append("cdp", "openLoginTabs: CDP Chrome is not running.");
+      return { opened, failed: platforms.slice() };
+    }
+    for (const key of platforms) {
+      const url = PLATFORM_LOGIN_URLS[key];
+      if (!url) {
+        failed.push(key);
+        continue;
+      }
+      const ok = await this.openTab(url);
+      if (ok) {
+        opened.push(key);
+        this.logStream.append("cdp", `Opened ${key} login tab: ${url}`);
+      } else {
+        failed.push(key);
+        this.logStream.append("cdp:stderr", `Failed to open ${key} login tab.`);
+      }
+      // Small gap so the user sees tabs appear one at a time.
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    return { opened, failed };
+  }
+
+  /**
+   * Query the running CDP Chrome for current cookies and report which
+   * platforms have an active session. Used by the onboarding wizard to
+   * gate the "Continue" button on the user being logged in.
+   *
+   * Implementation: get the list of pages from /json/list, pick a page
+   * target, open a WebSocket to its devtoolsUrl, send Network.getAllCookies,
+   * parse the response, then close the socket. We use the global WebSocket
+   * (available in Node 22+ and bundled in Electron 33+).
+   *
+   * Returns null if CDP isn't running or the query fails — callers should
+   * treat null as "unknown, retry".
+   *
+   * @returns {Promise<null | Object>} map of platformKey -> { loggedIn, cookies: string[] }
+   */
+  async checkSessions() {
+    if (!this.isRunning()) return null;
+
+    // 1. Get the list of targets from the CDP HTTP endpoint.
+    const targets = await this._listTargets().catch(() => []);
+    if (!Array.isArray(targets) || targets.length === 0) return null;
+
+    // Prefer a `page`-type target (a real browser tab) — browser-level
+    // targets don't expose Network.getAllCookies the same way.
+    const pageTarget =
+      targets.find((t) => t && t.type === "page" && t.webSocketDebuggerUrl) ||
+      targets.find((t) => t && t.webSocketDebuggerUrl);
+    if (!pageTarget || !pageTarget.webSocketDebuggerUrl) return null;
+
+    // 2. Open a transient WebSocket, send Network.getAllCookies, parse, close.
+    let cookies = null;
+    try {
+      cookies = await this._getAllCookiesViaWs(pageTarget.webSocketDebuggerUrl);
+    } catch (err) {
+      this.logStream.append("cdp:stderr", `checkSessions: ${err.message}`);
+      return null;
+    }
+    if (!Array.isArray(cookies)) return null;
+
+    // 3. For each platform, see if at least one signature cookie is present
+    // AND the cookie's domain matches the platform's expected domain.
+    const result = {};
+    for (const [key, sig] of Object.entries(SESSION_COOKIE_SIGNATURES)) {
+      const matched = [];
+      for (const cookie of cookies) {
+        if (!cookie || !cookie.name || !cookie.domain) continue;
+        if (!sig.cookies.includes(cookie.name)) continue;
+        const domain = cookie.domain.toLowerCase();
+        const domainMatches = sig.domains.some((d) => {
+          const dl = d.toLowerCase();
+          if (dl.startsWith(".")) return domain === dl || domain.endsWith(dl);
+          return domain === dl || domain.endsWith("." + dl);
+        });
+        if (domainMatches) matched.push(cookie.name);
+      }
+      result[key] = {
+        loggedIn: matched.length > 0,
+        cookies: matched,
+        label: sig.label,
+      };
+    }
+    return result;
+  }
+
+  /**
+   * Internal: GET /json/list from the CDP endpoint and return the array
+   * of targets. Returns [] on any error.
+   */
+  _listTargets() {
+    return new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: this.port,
+          path: "/json/list",
+          method: "GET",
+          timeout: 3000,
+        },
+        (res) => {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk) => (body += chunk));
+          res.on("end", () => {
+            try {
+              resolve(JSON.parse(body));
+            } catch (err) {
+              reject(err);
+            }
+          });
+        },
+      );
+      req.on("error", reject);
+      req.on("timeout", () => {
+        req.destroy();
+        reject(new Error("CDP /json/list timed out"));
+      });
+      req.end();
+    });
+  }
+
+  /**
+   * Internal: connect to a CDP target's WebSocket, call Network.getAllCookies,
+   * and return the array of cookies. Uses the global WebSocket constructor
+   * (available in Node 22+ and Electron 33+).
+   *
+   * We attach the listener BEFORE we send the request and wait for either
+   * the matching response (same `id`) or a 4-second timeout — whichever
+   * comes first. The socket is always closed in the finally block.
+   */
+  _getAllCookiesViaWs(wsUrl) {
+    return new Promise((resolve, reject) => {
+      let ws;
+      let settled = false;
+      const finish = (err, value) => {
+        if (settled) return;
+        settled = true;
+        if (ws) {
+          try { ws.close(); } catch (_) {}
+        }
+        if (err) reject(err);
+        else resolve(value);
+      };
+      const timeout = setTimeout(() => {
+        finish(new Error("CDP WebSocket getAllCookies timed out"));
+      }, 4000);
+      try {
+        // eslint-disable-next-line no-undef
+        const WS = (typeof WebSocket !== "undefined") ? WebSocket : null;
+        if (!WS) {
+          clearTimeout(timeout);
+          finish(new Error("WebSocket not available in this runtime"));
+          return;
+        }
+        ws = new WS(wsUrl);
+        ws.onopen = () => {
+          try {
+            ws.send(JSON.stringify({ id: 1, method: "Network.getAllCookies" }));
+          } catch (err) {
+            clearTimeout(timeout);
+            finish(err);
+          }
+        };
+        ws.onmessage = (event) => {
+          let msg;
+          try {
+            msg = JSON.parse(typeof event.data === "string" ? event.data : "");
+          } catch (_) {
+            return;
+          }
+          if (msg && msg.id === 1) {
+            clearTimeout(timeout);
+            if (msg.error) {
+              finish(new Error(msg.error.message || "CDP getAllCookies error"));
+            } else {
+              const cks = msg.result && msg.result.cookies;
+              finish(null, Array.isArray(cks) ? cks : []);
+            }
+          }
+        };
+        ws.onerror = (err) => {
+          clearTimeout(timeout);
+          finish(new Error("CDP WebSocket error"));
+        };
+        ws.onclose = () => {
+          // If we somehow didn't resolve yet, treat as failure.
+          clearTimeout(timeout);
+          finish(new Error("CDP WebSocket closed before response"));
+        };
+      } catch (err) {
+        clearTimeout(timeout);
+        finish(err);
+      }
     });
   }
 

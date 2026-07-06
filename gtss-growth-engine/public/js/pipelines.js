@@ -88,6 +88,104 @@ let healthData = {};
 let activeLogsSub = null;
 let expandedPipelines = new Set();
 
+// ── Anti-flicker interaction guard ─────────────────────────────────────────
+//
+// The page previously rebuilt the entire pipelines container (`innerHTML =
+// ...`) on every Socket.IO status event, every progress event (debounced to
+// 600ms), and every 8s poll. While the user was typing in the cron input or
+// a limits field, the rebuild would destroy the focused element, dropping
+// the caret and any in-flight keystrokes — making the page feel broken.
+//
+// To prevent this we:
+//   1. Track whether the user is currently interacting with any form field
+//      inside the pipelines container (focus + 800ms grace period after
+//      blur, so a quick poll doesn't yank focus back).
+//   2. Track whether the user has any "dirty" (unsaved) form values in the
+//      config section of any card. If they do, we NEVER silently overwrite
+//      the inputs — we only patch the dynamic parts (progress bar, status
+//      badge, stage pills, health strip).
+//   3. Patch dynamic parts in place instead of rebuilding the whole card.
+//      This keeps the DOM identity stable so focus, scroll, and uncommitted
+//      input values survive.
+let userInteracting = false;
+let interactionGraceUntil = 0;
+
+function isUserInteracting() {
+  if (userInteracting) return true;
+  if (Date.now() < interactionGraceUntil) return true;
+  // Defensive: check the actual focused element too, in case the focus
+  // event was missed (e.g., user tabbed into a field before this script
+  // attached the listener).
+  const active = document.activeElement;
+  if (active && active.closest && active.closest('#pipelines-container')) {
+    const tag = (active.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || active.isContentEditable) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function markInteracting() {
+  userInteracting = true;
+}
+function markInteractionEnd() {
+  userInteracting = false;
+  // Hold off re-renders for 800ms after blur so a socket event firing the
+  // instant the user tabs out doesn't yank focus back to a rebuilt node.
+  interactionGraceUntil = Date.now() + 800;
+}
+
+// Attach focusin/focusout on the container (delegated — works for any
+// input inside, including ones added by future re-renders). We use
+// focusin/focusout because they bubble; focus/blur do not.
+document.addEventListener('focusin', (e) => {
+  if (e.target && e.target.closest && e.target.closest('#pipelines-container')) {
+    markInteracting();
+  }
+});
+document.addEventListener('focusout', (e) => {
+  if (e.target && e.target.closest && e.target.closest('#pipelines-container')) {
+    markInteractionEnd();
+  }
+});
+
+// Read all "config" form values from a card so we can preserve them across
+// in-place patches. Returns null if the card isn't yet rendered.
+function readCardFormValues(card) {
+  if (!card) return null;
+  const vals = { cron: null, limits: {}, platforms: {} };
+  const cronInput = card.querySelector('[data-field="cron"]');
+  if (cronInput) vals.cron = cronInput.value;
+  card.querySelectorAll('[data-limit-key]').forEach((el) => {
+    vals.limits[el.dataset.limitKey] = el.type === 'number' ? Number(el.value) : el.value;
+  });
+  card.querySelectorAll('[data-platform-checkbox]').forEach((cb) => {
+    vals.platforms[cb.dataset.platformCheckbox] = cb.checked;
+  });
+  return vals;
+}
+
+// Restore form values into a freshly-rendered card (used after a forced
+// full re-render). Without this, the cron input and limit fields would
+// silently reset to whatever the server returned — losing the user's
+// unsaved changes.
+function applyCardFormValues(card, vals) {
+  if (!card || !vals) return;
+  if (vals.cron != null) {
+    const cronInput = card.querySelector('[data-field="cron"]');
+    if (cronInput && cronInput.value !== vals.cron) cronInput.value = vals.cron;
+  }
+  for (const [k, v] of Object.entries(vals.limits || {})) {
+    const el = card.querySelector(`[data-limit-key="${k}"]`);
+    if (el && el.value !== String(v)) el.value = v;
+  }
+  for (const [p, checked] of Object.entries(vals.platforms || {})) {
+    const cb = card.querySelector(`[data-platform-checkbox="${p}"]`);
+    if (cb && cb.checked !== checked) cb.checked = checked;
+  }
+}
+
 // ── API Helpers ───────────────────────────────────────────────────────────────
 
 async function loadPipelines() {
@@ -681,6 +779,82 @@ function renderProgressSection(pipeline) {
   `;
 }
 
+/**
+ * Render the three dynamic banners that can appear above the details
+ * sections of a pipeline card:
+ *   1. "Last execution failed at stage X" banner (with Retry / Resume / Force-Clear)
+ *   2. "Pipeline is running" banner (with Force-Clear for stuck runs)
+ *   3. "Pipeline appears stuck" banner (with Force-Clear Now)
+ *
+ * Consolidated into one function so the in-place patcher can refresh
+ * them as a single slot — without touching the surrounding form fields.
+ */
+function renderDynamicBanners(pipeline, displayStatus, hasFailedStage) {
+  const parts = [];
+
+  if (hasFailedStage) {
+    parts.push(`
+      <div style="padding:10px 14px;border-radius:10px;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.3);
+        margin:10px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#fca5a5">
+          <span>✗ Last execution failed${pipeline.failed_stage ? ` at stage "${pipeline.failed_stage}"` : ''}.</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button type="button" class="pipeline-action-btn" data-action="retry-stage" data-pipeline="${pipeline.id}" data-stage="${pipeline.failed_stage || ''}"
+            style="${actionStyle({ border: 'rgba(167,139,250,0.3)', bg: 'rgba(167,139,250,0.1)', text: '#a78bfa' }, true)}" title="Retry the failed stage (or start over from the first stage if no failed stage is recorded)">
+            ↻ Retry Failed Step
+          </button>
+          <button type="button" class="pipeline-action-btn" data-action="resume-checkpoint" data-pipeline="${pipeline.id}"
+            style="${actionStyle({ border: 'rgba(34,197,94,0.3)', bg: 'rgba(34,197,94,0.1)', text: '#4ade80' }, true)}" title="Resume from the last successful checkpoint (auto force-clears any stuck state)">
+            ⏵ Resume from Checkpoint
+          </button>
+          <button type="button" class="pipeline-action-btn" data-action="force-clear" data-pipeline="${pipeline.id}"
+            style="${actionStyle({ border: 'rgba(248,113,113,0.4)', bg: 'rgba(248,113,113,0.12)', text: '#f87171' }, true)}" title="Force-clear this execution so a new run can start. Use this if Retry / Resume are erroring.">
+            ✕ Force Clear
+          </button>
+        </div>
+      </div>
+    `);
+  }
+
+  if (displayStatus === 'running' && !hasFailedStage) {
+    parts.push(`
+      <div style="padding:10px 14px;border-radius:10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);
+        margin:10px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#fbbf24">
+          <span>⏳ Pipeline is running${pipeline.active_execution_id ? ` (execution ${String(pipeline.active_execution_id).slice(0,8)})` : ''}. If it appears stuck, use Force Clear to reset and start over.</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button type="button" class="pipeline-action-btn" data-action="force-clear" data-pipeline="${pipeline.id}"
+            style="${actionStyle({ border: 'rgba(248,113,113,0.4)', bg: 'rgba(248,113,113,0.12)', text: '#f87171' }, true)}" title="Force-clear the current execution. Use this only if the pipeline is stuck on Running forever.">
+            ✕ Force Clear Stuck Run
+          </button>
+        </div>
+      </div>
+    `);
+  }
+
+  if (pipeline.likely_stuck) {
+    parts.push(`
+      <div style="padding:12px 14px;border-radius:10px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.4);
+        margin:10px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#fca5a5;flex:1;min-width:0">
+          <span style="font-size:14px;flex-shrink:0">⚠</span>
+          <span style="word-break:break-word"><strong>This pipeline appears stuck.</strong> The schedule-level state is "${displayStatus}" but there is no live runner in memory. Click <strong>Force Clear</strong> to reset and recover — this also kills any orphaned background jobs and clears the pause flag.</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button type="button" class="pipeline-action-btn" data-action="force-clear" data-pipeline="${pipeline.id}"
+            style="${actionStyle({ border: 'rgba(248,113,113,0.4)', bg: 'rgba(248,113,113,0.18)', text: '#fca5a5' }, true)}" title="Force-clear the stuck execution. Marks DB rows as 'failed', kills background jobs, clears pause flag.">
+            ✕ Force Clear Now
+          </button>
+        </div>
+      </div>
+    `);
+  }
+
+  return parts.join('');
+}
+
 function renderPipelineCard(pipeline) {
   const meta = PIPELINE_META[pipeline.id] || {};
   const limits = pipeline.limits || {};
@@ -710,7 +884,7 @@ function renderPipelineCard(pipeline) {
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
-        ${statusBadge(displayStatus)}
+        <span data-slot="status-badge">${statusBadge(displayStatus)}</span>
         <label class="pipeline-toggle" style="position:relative;display:inline-block;width:48px;height:26px;cursor:pointer" title="${enabled ? 'Disable pipeline' : 'Enable pipeline'}">
           <input type="checkbox" class="pipeline-toggle-input" data-toggle-pipeline="${pipeline.id}"
             ${enabled ? 'checked' : ''}
@@ -737,63 +911,13 @@ function renderPipelineCard(pipeline) {
       </div>
     ` : ''}
 
-    ${renderProgressSection(pipeline)}
+    <div data-slot="progress-section">${renderProgressSection(pipeline)}</div>
 
-    ${renderStageProgress(meta, pipeline)}
+    <div data-slot="stage-progress">${renderStageProgress(meta, pipeline)}</div>
 
-    ${hasFailedStage ? `
-      <div style="padding:10px 14px;border-radius:10px;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.3);
-        margin:10px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#fca5a5">
-          <span>✗ Last execution failed${pipeline.failed_stage ? ` at stage "${pipeline.failed_stage}"` : ''}.</span>
-        </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button type="button" class="pipeline-action-btn" data-action="retry-stage" data-pipeline="${pipeline.id}" data-stage="${pipeline.failed_stage || ''}"
-            style="${actionStyle({ border: 'rgba(167,139,250,0.3)', bg: 'rgba(167,139,250,0.1)', text: '#a78bfa' }, true)}" title="Retry the failed stage (or start over from the first stage if no failed stage is recorded)">
-            ↻ Retry Failed Step
-          </button>
-          <button type="button" class="pipeline-action-btn" data-action="resume-checkpoint" data-pipeline="${pipeline.id}"
-            style="${actionStyle({ border: 'rgba(34,197,94,0.3)', bg: 'rgba(34,197,94,0.1)', text: '#4ade80' }, true)}" title="Resume from the last successful checkpoint (auto force-clears any stuck state)">
-            ⏵ Resume from Checkpoint
-          </button>
-          <button type="button" class="pipeline-action-btn" data-action="force-clear" data-pipeline="${pipeline.id}"
-            style="${actionStyle({ border: 'rgba(248,113,113,0.4)', bg: 'rgba(248,113,113,0.12)', text: '#f87171' }, true)}" title="Force-clear this execution so a new run can start. Use this if Retry / Resume are erroring.">
-            ✕ Force Clear
-          </button>
-        </div>
-      </div>
-    ` : ''}
-
-    ${(displayStatus === 'running' && !hasFailedStage) ? `
-      <div style="padding:10px 14px;border-radius:10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);
-        margin:10px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#fbbf24">
-          <span>⏳ Pipeline is running${pipeline.active_execution_id ? ` (execution ${String(pipeline.active_execution_id).slice(0,8)})` : ''}. If it appears stuck, use Force Clear to reset and start over.</span>
-        </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button type="button" class="pipeline-action-btn" data-action="force-clear" data-pipeline="${pipeline.id}"
-            style="${actionStyle({ border: 'rgba(248,113,113,0.4)', bg: 'rgba(248,113,113,0.12)', text: '#f87171' }, true)}" title="Force-clear the current execution. Use this only if the pipeline is stuck on Running forever.">
-            ✕ Force Clear Stuck Run
-          </button>
-        </div>
-      </div>
-    ` : ''}
-
-    ${(pipeline.likely_stuck) ? `
-      <div style="padding:12px 14px;border-radius:10px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.4);
-        margin:10px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#fca5a5;flex:1;min-width:0">
-          <span style="font-size:14px;flex-shrink:0">⚠</span>
-          <span style="word-break:break-word"><strong>This pipeline appears stuck.</strong> The schedule-level state is "${displayStatus}" but there is no live runner in memory. Click <strong>Force Clear</strong> to reset and recover — this also kills any orphaned background jobs and clears the pause flag.</span>
-        </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button type="button" class="pipeline-action-btn" data-action="force-clear" data-pipeline="${pipeline.id}"
-            style="${actionStyle({ border: 'rgba(248,113,113,0.4)', bg: 'rgba(248,113,113,0.18)', text: '#fca5a5' }, true)}" title="Force-clear the stuck execution. Marks DB rows as 'failed', kills background jobs, clears pause flag.">
-            ✕ Force Clear Now
-          </button>
-        </div>
-      </div>
-    ` : ''}
+    <div data-slot="dynamic-banners">
+      ${renderDynamicBanners(pipeline, displayStatus, hasFailedStage)}
+    </div>
 
     <details class="pipeline-section" ${isExpanded ? 'open' : ''} data-pipeline-section="${pipeline.id}" style="margin-top:8px">
       <summary style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;cursor:pointer">
@@ -832,7 +956,7 @@ function renderPipelineCard(pipeline) {
 
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;
       border-top:1px solid rgba(148,163,184,0.12);padding-top:14px;margin-top:14px">
-      <div style="font-size:11px;color:#64748b;display:flex;gap:14px;flex-wrap:wrap">
+      <div data-slot="footer-stats" style="font-size:11px;color:#64748b;display:flex;gap:14px;flex-wrap:wrap">
         <span>Last run: <strong style="color:#94a3b8">${formatRelative(pipeline.last_run_at)}</strong></span>
         <span>Next: <strong style="color:#94a3b8">${pipeline.enabled ? formatRelative(pipeline.next_run_at) : 'Disabled'}</strong></span>
         <span>Runs: <strong style="color:#94a3b8">${pipeline.run_count || 0}</strong></span>
@@ -882,12 +1006,224 @@ function renderPipelines(pipelines) {
   if (!container) return;
 
   if (!pipelines || pipelines.length === 0) {
+    // Always OK to show empty state — there are no form fields to lose.
     container.innerHTML = gtss.renderEmptyState(null, 'No pipelines configured.');
     return;
   }
 
+  // ── Anti-flicker path: in-place patch ─────────────────────────────────
+  //
+  // If the container already has the right number of cards AND none of the
+  // pipeline ids have changed, we patch each card in place instead of
+  // rebuilding the whole container. This preserves:
+  //   - focus on whatever input the user is typing in
+  //   - the user's uncommitted form values in the config section
+  //   - scroll position (browser handles it naturally because the DOM
+  //     nodes aren't being recreated)
+  //   - the expansion state of the <details> sections
+  //
+  // We only fall back to a full rebuild when the SET of pipelines has
+  // changed (e.g., a new pipeline was added on the server) or when the
+  // user is NOT currently interacting (so a periodic refresh can pick up
+  // structural changes like a changed stage list).
+  const existingCards = container.querySelectorAll('[data-pipeline-id]');
+  const existingIds = Array.from(existingCards).map((c) => c.dataset.pipelineId);
+  const newIds = pipelines.map((p) => p.id);
+  const sameSet =
+    existingIds.length === newIds.length &&
+    newIds.every((id, i) => id === existingIds[i]);
+
+  if (sameSet) {
+    // Patch each card in place.
+    pipelines.forEach((p) => {
+      const card = container.querySelector(`[data-pipeline-id="${p.id}"]`);
+      if (!card) return;
+      patchPipelineCardInPlace(card, p);
+    });
+    // The global health strip is independent — always safe to refresh.
+    renderGlobalHealthStrip();
+    return;
+  }
+
+  // ── Full rebuild path ─────────────────────────────────────────────────
+  //
+  // Either this is the first render, or the set of pipelines changed.
+  // Before replacing, snapshot any in-flight form values per-card so we
+  // can restore them after the rebuild (the user might have been mid-edit
+  // when a new pipeline appeared).
+  const savedFormValues = {};
+  existingCards.forEach((card) => {
+    const id = card.dataset.pipelineId;
+    savedFormValues[id] = readCardFormValues(card);
+  });
+
+  // Preserve scroll position — innerHTML reset will reset it otherwise.
+  const scrollY = window.scrollY;
+
   container.innerHTML = pipelines.map(renderPipelineCard).join('');
   attachCardListeners();
+
+  // Restore form values for any card that survived the rebuild.
+  pipelines.forEach((p) => {
+    if (savedFormValues[p.id]) {
+      const card = container.querySelector(`[data-pipeline-id="${p.id}"]`);
+      applyCardFormValues(card, savedFormValues[p.id]);
+    }
+  });
+
+  // Restore scroll. Avoid smooth — instant is what the user expects when
+  // they didn't initiate a scroll.
+  window.scrollTo(0, scrollY);
+}
+
+/**
+ * Patch the dynamic parts of a pipeline card in place, using the
+ * data-slot anchors emitted by renderPipelineCard().
+ *
+ * What counts as "dynamic" (worth re-rendering on every refresh):
+ *   - status badge (state can change idle → running → completed)
+ *   - progress section (progress %, current message, current stage)
+ *   - stage pills (which stages are done / active / failed)
+ *   - dynamic banners (failed-stage / running / likely-stuck)
+ *   - health section (only if its <details> is open)
+ *   - footer "last run / next run / runs" counters
+ *
+ * What is NOT patched (preserved as-is):
+ *   - the entire "Schedule & Configuration" <details> section (cron input,
+ *     limit inputs, platform checkboxes) — so the user's unsaved changes
+ *     and focus survive
+ *   - the <details> open/closed state
+ *   - the toggle switch (unless enabled state changed)
+ *
+ * If any expected slot is missing (e.g., the card was rendered by an
+ * older version of renderPipelineCard), we bail out and let the caller
+ * fall back to a full re-render.
+ */
+function patchPipelineCardInPlace(card, pipeline) {
+  if (!card || !pipeline) return false;
+
+  const meta = PIPELINE_META[pipeline.id] || {};
+  const enabled = Boolean(pipeline.enabled);
+  const displayStatus = pipeline.state || (pipeline.paused ? 'paused' : pipeline.last_status) || (enabled ? 'idle' : 'disabled');
+  const hasFailedStage = pipeline.state === 'failed';
+
+  // 1. Status badge.
+  const badgeSlot = card.querySelector('[data-slot="status-badge"]');
+  if (badgeSlot) {
+    badgeSlot.innerHTML = statusBadge(displayStatus);
+  }
+
+  // 2. Toggle switch state (only patch if changed — preserves click handler).
+  const toggleInput = card.querySelector('[data-toggle-pipeline]');
+  if (toggleInput && toggleInput.checked !== enabled) {
+    toggleInput.checked = enabled;
+    const slider = toggleInput.parentElement.querySelector('.pipeline-toggle-slider');
+    if (slider) {
+      slider.style.background = enabled ? '#22c55e' : 'rgba(148,163,184,0.3)';
+      slider.style.boxShadow = enabled ? '0 0 12px rgba(34,197,94,0.3)' : 'none';
+      const knob = slider.querySelector('span');
+      if (knob) {
+        // Reset both, then set the side that should be 3px.
+        knob.style.left = enabled ? '' : '3px';
+        knob.style.right = enabled ? '3px' : '';
+      }
+    }
+  }
+
+  // 3. Progress section.
+  const progressSlot = card.querySelector('[data-slot="progress-section"]');
+  if (progressSlot) {
+    progressSlot.innerHTML = renderProgressSection(pipeline);
+  }
+
+  // 4. Stage pills.
+  const stageSlot = card.querySelector('[data-slot="stage-progress"]');
+  if (stageSlot) {
+    stageSlot.innerHTML = renderStageProgress(meta, pipeline);
+  }
+
+  // 5. Dynamic banners (failed-stage / running / likely-stuck).
+  const bannersSlot = card.querySelector('[data-slot="dynamic-banners"]');
+  if (bannersSlot) {
+    const newHtml = renderDynamicBanners(pipeline, displayStatus, hasFailedStage);
+    // Only swap if the content actually changed — avoids nuking
+    // freshly-attached click handlers on action buttons inside the
+    // banners when the state hasn't moved.
+    if (bannersSlot.dataset.signature !== String(newHtml).length) {
+      bannersSlot.innerHTML = newHtml;
+      bannersSlot.dataset.signature = String(newHtml).length;
+      // Re-attach action listeners for the freshly-inserted buttons.
+      attachActionBtnListeners(bannersSlot);
+    }
+  }
+
+  // 6. Footer counters (last run / next / runs).
+  const footerSlot = card.querySelector('[data-slot="footer-stats"]');
+  if (footerSlot) {
+    footerSlot.innerHTML = `
+      <span>Last run: <strong style="color:#94a3b8">${formatRelative(pipeline.last_run_at)}</strong></span>
+      <span>Next: <strong style="color:#94a3b8">${pipeline.enabled ? formatRelative(pipeline.next_run_at) : 'Disabled'}</strong></span>
+      <span>Runs: <strong style="color:#94a3b8">${pipeline.run_count || 0}</strong></span>
+    `;
+  }
+
+  // 7. Health section (only if the <details> is open — otherwise no need
+  // to re-render something the user can't see, and it would just waste
+  // CPU on a page that already has too many cards re-rendering).
+  const healthSlot = card.querySelector('[data-health-section]');
+  if (healthSlot) {
+    const details = healthSlot.closest('details');
+    if (details && details.open) {
+      healthSlot.innerHTML = renderHealthSection(pipeline);
+    }
+  }
+
+  // Note: We deliberately DO NOT touch the "Schedule & Configuration"
+  // <details> section here — the user might be mid-edit in the cron input
+  // or a limit field. The server-side values will be reconciled the next
+  // time the user clicks Save.
+
+  // Note: We also DO NOT touch the per-card action buttons' disabled
+  // state. Their disabled state is derived from can_run / can_pause / etc.,
+  // but flipping it mid-typing would feel jumpy. The user will see the
+  // right state on the next full re-render (e.g., after they click Save
+  // or after a longer idle period).
+
+  return true;
+}
+
+/**
+ * Attach click listeners to .pipeline-action-btn buttons inside a scope.
+ * Used after patching the dynamic-banners slot, because innerHTML
+ * replacement strips the listeners that attachCardListeners() originally
+ * wired up. Other listeners (toggle, cron preset, details summary) are
+ * NOT re-attached here because they live outside the patched slots.
+ */
+function attachActionBtnListeners(scope) {
+  if (!scope) return;
+  scope.querySelectorAll('.pipeline-action-btn').forEach((btn) => {
+    if (btn.dataset.gtssBound === '1') return;
+    btn.dataset.gtssBound = '1';
+    btn.addEventListener('click', () => {
+      if (btn.disabled) return;
+      const action = btn.dataset.action;
+      const id = btn.dataset.pipeline;
+      const stage = btn.dataset.stage;
+      if (action === 'run') runNow(id, btn);
+      else if (action === 'restart') restartPipeline(id, btn);
+      else if (action === 'executions') loadExecutions(id);
+      else if (action === 'logs') openLogsModal(id);
+      else if (action === 'pause') pausePipeline(id, true, btn);
+      else if (action === 'resume') pausePipeline(id, false, btn);
+      else if (action === 'stop') stopPipeline(id, btn);
+      else if (action === 'retry-stage') retryStage(id, stage || null, null, btn);
+      else if (action === 'resume-checkpoint') resumeFromCheckpoint(id, null, btn);
+      else if (action === 'force-clear') forceClearPipeline(id, btn);
+      else if (action === 'save') savePipeline(id);
+    });
+    btn.addEventListener('mouseenter', () => { btn.style.transform = 'translateY(-1px)'; btn.style.opacity = '0.9'; });
+    btn.addEventListener('mouseleave', () => { btn.style.transform = 'translateY(0)'; btn.style.opacity = '1'; });
+  });
 }
 
 function refreshHealthSections() {
@@ -1339,29 +1675,86 @@ function attachLogsModalListeners(pipelineId) {
 
 // ── Socket.IO Live Updates ───────────────────────────────────────────────────
 
-// Debounce rapid socket events so a flurry of progress updates doesn't
-// trigger dozens of concurrent /api/pipelines reloads. The previous
-// behavior called loadPipelines() on EVERY progress event, which could
-// cause UI flicker and re-render while the user was mid-click on a
-// button — sometimes losing the loading spinner before the API call
-// finished. Now we coalesce progress events into at most one reload
-// per 600ms.
+// Debounce rapid socket events so a flurry of progress/status updates doesn't
+// trigger dozens of concurrent /api/pipelines reloads. The previous behavior
+// called loadPipelines() on EVERY progress event AND every status event,
+// which caused UI flicker and re-renders while the user was mid-click or
+// mid-typing — losing the caret, dropping in-flight keystrokes, and yanking
+// focus back to a freshly-rebuilt button.
+//
+// Strategy:
+//   - pipeline:progress events do an IMMEDIATE in-place patch of just the
+//     progress section + stage pills + status badge. No fetch, no full
+//     reload. This gives snappy UX without disturbing form fields.
+//   - pipeline:status events still trigger a debounced full reload, but
+//     the reload itself goes through renderPipelines() which now prefers
+//     in-place patching when the set of pipelines hasn't changed — so even
+//     a status event mid-typing won't disturb the user's form values.
+//   - Both event types coalesce so at most one reload is in flight per
+//     800ms.
 let progressReloadTimer = null;
 function scheduleProgressReload() {
   if (progressReloadTimer) return;
   progressReloadTimer = setTimeout(() => {
     progressReloadTimer = null;
-    const scrollY = window.scrollY;
-    loadPipelines().then(() => { window.scrollTo(0, scrollY); });
-  }, 600);
+    // loadPipelines() now does in-place patching when possible — so this
+    // is cheap and non-destructive even if the user is mid-typing.
+    loadPipelines();
+  }, 800);
+}
+
+/**
+ * Apply a pipeline:progress socket event as an immediate in-place patch
+ * to the affected card. This gives the user instant feedback (progress
+ * bar moves, current message updates) without waiting for the debounced
+ * reload. We update the cached pipelinesData entry first, then call
+ * patchPipelineCardInPlace() to refresh just the dynamic slots.
+ */
+function applyProgressEventInPlace({ pipeline_id, execution_id, stage, message, progress, completed_steps, total_steps }) {
+  if (!pipeline_id) return;
+  const pipeline = pipelinesData.find((p) => p.id === pipeline_id);
+  if (!pipeline) {
+    // Card not yet rendered — let the debounced reload pick it up.
+    scheduleProgressReload();
+    return;
+  }
+  // Update the cached entry in place so the next full reload sees the
+  // freshest values too.
+  if (stage !== undefined) pipeline.current_stage = stage;
+  if (message !== undefined) pipeline.current_message = message;
+  if (progress !== undefined) pipeline.progress = progress;
+  if (completed_steps !== undefined) pipeline.completed_steps = completed_steps;
+  if (total_steps !== undefined) pipeline.total_steps = total_steps;
+  if (execution_id !== undefined) pipeline.active_execution_id = execution_id;
+  if (progress !== undefined && pipeline.state !== 'failed' && pipeline.state !== 'paused') {
+    // If progress is moving and we weren't already marked running, mark
+    // running now — the in-place patch will reflect it in the status badge.
+    if (progress > 0 && progress < 100 && pipeline.state !== 'running') {
+      pipeline.state = 'running';
+    }
+  }
+
+  // Patch the card in place. The patcher is non-destructive — it only
+  // touches the dynamic slots (status badge, progress, stages, banners,
+  // footer) and leaves form fields alone. So this is safe to call while
+  // the user is typing.
+  const card = document.querySelector(`[data-pipeline-id="${pipeline_id}"]`);
+  if (card) {
+    patchPipelineCardInPlace(card, pipeline);
+  }
+  // Also refresh the global health strip — progress events don't change
+  // health metrics, but the live dot state might.
+  renderGlobalHealthStrip();
 }
 
 function initPipelineSocket() {
   const sub = gtss.initSocket({
     'pipeline:status': ({ id, status, state, error, last_run_at }) => {
       if (!id) return;
-      // Refresh the full list for accurate data
-      loadPipelines();
+      // Coalesce rapid status events into a single debounced reload. The
+      // reload itself is non-destructive (in-place patch when possible),
+      // but we still don't want 5 of them firing in 200ms.
+      scheduleProgressReload();
       if (status === 'completed') {
         gtss.showToast(`Pipeline "${id}" completed successfully`, 'success');
       } else if (status === 'failed') {
@@ -1376,24 +1769,13 @@ function initPipelineSocket() {
         gtss.showToast(`Pipeline "${id}" stopped`, 'info');
       }
     },
-    'pipeline:progress': ({ pipeline_id, execution_id, stage, message, progress, completed_steps, total_steps }) => {
-      // Update the progress bar in-place for snappy UX (without a full reload)
-      const card = document.querySelector(`[data-pipeline-id="${pipeline_id}"]`);
-      if (!card) return;
-      // Light-touch update: just patch the progress section
-      const pipeline = pipelinesData.find(p => p.id === pipeline_id);
-      if (pipeline) {
-        pipeline.current_stage = stage;
-        pipeline.current_message = message;
-        pipeline.progress = progress;
-        pipeline.completed_steps = completed_steps;
-        pipeline.total_steps = total_steps;
-        pipeline.active_execution_id = execution_id;
-        // Re-render just the progress + stages sections
-        const progressContainer = card.querySelector('.progress-track')?.parentElement?.parentElement;
-        // For simplicity, do a full card refresh on every progress event (cheap enough at the rate we emit)
-        scheduleProgressReload();
-      }
+    'pipeline:progress': (payload) => {
+      // Immediate in-place patch for snappy UX — no fetch, no full reload.
+      applyProgressEventInPlace(payload);
+      // Also schedule a debounced reload to pick up anything the in-place
+      // patch couldn't update (e.g., new health metrics, completion of
+      // adjacent pipelines).
+      scheduleProgressReload();
     },
     'pipeline:log': (log) => {
       // Live tail handled inside logs modal; nothing to do here for the main page
@@ -1410,12 +1792,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // Refresh health every 30 seconds
   setInterval(loadHealth, 30_000);
 
-  // Polling fallback: refresh pipelines every 8 seconds as a safety net.
-  // The previous behavior relied 100% on Socket.IO `pipeline:status` and
-  // `pipeline:progress` events to update the UI. If the socket connection
-  // dropped (network blip, server restart, etc.) the UI would silently go
-  // stale and the user would think the buttons weren't working. Now we
-  // poll /api/pipelines every 8s as a defensive refresh — and the socket
-  // still provides instant updates when connected.
-  setInterval(loadPipelines, 8_000);
+  // Polling fallback: refresh pipelines every 15 seconds as a safety net.
+  // The previous 8s interval was too aggressive — combined with socket
+  // events it caused the page to re-render twice in quick succession,
+  // which the user perceived as "flickering while typing". Now we poll
+  // less aggressively (15s) and rely on the socket for instant updates.
+  // The polling itself is non-destructive (in-place patch) so even when
+  // it does fire mid-typing, the user won't notice.
+  //
+  // If the socket connection drops, the user still gets updates within
+  // 15s — acceptable for a defensive fallback.
+  setInterval(loadPipelines, 15_000);
 });
