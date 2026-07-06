@@ -51,7 +51,8 @@ function updateHero(server, cdp) {
       : " · CDP inactive (isolated browser mode)";
     $("#hero-meta").textContent = `Server up since ${since} · PID ${server.pid} · http://localhost:${server.port}${cdpInfo}`;
   } else if (state === "starting") {
-    $("#hero-meta").textContent = "Booting the server... this usually takes 2–3 seconds.";
+    $("#hero-meta").textContent =
+      "Booting the server... check the Logs tab for live progress. The browser tab opens automatically once the port is ready.";
   } else if (state === "stopping") {
     $("#hero-meta").textContent = "Shutting down...";
   } else if (state === "crashed") {
@@ -76,10 +77,17 @@ function updateHero(server, cdp) {
 
   // Button states.
   const isRunning = state === "running";
+  const isStarting = state === "starting";
   const isStopped = state === "stopped";
   const isCrashed = state === "crashed";
+  // Start is allowed when stopped OR crashed (retry from error). Disabled
+  // while starting/running/stopping so the user can't kick off a second
+  // boot while the first is in flight.
   $("#start-btn").disabled = !isStopped && !isCrashed;
-  $("#stop-btn").disabled = !isRunning;
+  // Stop is allowed whenever there's something to stop — including a
+  // "starting" state, so the user can cancel a slow boot instead of being
+  // forced to wait for the 30s port timeout.
+  $("#stop-btn").disabled = !isRunning && !isStarting;
   $("#open-browser-btn").disabled = !isRunning;
   $("#server-restart-btn").disabled = !isRunning;
 
@@ -114,7 +122,7 @@ $("#start-btn").addEventListener("click", async () => {
   // Clear any previous error.
   $("#error-card").classList.add("hidden");
   $("#status-hero").classList.remove("hidden");
-  toast("Launching Chrome and starting the server...", "info");
+  toast("Starting the server — the browser tab opens once the port is ready.", "info");
   const res = await window.gtss.lifecycle.start();
   if (res.ok) {
     toast("Ready! The web app is open in the Chrome window.", "success");
@@ -166,6 +174,11 @@ $("#cdp-stop-btn").addEventListener("click", async () => {
 });
 
 $("#open-data-btn").addEventListener("click", () => window.gtss.open.dataFolder());
+
+$("#open-devtools-btn").addEventListener("click", async () => {
+  const res = await window.gtss.lifecycle.openDevtools();
+  if (!res.ok) toast(`Couldn't open DevTools: ${res.error}`, "error");
+});
 
 // ─── Error card actions ──────────────────────────────────────────────────────
 

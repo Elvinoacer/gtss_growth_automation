@@ -298,3 +298,141 @@ The stray-tab bug now has THREE independent guards:
 | 2 | Proactive `context.on('page')` interceptor | `installStrayTabInterceptor` in `createBrowser` | On every new tab creation |
 | 3 | Reactive `closeStrayTabs` poll | `executor.js`, `dmQueue.js`, `connectionQueue.js` | After every DM/connection action |
 
+
+---
+
+# Launcher + Pipeline State Recovery — 2026-07-06
+
+## Symptoms
+
+1. **Desktop launcher opens the web URL too early.** Clicking Start in the
+   Electron launcher immediately opened `http://localhost:3000` in CDP Chrome
+   BEFORE the Node.js server had bound to the port. The user saw a
+   "This site can't be reached / Connection refused" page on every launch
+   until they manually refreshed.
+
+2. **A second DevTools window popped up on `npm run dev`.** This was
+   distracting when the developer just wanted a hot-reload of the renderer.
+
+3. **Pipelines got stuck on "Running" forever.** When a runner died
+   silently (unhandled rejection inside a long browser automation step,
+   OOM kill, sync crash, etc.) without ever calling
+   `markExecutionFailed` / `markExecutionCompleted`, the execution row
+   stayed `running` in DB and `ACTIVE_EXECUTIONS` kept the pipeline
+   locked forever. The user-facing buttons made it worse:
+   - **Retry Failed Step** returned `400 "No failed stage found. Specify
+     'stage' in the request body."` because the dead runner never recorded
+     a `failed_stage`.
+   - **Resume from Checkpoint** returned `409 "Another execution is
+     already running."` because `pipelineState.getActiveExecution(id)`
+     still returned the dead execution.
+   - **Stop** did nothing because the runner wasn't there to read the
+     abort flag.
+
+## Root Causes
+
+- `lifecycle.startAll()` started CDP Chrome WITH the web app URL as a
+  launch argument, then started the server afterwards. There was no
+  ordering guarantee, so Chrome always won the race.
+- `main.js` unconditionally called `mainWindow.webContents.openDevTools`
+  whenever `--dev` was passed.
+- `pipelineStateService` had no escape hatch for stuck executions. The
+  only cleanup was `recoverOnStartup()`, which only fires on server boot.
+- `routes/pipelines.js` `retry-stage` endpoint refused to proceed when
+  no `stage` was passed and the execution had no recorded `failed_stage`.
+- `routes/pipelines.js` `resume-from-checkpoint` endpoint refused to
+  proceed whenever `getActiveExecution(id)` returned truthy, regardless
+  of whether the active execution was actually making progress.
+
+## Fixes
+
+### Desktop launcher
+
+- **`desktop/main/lifecycle.js`** — Reordered `startAll()`: the server is
+  started FIRST and we block on `ServerManager.waitForPort()` before
+  launching CDP Chrome. Chrome is launched WITHOUT a URL argument; the
+  web app URL is opened in a new tab via the CDP HTTP API only AFTER both
+  Chrome and the server are ready.
+- **`desktop/main/server-manager.js`** — `waitForPort()` now accepts an
+  optional `onProgress` callback that emits a "Still waiting for port N
+  (Xs elapsed)..." log every 5s. The launcher UI shows this in the Logs
+  tab so a long boot (e.g., DB migration) doesn't look silently hung.
+- **`desktop/main/main.js`** — DevTools is now opt-in. It only auto-opens
+  on `--dev` if the env var `OPEN_DEVTOOLS_ON_START=1` (or `true`/`yes`/`on`)
+  is set. The standard Electron keyboard shortcut Ctrl/Cmd+Shift+I still
+  works regardless.
+- **`desktop/main/ipc-handlers.js`** + **`desktop/preload/preload.js`** —
+  New IPC channel `lifecycle:open-devtools` (exposed as
+  `window.gtss.lifecycle.openDevtools()`) opens DevTools on demand in a
+  detached window.
+- **`desktop/renderer/index.html`** + **`desktop/renderer/renderer.js`** —
+  New "Open DevTools" button in the Advanced controls section. The Stop
+  button is now enabled during the `starting` state so the user can
+  cancel a slow boot instead of waiting for the 30s port timeout.
+  Updated the "starting" status meta text to point users at the Logs tab
+  for live progress.
+
+### Pipeline state recovery
+
+- **`gtss-growth-engine/src/services/pipelineStateService.js`** — New
+  `forceClearExecution(pipelineId, reason)` function. It:
+  1. Marks the active execution row as `failed` with a clear
+     `error_message` recording that it was force-cleared.
+  2. Clears `ACTIVE_EXECUTIONS` / `ABORT_FLAGS` / `PAUSE_FLAGS` for the
+     pipeline.
+  3. Resets the schedule-level `current_state` to `idle` and
+     `current_execution_id` to NULL.
+  4. Sweeps the DB for any orphaned `running`/`paused`/etc. executions
+     even if the in-memory map is already empty (covers the case where
+     the server restarted without running `recoverOnStartup`).
+  5. Broadcasts a `pipeline:status` event so the UI flips back to
+     "failed" / "idle" immediately.
+- **`gtss-growth-engine/src/routes/pipelines.js`**:
+  - **New endpoint** `POST /api/pipelines/:id/force-clear` — calls
+    `forceClearExecution`. Body: `{ reason?: string }`.
+  - **`POST /api/pipelines/:id/retry-stage`** — when no `stage` is
+    provided AND the execution has no recorded `failed_stage`, defaults
+    to the FIRST stage of the pipeline (i.e., start over). Removes the
+    previous "specify stage in the reset body" dead-end.
+  - **`POST /api/pipelines/:id/resume-from-checkpoint`** — accepts
+    `{ force: true }` in the body. If a stuck execution is found, it is
+    force-cleared before the resume proceeds. Without `force: true`, the
+    endpoint returns a 409 with `hint: 'force_clear'` and instructions
+    pointing the user at the force-clear endpoint.
+  - **`POST /api/pipelines/:id/restart`** — now force-clears the
+    execution if the graceful `requestStop()` doesn't take effect within
+    the 600ms grace period. Previously a stuck execution would block
+    restart forever; now restart is always able to recover.
+- **`gtss-growth-engine/public/js/pipelines.js`**:
+  - New `forceClearPipeline(id)` function calls the new endpoint.
+  - "Force Clear" button added to:
+    1. The failed-state banner (next to Retry Failed Step / Resume from
+       Checkpoint).
+    2. A new "stuck running" warning banner that appears whenever the
+       pipeline is in `running` state.
+    3. The execution detail modal.
+  - `resumeFromCheckpoint()` now sends `{ force: true }` by default so
+    the user doesn't have to deal with the 409 error first.
+  - In the execution detail modal, when the execution has no
+    `failed_stage`, the "Retry Failed Step" button is replaced with a
+    "Retry from Start" button that passes an empty stage (the server
+    defaults to the first stage).
+
+## How to verify
+
+1. Start the desktop launcher (`npm run dev` in `desktop/`). The web app
+   tab should open in CDP Chrome only AFTER the server is ready — no
+   more "Connection refused" page.
+2. No DevTools window opens by default. To get it back, either:
+   - Set `OPEN_DEVTOOLS_ON_START=1` in your shell, OR
+   - Click "Open DevTools" in the launcher's Advanced controls section.
+3. To reproduce the stuck-pipeline scenario: kill the server while a
+   pipeline is running, restart, and the pipeline will still show
+   "Running" (the runner is dead but the DB row wasn't cleaned up).
+   Click "Force Clear" — the pipeline flips to "Failed" / "Idle" and you
+   can immediately Run / Retry / Resume.
+4. The "Retry Failed Step" button no longer errors out when
+   `failed_stage` is empty — it falls back to the first stage of the
+   pipeline.
+5. The "Resume from Checkpoint" button no longer errors out when there's
+   a stuck execution — it force-clears the stuck state first.

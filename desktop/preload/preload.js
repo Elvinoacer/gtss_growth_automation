@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld("gtss", {
     stop: () => ipcRenderer.invoke("lifecycle:stop"),
     restart: () => ipcRenderer.invoke("lifecycle:restart"),
     status: () => ipcRenderer.invoke("lifecycle:status"),
+    // Open Electron DevTools for the launcher window itself (not the web
+    // app's CDP browser). Useful for debugging the launcher UI without
+    // having to set OPEN_DEVTOOLS_ON_START=1.
+    openDevtools: () => ipcRenderer.invoke("lifecycle:open-devtools"),
   },
 
   // ─── CDP controls (advanced, opt-in) ───────────────────────────────────

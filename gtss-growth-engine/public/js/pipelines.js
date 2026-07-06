@@ -227,11 +227,42 @@ async function retryStage(id, stage, executionId) {
 async function resumeFromCheckpoint(id, executionId) {
   if (!confirm(`Resume pipeline "${id}" from the last successful checkpoint? Earlier completed stages will be skipped.`)) return;
   try {
+    // We send `force: true` so that if there's a stuck "running" execution
+    // in memory (the user's main complaint: pipeline shows Running forever
+    // even though no real work is happening), the server will clear it
+    // first and then proceed with the resume. This avoids the previous
+    // "Another execution is already running" dead-end.
     const result = await gtss.fetchJSON(`/api/pipelines/${id}/resume-from-checkpoint`, {
       method: 'POST',
-      body: JSON.stringify({ executionId }),
+      body: JSON.stringify({ executionId, force: true }),
     });
     gtss.showToast(result.message || 'Resuming from checkpoint', 'success');
+    setTimeout(loadPipelines, 400);
+  } catch (err) {
+    gtss.showToast(err.message, 'error');
+  }
+}
+
+/**
+ * Force-clear a stuck execution.
+ *
+ * Use this when a pipeline shows "Running" forever but no real progress is
+ * being made (the runner died without ever calling markExecutionFailed /
+ * markExecutionCompleted). After force-clearing, the user can immediately
+ * Run / Retry / Resume.
+ */
+async function forceClearPipeline(id) {
+  if (!confirm(`Force-clear pipeline "${id}"?\n\nThis marks the current execution as failed and resets the pipeline to idle, even if the runner is still (theoretically) running. Use this when the pipeline is stuck on "Running" forever and Retry / Resume / Stop are all refusing to work.`)) return;
+  try {
+    const result = await gtss.fetchJSON(`/api/pipelines/${id}/force-clear`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'manual-ui' }),
+    });
+    if (result.cleared > 0) {
+      gtss.showToast(`Cleared stuck execution ${result.execution_id} (was ${result.previous_status}). You can now Run / Retry / Resume.`, 'success');
+    } else {
+      gtss.showToast(result.message || 'No active execution to clear.', 'info');
+    }
     setTimeout(loadPipelines, 400);
   } catch (err) {
     gtss.showToast(err.message, 'error');
@@ -612,14 +643,33 @@ function renderPipelineCard(pipeline) {
         <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#fca5a5">
           <span>✗ Last execution failed${pipeline.failed_stage ? ` at stage "${pipeline.failed_stage}"` : ''}.</span>
         </div>
-        <div style="display:flex;gap:6px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button type="button" class="pipeline-action-btn" data-action="retry-stage" data-pipeline="${pipeline.id}" data-stage="${pipeline.failed_stage || ''}"
-            style="${actionStyle({ border: 'rgba(167,139,250,0.3)', bg: 'rgba(167,139,250,0.1)', text: '#a78bfa' }, true)}" title="Retry the failed stage">
+            style="${actionStyle({ border: 'rgba(167,139,250,0.3)', bg: 'rgba(167,139,250,0.1)', text: '#a78bfa' }, true)}" title="Retry the failed stage (or start over from the first stage if no failed stage is recorded)">
             ↻ Retry Failed Step
           </button>
           <button type="button" class="pipeline-action-btn" data-action="resume-checkpoint" data-pipeline="${pipeline.id}"
-            style="${actionStyle({ border: 'rgba(34,197,94,0.3)', bg: 'rgba(34,197,94,0.1)', text: '#4ade80' }, true)}" title="Resume from the last successful checkpoint">
+            style="${actionStyle({ border: 'rgba(34,197,94,0.3)', bg: 'rgba(34,197,94,0.1)', text: '#4ade80' }, true)}" title="Resume from the last successful checkpoint (auto force-clears any stuck state)">
             ⏵ Resume from Checkpoint
+          </button>
+          <button type="button" class="pipeline-action-btn" data-action="force-clear" data-pipeline="${pipeline.id}"
+            style="${actionStyle({ border: 'rgba(248,113,113,0.4)', bg: 'rgba(248,113,113,0.12)', text: '#f87171' }, true)}" title="Force-clear this execution so a new run can start. Use this if Retry / Resume are erroring.">
+            ✕ Force Clear
+          </button>
+        </div>
+      </div>
+    ` : ''}
+
+    ${(displayStatus === 'running' && !hasFailedStage) ? `
+      <div style="padding:10px 14px;border-radius:10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);
+        margin:10px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#fbbf24">
+          <span>⏳ Pipeline is running${pipeline.active_execution_id ? ` (execution ${String(pipeline.active_execution_id).slice(0,8)})` : ''}. If it appears stuck, use Force Clear to reset and start over.</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button type="button" class="pipeline-action-btn" data-action="force-clear" data-pipeline="${pipeline.id}"
+            style="${actionStyle({ border: 'rgba(248,113,113,0.4)', bg: 'rgba(248,113,113,0.12)', text: '#f87171' }, true)}" title="Force-clear the current execution. Use this only if the pipeline is stuck on Running forever.">
+            ✕ Force Clear Stuck Run
           </button>
         </div>
       </div>
@@ -770,6 +820,7 @@ function attachCardListeners() {
       else if (action === 'stop') stopPipeline(id);
       else if (action === 'retry-stage') retryStage(id, stage || null, null);
       else if (action === 'resume-checkpoint') resumeFromCheckpoint(id, null);
+      else if (action === 'force-clear') forceClearPipeline(id);
       else if (action === 'save') savePipeline(id);
     });
   });
@@ -949,13 +1000,24 @@ function renderExecutionDetailModal(pipelineId, data) {
               <div style="padding:12px;border-radius:8px;background:rgba(248,113,113,0.06);border:1px solid rgba(248,113,113,0.3);font-family:monospace;font-size:12px;color:#fca5a5;white-space:pre-wrap;word-break:break-word">${gtss.escapeHtml(execution.error_message)}</div>
               ${execution.stack_trace ? `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:11px;color:#64748b">Stack trace</summary><pre style="padding:10px;border-radius:6px;background:rgba(15,23,42,0.6);font-size:11px;color:#94a3b8;overflow-x:auto;max-height:300px">${gtss.escapeHtml(execution.stack_trace)}</pre></details>` : ''}
               ${execution.failed_stage ? `
-                <div style="display:flex;gap:8px;margin-top:10px">
+                <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
                   <button type="button" class="pipeline-action-btn" data-action="retry-stage-detail" data-pipeline="${pipelineId}" data-exec="${execution.id}" data-stage="${execution.failed_stage}"
                     style="${actionStyle({ border: 'rgba(167,139,250,0.3)', bg: 'rgba(167,139,250,0.1)', text: '#a78bfa' }, true)}">↻ Retry Failed Step (${execution.failed_stage})</button>
                   <button type="button" class="pipeline-action-btn" data-action="resume-checkpoint-detail" data-pipeline="${pipelineId}" data-exec="${execution.id}"
                     style="${actionStyle({ border: 'rgba(34,197,94,0.3)', bg: 'rgba(34,197,94,0.1)', text: '#4ade80' }, true)}">⏵ Resume from Checkpoint</button>
+                  <button type="button" class="pipeline-action-btn" data-action="force-clear-detail" data-pipeline="${pipelineId}"
+                    style="${actionStyle({ border: 'rgba(248,113,113,0.4)', bg: 'rgba(248,113,113,0.12)', text: '#f87171' }, true)}" title="Force-clear any stuck execution so a new run can start">✕ Force Clear Stuck Run</button>
                 </div>
-              ` : ''}
+              ` : `
+                <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+                  <button type="button" class="pipeline-action-btn" data-action="retry-stage-detail" data-pipeline="${pipelineId}" data-exec="${execution.id}" data-stage=""
+                    style="${actionStyle({ border: 'rgba(167,139,250,0.3)', bg: 'rgba(167,139,250,0.1)', text: '#a78bfa' }, true)}" title="Retry from the first stage (no failed_stage was recorded)">↻ Retry from Start</button>
+                  <button type="button" class="pipeline-action-btn" data-action="resume-checkpoint-detail" data-pipeline="${pipelineId}" data-exec="${execution.id}"
+                    style="${actionStyle({ border: 'rgba(34,197,94,0.3)', bg: 'rgba(34,197,94,0.1)', text: '#4ade80' }, true)}">⏵ Resume from Checkpoint</button>
+                  <button type="button" class="pipeline-action-btn" data-action="force-clear-detail" data-pipeline="${pipelineId}"
+                    style="${actionStyle({ border: 'rgba(248,113,113,0.4)', bg: 'rgba(248,113,113,0.12)', text: '#f87171' }, true)}" title="Force-clear any stuck execution so a new run can start">✕ Force Clear Stuck Run</button>
+                </div>
+              `}
             </div>
           ` : ''}
 
@@ -985,7 +1047,7 @@ function renderExecutionDetailModal(pipelineId, data) {
     btn.addEventListener('click', () => {
       const pid = btn.dataset.pipeline;
       const eid = btn.dataset.exec;
-      const stage = btn.dataset.stage;
+      const stage = btn.dataset.stage || null;
       retryStage(pid, stage, eid);
       overlay.remove();
     });
@@ -995,6 +1057,13 @@ function renderExecutionDetailModal(pipelineId, data) {
       const pid = btn.dataset.pipeline;
       const eid = btn.dataset.exec;
       resumeFromCheckpoint(pid, eid);
+      overlay.remove();
+    });
+  });
+  overlay.querySelectorAll('[data-action="force-clear-detail"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const pid = btn.dataset.pipeline;
+      forceClearPipeline(pid);
       overlay.remove();
     });
   });

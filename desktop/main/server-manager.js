@@ -264,6 +264,8 @@ class ServerManager {
       shell: false,
     });
 
+    this.logStream.append("server", `Server process spawned (pid ${this.child.pid}). Waiting for it to bind to port ${port}...`);
+
     this.child.stdout.on("data", (buf) => {
       this.logStream.append("server:stdout", buf.toString("utf8"));
     });
@@ -320,7 +322,16 @@ class ServerManager {
 
     // ─── Wait for the port to accept connections ─────────────────────────
     try {
-      await this.waitForPort(port, 30000);
+      await this.waitForPort(port, 30000, (elapsedMs) => {
+        // Periodic progress callback — emitted every ~5s while we're still
+        // waiting. Surfaces in the Logs tab so the user knows the boot is
+        // still in progress (e.g., during a long DB migration) rather than
+        // silently hung.
+        this.logStream.append(
+          "server",
+          `Still waiting for port ${port} to accept connections (${Math.round(elapsedMs / 1000)}s elapsed)...`,
+        );
+      });
       this.state = "running";
       this.startedAt = new Date().toISOString();
       this.logStream.append("server", `Server ready on http://localhost:${port}`);
@@ -393,9 +404,10 @@ class ServerManager {
     // (retained for future use; currently no periodic poller is started)
   }
 
-  waitForPort(port, timeoutMs) {
+  waitForPort(port, timeoutMs, onProgress) {
     return new Promise((resolve, reject) => {
       const start = Date.now();
+      let lastProgressAt = 0;
       const tryConnect = () => {
         const socket = new net.Socket();
         socket.setTimeout(1500);
@@ -408,6 +420,7 @@ class ServerManager {
           if (Date.now() - start > timeoutMs) {
             reject(new Error(`Server did not open port ${port} within ${timeoutMs}ms`));
           } else {
+            maybeReportProgress();
             setTimeout(tryConnect, 500);
           }
         });
@@ -416,11 +429,25 @@ class ServerManager {
           if (Date.now() - start > timeoutMs) {
             reject(new Error(`Server did not open port ${port} within ${timeoutMs}ms`));
           } else {
+            maybeReportProgress();
             setTimeout(tryConnect, 500);
           }
         });
         socket.connect(port, "127.0.0.1");
       };
+
+      // Emit a progress log at most every 5s so a long boot doesn't look
+      // silently hung.
+      function maybeReportProgress() {
+        if (typeof onProgress !== "function") return;
+        const now = Date.now();
+        if (now - lastProgressAt < 5000) return;
+        lastProgressAt = now;
+        try {
+          onProgress(now - start);
+        } catch (_) {}
+      }
+
       tryConnect();
     });
   }

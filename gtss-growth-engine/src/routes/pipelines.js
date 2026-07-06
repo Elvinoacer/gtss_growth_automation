@@ -361,12 +361,21 @@ router.post('/:id/restart', async (req, res) => {
     return res.status(409).json({ error: 'Pipeline is paused. Resume it before restarting.' });
   }
 
-  // If there's an active execution, stop it first
+  // If there's an active execution, attempt a graceful stop first. If the
+  // grace period elapses without the runner noticing the abort flag (i.e.,
+  // the runner is truly stuck), we force-clear the execution so the new run
+  // can start. Previously, a stuck execution would block restart forever —
+  // now restart is always able to recover.
   const active = pipelineState.getActiveExecution(id);
   if (active) {
     pipelineState.requestStop(id);
-    // Brief grace period for the runner to notice the abort flag
+    // Brief grace period for the runner to notice the abort flag.
     await new Promise((r) => setTimeout(r, 600));
+    const stillActive = pipelineState.getActiveExecution(id);
+    if (stillActive && stillActive.id === active.id) {
+      logger.warn('PIPELINES-API', `Restart of "${id}": stuck execution ${active.id} did not respond to stop — force-clearing.`);
+      pipelineState.forceClearExecution(id, `restart (stuck execution did not respond to stop)`);
+    }
   }
 
   // Clear any checkpoints for the previous execution so the new run starts fresh
@@ -410,6 +419,12 @@ router.post('/:id/restart', async (req, res) => {
 // ── POST /api/pipelines/:id/retry-stage ── Retry a specific failed stage
 // Body: { stage: "discovery" | "send" | "publish" | ... } OR { executionId: "..." }
 // If no executionId provided, uses the most recent failed execution for this pipeline.
+//
+// If no `stage` is provided AND the execution has no recorded `failed_stage`,
+// we default to the FIRST stage of the pipeline (i.e., start over). This
+// fixes the previous behavior of returning 400 "specify stage in the reset
+// body" — which left the user with no way to retry a stuck execution that
+// never recorded a failed_stage because it died mid-stage.
 router.post('/:id/retry-stage', async (req, res) => {
   const { id } = req.params;
   const db = getDb();
@@ -451,18 +466,32 @@ router.post('/:id/retry-stage', async (req, res) => {
     });
   }
   if (pipelineState.getActiveExecution(id)) {
+    // If there's a stuck "running" execution in memory, refuse to start a
+    // retry on top of it — the user should force-clear it first. We point
+    // them at the right endpoint so they don't have to guess.
     return res.status(409).json({
-      error: 'Another execution is already running. Stop it first.',
+      error: 'Another execution is already running. Stop it or use POST /api/pipelines/:id/force-clear to clear a stuck state.',
+      hint: 'force_clear',
     });
   }
 
   // Determine the stage to retry:
-  //  - If a stage is provided and matches a failed checkpoint, retry from that stage.
-  //  - Otherwise, retry from the failed_stage recorded on the execution.
-  const failedStage = stage || exec.failed_stage;
+  //  1. If a stage is provided in the body, use it.
+  //  2. Otherwise, use the failed_stage recorded on the execution row.
+  //  3. If neither is set (the runner died before recording a failed_stage),
+  //     fall back to the FIRST stage of the pipeline — i.e., retry from the
+  //     beginning. This is the fix for the "we need to specify stage in the
+  //     reset body" dead-end.
+  const orderedStages = PIPELINE_STAGES[id] || [];
+  let failedStage = stage || exec.failed_stage;
   if (!failedStage) {
+    failedStage = orderedStages[0] || null;
+  }
+  if (!failedStage) {
+    // Pipeline has no defined stages (e.g., dm_check has only 'scan' but
+    // we couldn't find it). Just bail with a clearer message.
     return res.status(400).json({
-      error: 'No failed stage found. Specify "stage" in the request body.',
+      error: 'Could not determine which stage to retry. Pass "stage" in the request body.',
     });
   }
 
@@ -581,6 +610,14 @@ router.post('/:id/retry-stage', async (req, res) => {
 });
 
 // ── POST /api/pipelines/:id/resume-from-checkpoint ── Resume from the last successful checkpoint
+//
+// Body: { executionId?: string, force?: boolean }
+//
+// If `force: true` is passed AND there's a stuck "running" execution in
+// memory that doesn't appear to be making progress, we will force-clear it
+// first (see forceClearExecution) and then resume. This fixes the previous
+// "Another execution is already running" dead-end where the user could not
+// recover from a stuck pipeline without restarting the server.
 router.post('/:id/resume-from-checkpoint', async (req, res) => {
   const { id } = req.params;
   const db = getDb();
@@ -588,6 +625,7 @@ router.post('/:id/resume-from-checkpoint', async (req, res) => {
   if (!row) return res.status(404).json({ error: 'Pipeline not found' });
 
   let executionId = req.body?.executionId ? String(req.body.executionId) : null;
+  const force = Boolean(req.body?.force);
 
   if (!executionId) {
     const recent = db
@@ -612,8 +650,21 @@ router.post('/:id/resume-from-checkpoint', async (req, res) => {
   if (exec.pipeline_id !== id) {
     return res.status(400).json({ error: 'Execution does not belong to this pipeline' });
   }
-  if (pipelineState.getActiveExecution(id)) {
-    return res.status(409).json({ error: 'Another execution is already running.' });
+
+  // Check for a stuck "active" execution that would block the resume.
+  const activeExec = pipelineState.getActiveExecution(id);
+  if (activeExec) {
+    if (!force) {
+      // Surface a helpful hint instead of just refusing — the user almost
+      // always wants to clear the stuck state and proceed.
+      return res.status(409).json({
+        error: `Pipeline is already running (execution ${activeExec.id}). Re-send this request with { "force": true } in the body to clear the stuck state and resume, or use POST /api/pipelines/${id}/force-clear.`,
+        hint: 'force_clear',
+        active_execution_id: activeExec.id,
+      });
+    }
+    // Force-clear the stuck execution, then proceed with the resume.
+    pipelineState.forceClearExecution(id, `resume-from-checkpoint (forced by user)`);
   }
 
   const orderedStages = PIPELINE_STAGES[id] || [];
@@ -754,6 +805,60 @@ router.post('/:id/stop', (req, res) => {
   });
   broadcastPipelineStatus(id, { status: stopped > 0 ? 'stopped' : 'idle', state: stopped > 0 ? 'stopped' : 'idle' });
   res.json({ ok: true, stopped, message: stopped > 0 ? 'Stop requested for active run.' : 'No active run to stop.' });
+});
+
+// ── POST /api/pipelines/:id/force-clear ── Force-clear a stuck execution
+//
+// Use this when a pipeline shows "Running" forever but no real progress is
+// being made (the runner died without ever calling markExecutionFailed or
+// markExecutionCompleted — e.g., an unhandled rejection inside a long
+// browser automation step, an OOM kill, or a sync crash).
+//
+// This is the user-facing escape hatch that the previous "Retry Failed Step"
+// and "Resume from Checkpoint" buttons needed but didn't have. It:
+//   - Marks the active execution as 'failed' with a clear error_message.
+//   - Clears the in-memory ACTIVE_EXECUTIONS / ABORT_FLAGS / PAUSE_FLAGS.
+//   - Resets the schedule-level state to 'idle'.
+//
+// After this returns, the user can immediately Run / Retry / Resume.
+router.post('/:id/force-clear', (req, res) => {
+  const { id } = req.params;
+  const reason = req.body?.reason ? String(req.body.reason) : 'manual';
+  const row = getDb().prepare('SELECT id FROM pipeline_schedules WHERE id = ?').get(id);
+  if (!row) return res.status(404).json({ error: 'Pipeline not found' });
+
+  const result = pipelineState.forceClearExecution(id, reason);
+
+  logActivity({
+    activityType: 'user_action',
+    entityType: 'pipeline',
+    entityId: id,
+    actor: 'manual',
+    status: result.cleared > 0 ? 'success' : 'skipped',
+    summary: `Force-clear requested for pipeline ${id} (cleared ${result.cleared} execution(s))`,
+    details: {
+      cleared: result.cleared,
+      previousStatus: result.previousStatus || null,
+      executionId: result.executionId || null,
+      reason,
+    },
+  });
+
+  broadcastPipelineStatus(id, {
+    status: result.cleared > 0 ? 'failed' : 'idle',
+    state: result.cleared > 0 ? 'failed' : 'idle',
+    forced: result.cleared > 0,
+  });
+
+  res.json({
+    ok: true,
+    cleared: result.cleared || 0,
+    execution_id: result.executionId || null,
+    previous_status: result.previousStatus || null,
+    message: result.cleared > 0
+      ? `Cleared stuck execution ${result.executionId} (was ${result.previousStatus}). You can now Run / Retry / Resume.`
+      : 'No active execution to clear. State is already idle.',
+  });
 });
 
 // ── GET /api/pipelines/:id/executions ── List recent executions

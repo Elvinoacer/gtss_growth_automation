@@ -46,41 +46,85 @@ class Lifecycle {
   /**
    * One-click startup.
    *
-   * 1. Start CDP Chrome with the web app URL — Chrome opens localhost:3000
-   *    in a tab AND exposes the CDP endpoint on port 9222.
-   * 2. Write BROWSER_MODE=cdp + CDP_ENDPOINT to .env.
-   * 3. Start the server — it connects to the CDP endpoint for automation.
+   * IMPORTANT: The server is started FIRST and we wait for its port to accept
+   * connections before opening any browser tab pointing at it. This avoids
+   * the previous "Connection refused" race where Chrome would open
+   * http://localhost:3000 before Express was ready to answer.
    *
-   * If CDP can't start (Chrome not installed), fall back to persistent mode
-   * and open the web app in the default browser.
+   * Flow:
+   *   1. Start the server (waits for the port via ServerManager.waitForPort).
+   *      → Progress is broadcast through the logStream so the launcher UI can
+   *        show "Booting server..." messages while it spins up.
+   *   2. Once the server is ready, start CDP Chrome — but WITHOUT a URL
+   *      argument (so Chrome doesn't open a tab too early). After Chrome is
+   *      ready, we open the web app URL in a new tab via the CDP HTTP API.
+   *   3. Write BROWSER_MODE=cdp + CDP_ENDPOINT to .env so the server's
+   *      automation layer picks them up on its next browser launch.
+   *
+   * If CDP can't start (Chrome not installed), fall back to opening the web
+   * app in the user's default browser.
    */
   async startAll({ openBrowser = true } = {}) {
     this.log.append("lifecycle", "Starting GTSS Growth Engine...");
     const port = this.server.port || 3000;
     const webAppUrl = `http://localhost:${port}`;
 
-    // ─── 1. Start CDP Chrome with the web app URL ────────────────────────
+    // ─── 1. Start the server FIRST and wait for it to be ready ──────────
+    //
+    // This is the key fix for the "Connection refused" race: previously we
+    // opened the URL in CDP Chrome before Express had even bound to the port,
+    // so the user saw a blank "This site can't be reached" page on every
+    // launch. Now we block until the server's port accepts TCP connections.
+    if (!this.server.isRunning()) {
+      this.log.append("lifecycle", "Booting the Node.js server — waiting for the port to open...");
+      try {
+        await this.server.start({ port });
+      } catch (err) {
+        // ServerManager.start() already records a diagnostic and leaves the
+        // state as "starting" or "crashed" — we just surface the message
+        // here and abort the rest of the flow. The launcher UI's error card
+        // will show the actionable remedy.
+        this.log.append("lifecycle:stderr", `Server failed to start: ${err.message}`);
+        throw err;
+      }
+    } else {
+      this.log.append("lifecycle", "Server already running — reusing it.");
+    }
+
+    // Give Express a short beat to finish mounting its routes after the
+    // port accepts connections (the port being open only means listen() has
+    // returned, not that middleware is fully wired up).
+    await new Promise((r) => setTimeout(r, 400));
+
+    // ─── 2. Start CDP Chrome (without a URL) ────────────────────────────
     let cdpActive = false;
     try {
       if (!this.cdp.isRunning()) {
-        this.log.append("lifecycle", "Launching Chrome (with CDP + web app)...");
-        await this.cdp.start({ openUrl: openBrowser ? webAppUrl : undefined });
+        this.log.append("lifecycle", "Launching Chrome (with CDP enabled)...");
+        // NOTE: We deliberately do NOT pass openUrl here. We open the URL
+        // AFTER Chrome's CDP endpoint is up so the tab doesn't hit a
+        // half-ready server.
+        await this.cdp.start({});
         cdpActive = true;
       } else {
-        // CDP already running — just open a new tab with the web app URL.
-        if (openBrowser) {
-          const ok = await this.cdp.openTab(webAppUrl);
-          if (!ok) {
-            this.log.append("lifecycle:stderr", "Couldn't open a new tab in CDP Chrome. Open it manually.");
-          }
-        }
+        this.log.append("lifecycle", "CDP Chrome already running — reusing it.");
         cdpActive = true;
       }
 
-      // ─── 2. Write CDP config to .env ───────────────────────────────────
+      // Write CDP config to .env so the server's automation layer knows
+      // where to connect.
       this.env.upsert("CDP_ENDPOINT", `http://127.0.0.1:${this.cdp.port}`);
       this.env.upsert("BROWSER_MODE", "cdp");
       this.log.append("lifecycle", `CDP active on port ${this.cdp.port}. Automation will use this Chrome.`);
+
+      // Open the web app URL in a new tab now that both Chrome AND the
+      // server are ready.
+      if (openBrowser) {
+        const ok = await this.cdp.openTab(webAppUrl);
+        if (!ok) {
+          this.log.append("lifecycle:stderr", "Couldn't open a new tab in CDP Chrome. Open it manually.");
+        }
+      }
     } catch (err) {
       this.log.append("lifecycle:stderr", `CDP Chrome failed to start: ${err.message}`);
       this.log.append("lifecycle", "Falling back to isolated browser mode (Playwright Chromium).");
@@ -93,14 +137,6 @@ class Lifecycle {
         await shell.openExternal(webAppUrl);
       }
     }
-
-    // ─── 3. Start the server ─────────────────────────────────────────────
-    if (!this.server.isRunning()) {
-      await this.server.start({ port });
-    }
-
-    // Give Express a beat to finish mounting routes.
-    await new Promise((r) => setTimeout(r, 400));
 
     if (cdpActive) {
       this.log.append("lifecycle", "Ready. The web app is open in the CDP Chrome window.");

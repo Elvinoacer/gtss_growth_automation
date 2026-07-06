@@ -166,7 +166,16 @@ async function createMainWindow() {
   mainWindow.once("ready-to-show", () => mainWindow.show());
   mainWindow.loadFile(RENDERER_INDEX);
 
-  if (DEV) mainWindow.webContents.openDevTools({ mode: "detach" });
+  // DevTools is opt-in. Previously `npm run dev` would automatically pop a
+  // second window with detached DevTools — which is noisy if all you wanted
+  // was a hot-reload of the renderer. Now DevTools only opens if the
+  // developer explicitly asks for it via either:
+  //   - env var  OPEN_DEVTOOLS_ON_START=1   (set in your shell or .env)
+  //   - the "Open DevTools" button in the launcher UI (always available)
+  //   - the standard Electron keyboard shortcut Ctrl/Cmd+Shift+I
+  if (DEV && /^(1|true|yes|on)$/i.test(String(process.env.OPEN_DEVTOOLS_ON_START || ""))) {
+    mainWindow.webContents.openDevTools({ mode: "detach" });
+  }
 
   // Open external links in the user's default browser, not inside Electron.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

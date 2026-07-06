@@ -57,6 +57,34 @@ function registerIpcHandlers({
 
   ipcMain.handle("lifecycle:status", () => lifecycle.getStatus());
 
+  // ─── Open DevTools on the main window ──────────────────────────────────
+  //
+  // DevTools is no longer auto-opened on `npm run dev`. The developer can
+  // open it on demand via this channel (wired to the "Open DevTools" button
+  // in the launcher UI). It opens in a detached window so it doesn't shrink
+  // the launcher UI.
+  ipcMain.handle("lifecycle:open-devtools", async () => {
+    try {
+      const win = getMainWindow();
+      if (!win || win.isDestroyed()) {
+        return { ok: false, error: "Main window is not available." };
+      }
+      const wc = win.webContents;
+      if (wc.isDevToolsOpened()) {
+        // Already open — just bring it to the front so the developer can
+        // find it (Electron's devtools window doesn't focus on subsequent
+        // openDevTools calls).
+        wc.closeDevTools();
+        wc.openDevTools({ mode: "detach" });
+      } else {
+        wc.openDevTools({ mode: "detach" });
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
   // ─── CDP-only controls (advanced, opt-in) ──────────────────────────────
 
   ipcMain.handle("cdp:start", async () => {
