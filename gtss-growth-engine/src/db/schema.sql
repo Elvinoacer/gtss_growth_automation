@@ -232,8 +232,6 @@ CREATE TABLE IF NOT EXISTS pipeline_schedules (
   updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_pipeline_schedules_state ON pipeline_schedules(current_state);
-
 -- ── Per-execution lifecycle tracking (covers all 3 pipelines: outreach, content, dm_check) ──
 CREATE TABLE IF NOT EXISTS pipeline_executions (
   id              TEXT PRIMARY KEY,         -- UUID
