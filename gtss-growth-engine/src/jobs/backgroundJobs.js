@@ -445,6 +445,21 @@ async function gracefulShutdown(signal) {
 async function startBackgroundJobs() {
   logger.info("SERVER", "Background automation worker initializing.");
 
+  // ── Pipeline lifecycle recovery: mark any executions left in transient
+  //    states (running / paused / resuming / stopping / retrying) as 'failed'
+  //    so the UI never shows a phantom "still running" pipeline after a
+  //    server restart.
+  try {
+    const pipelineState = require("../services/pipelineStateService");
+    const recovered = pipelineState.recoverOnStartup();
+    logger.info(
+      "SERVER",
+      `[PIPELINE-RECOVERY] ${recovered.recovered} stale execution(s) marked failed on startup.`,
+    );
+  } catch (err) {
+    logger.error("SERVER", "[PIPELINE-RECOVERY] Failed to sweep stale executions:", err);
+  }
+
   // Centralized DB-backed pipeline scheduler integration
   const pipelineScheduler = require("./pipelineScheduler");
   await pipelineScheduler.syncFromDb();

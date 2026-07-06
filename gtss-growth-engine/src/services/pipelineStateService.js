@@ -1,0 +1,694 @@
+/**
+ * pipelineStateService.js — Central lifecycle state machine for all pipelines.
+ *
+ * Owns:
+ *   - Creation of pipeline_executions rows
+ *   - State transitions (idle → running → paused → resuming → stopping → stopped → completed → failed → retrying)
+ *   - In-memory pause/resume/abort flags (mirrored in DB for crash recovery)
+ *   - Socket.IO broadcast of state changes
+ *   - Single-instance enforcement (only one execution per pipeline at a time unless parallelAllowed)
+ *
+ * Public API:
+ *   STATES                             - enum of valid states
+ *   isValidState(state)
+ *   getExecutionState(executionId)
+ *   getActiveExecution(pipelineId)
+ *   createExecution(pipelineId, trigger, opts)        - returns execution row
+ *   transitionExecution(executionId, newState, opts)  - state machine transition (validated)
+ *   updateExecutionProgress(executionId, {stage, message, progress, completedSteps, totalSteps})
+ *   markExecutionFailed(executionId, error, failedStage)
+ *   markExecutionCompleted(executionId)
+ *   requestPause(pipelineId)
+ *   requestResume(pipelineId)
+ *   requestStop(pipelineId)
+ *   isPaused(executionId)
+ *   isAborted(executionId)
+ *   awaitResume(executionId, emitFn)
+ *   throwIfAborted(executionId)
+ *   recoverOnStartup()                 - sweep 'running' executions on boot
+ *   RUNNERS                            - map of pipelineId → runner function (set by callers)
+ */
+
+const crypto = require("crypto");
+const { getDb } = require("../db/database");
+const logger = require("../utils/logger");
+const pipelineLogger = require("./pipelineLogger");
+const {
+  recomputeAggregates,
+} = require("./pipelineHealthService");
+
+const STATES = Object.freeze({
+  IDLE: "idle",
+  SCHEDULED: "scheduled",
+  RUNNING: "running",
+  PAUSED: "paused",
+  RESUMING: "resuming",
+  STOPPING: "stopping",
+  STOPPED: "stopped",
+  COMPLETED: "completed",
+  FAILED: "failed",
+  RETRYING: "retrying",
+});
+
+const VALID_STATES = new Set(Object.values(STATES));
+
+// In-memory flag maps keyed by executionId
+const ABORT_FLAGS = new Map(); // executionId → true
+const PAUSE_FLAGS = new Map(); // executionId → 'running' | 'paused'
+
+// Pipeline-level lock: pipelineId → executionId (the active execution)
+const ACTIVE_EXECUTIONS = new Map();
+
+// Runners injected by pipeline modules
+const RUNNERS = {};
+
+function registerRunner(pipelineId, runnerFn) {
+  RUNNERS[pipelineId] = runnerFn;
+}
+
+function isValidState(state) {
+  return VALID_STATES.has(String(state || "").toLowerCase());
+}
+
+function uuid() {
+  return crypto.randomUUID();
+}
+
+function safeJson(value) {
+  if (value === undefined || value === null) return null;
+  try {
+    return JSON.stringify(value);
+  } catch (_) {
+    return JSON.stringify({ error: "Failed to serialize" });
+  }
+}
+
+function parseJson(value, fallback = {}) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+/**
+ * Create a new pipeline_executions row and return it.
+ * Throws if there is already an active execution for this pipeline.
+ */
+function createExecution(pipelineId, trigger = "manual", options = {}) {
+  if (!pipelineId) throw new Error("pipelineId is required");
+  const db = getDb();
+
+  if (ACTIVE_EXECUTIONS.has(pipelineId)) {
+    const activeId = ACTIVE_EXECUTIONS.get(pipelineId);
+    const err = new Error(
+      `Pipeline "${pipelineId}" is already running (execution ${activeId}). Stop or wait for it to finish.`,
+    );
+    err.code = "ALREADY_RUNNING";
+    throw err;
+  }
+
+  const id = options.executionId || uuid();
+  const metadata = {
+    limits: options.limits || null,
+    keywords: options.keywords || null,
+    platforms: options.platforms || null,
+    topic: options.topic || null,
+    resumeFrom: options.resumeFrom || null,
+  };
+
+  db.prepare(
+    `INSERT INTO pipeline_executions
+      (id, pipeline_id, trigger, status, state, current_stage, current_message,
+       progress, total_steps, completed_steps, max_retries, metadata_json, started_at)
+     VALUES (?, ?, ?, 'running', 'running', ?, ?, 0, ?, 0, ?, ?, CURRENT_TIMESTAMP)`,
+  ).run(
+    id,
+    pipelineId,
+    trigger,
+    options.startStage || null,
+    options.startMessage || "Initializing…",
+    options.totalSteps || 0,
+    options.maxRetries || 3,
+    safeJson(metadata),
+  );
+
+  ACTIVE_EXECUTIONS.set(pipelineId, id);
+  ABORT_FLAGS.delete(id);
+  PAUSE_FLAGS.set(id, "running");
+
+  // Update pipeline_schedules to reflect the active execution
+  db.prepare(
+    `UPDATE pipeline_schedules
+     SET current_state = 'running',
+         current_execution_id = ?,
+         last_status = 'running',
+         last_run_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  ).run(id, pipelineId);
+
+  pipelineLogger.log({
+    pipelineId,
+    executionId: id,
+    level: "info",
+    stage: "lifecycle",
+    message: `Execution started (trigger: ${trigger})`,
+    context: metadata,
+    source: "system",
+  });
+
+  broadcastState(pipelineId, id, "running", {
+    current_stage: options.startStage || null,
+    current_message: options.startMessage || "Initializing…",
+    progress: 0,
+    trigger,
+  });
+
+  return { id, pipeline_id: pipelineId, trigger };
+}
+
+/**
+ * Validate and apply a state transition for an execution.
+ *
+ * Allowed transitions are conservative: we do not allow e.g. "completed → running".
+ */
+function transitionExecution(executionId, newState, opts = {}) {
+  if (!executionId) return false;
+  const db = getDb();
+  const exec = db
+    .prepare(
+      "SELECT id, pipeline_id, status FROM pipeline_executions WHERE id = ?",
+    )
+    .get(String(executionId));
+  if (!exec) return false;
+
+  const fromState = exec.status;
+  const toState = String(newState || "").toLowerCase();
+  if (!VALID_STATES.has(toState)) {
+    throw new Error(`Invalid target state: ${newState}`);
+  }
+
+  // Apply side effects for special transitions
+  const now = new Date().toISOString();
+  const updates = [];
+  const params = [];
+
+  updates.push("status = ?");
+  updates.push("state = ?");
+  params.push(toState, toState);
+
+  if (toState === STATES.PAUSED) {
+    updates.push("paused_at = ?");
+    params.push(now);
+    PAUSE_FLAGS.set(String(executionId), "paused");
+  } else if (toState === STATES.RESUMING) {
+    updates.push("resumed_at = ?");
+    params.push(now);
+    PAUSE_FLAGS.set(String(executionId), "running");
+  } else if (toState === STATES.STOPPING) {
+    updates.push("stopped_at = ?");
+    params.push(now);
+    ABORT_FLAGS.set(String(executionId), true);
+  } else if (toState === STATES.STOPPED) {
+    updates.push("stopped_at = ?");
+    params.push(now);
+    updates.push("finished_at = ?");
+    params.push(now);
+    ABORT_FLAGS.set(String(executionId), true);
+  } else if (toState === STATES.COMPLETED) {
+    updates.push("finished_at = ?");
+    params.push(now);
+  } else if (toState === STATES.FAILED) {
+    updates.push("finished_at = ?");
+    params.push(now);
+    if (opts.errorMessage) {
+      updates.push("error_message = ?");
+      params.push(String(opts.errorMessage).slice(0, 4000));
+    }
+    if (opts.stackTrace) {
+      updates.push("stack_trace = ?");
+      params.push(String(opts.stackTrace).slice(0, 16000));
+    }
+    if (opts.failedStage) {
+      updates.push("failed_stage = ?");
+      params.push(String(opts.failedStage));
+    }
+  } else if (toState === STATES.RETRYING) {
+    if (opts.retryCount !== undefined) {
+      updates.push("retry_count = ?");
+      params.push(Number(opts.retryCount));
+    }
+  }
+
+  // Update schedule-level current_state too (for UI)
+  const scheduleState = toState === STATES.STOPPED ? "stopped" : toState;
+  db.prepare(
+    `UPDATE pipeline_schedules
+     SET current_state = ?, last_status = COALESCE(?, last_status), updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  ).run(scheduleState, toState === STATES.RUNNING ? "running" : null, exec.pipeline_id);
+
+  params.push(String(executionId));
+  db.prepare(
+    `UPDATE pipeline_executions SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+  ).run(...params);
+
+  pipelineLogger.log({
+    pipelineId: exec.pipeline_id,
+    executionId,
+    level: toState === STATES.FAILED ? "error" : toState === STATES.COMPLETED ? "success" : "info",
+    stage: "lifecycle",
+    message: `State transition: ${fromState} → ${toState}${opts.errorMessage ? ` — ${opts.errorMessage}` : ""}`,
+    context: {
+      from: fromState,
+      to: toState,
+      failedStage: opts.failedStage || null,
+      retryCount: opts.retryCount || null,
+    },
+    source: "system",
+  });
+
+  // If terminal, clear the active-execution lock and recompute aggregates
+  const terminal = [STATES.COMPLETED, STATES.FAILED, STATES.STOPPED].includes(toState);
+  if (terminal) {
+    if (ACTIVE_EXECUTIONS.get(exec.pipeline_id) === executionId) {
+      ACTIVE_EXECUTIONS.delete(exec.pipeline_id);
+    }
+    ABORT_FLAGS.delete(executionId);
+    PAUSE_FLAGS.delete(executionId);
+
+    // Compute duration
+    try {
+      const execRow = db
+        .prepare("SELECT started_at, finished_at FROM pipeline_executions WHERE id = ?")
+        .get(String(executionId));
+      const start = execRow?.started_at ? new Date(execRow.started_at).getTime() : null;
+      const end = execRow?.finished_at ? new Date(execRow.finished_at).getTime() : null;
+      if (start && end) {
+        db.prepare("UPDATE pipeline_executions SET duration_ms = ? WHERE id = ?")
+          .run(Math.max(0, end - start), String(executionId));
+      }
+    } catch (_) {}
+
+    // Update schedule's last_status & run_count
+    db.prepare(
+      `UPDATE pipeline_schedules
+       SET last_status = ?,
+           last_run_at = CURRENT_TIMESTAMP,
+           run_count = run_count + 1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    ).run(toState, exec.pipeline_id);
+
+    try {
+      recomputeAggregates(exec.pipeline_id);
+    } catch (_) {}
+  }
+
+  broadcastState(exec.pipeline_id, executionId, toState, opts);
+  return true;
+}
+
+/**
+ * Update progress fields on an execution (called by runners as they work).
+ */
+function updateExecutionProgress(executionId, update = {}) {
+  if (!executionId) return false;
+  const db = getDb();
+
+  const sets = [];
+  const params = [];
+
+  if (update.stage !== undefined) {
+    sets.push("current_stage = ?");
+    params.push(update.stage);
+  }
+  if (update.message !== undefined) {
+    sets.push("current_message = ?");
+    params.push(String(update.message).slice(0, 1000));
+  }
+  if (update.progress !== undefined) {
+    const progress = Math.max(0, Math.min(100, Number(update.progress) || 0));
+    sets.push("progress = ?");
+    params.push(progress);
+  }
+  if (update.completedSteps !== undefined) {
+    sets.push("completed_steps = ?");
+    params.push(Math.max(0, Number(update.completedSteps) || 0));
+  }
+  if (update.totalSteps !== undefined) {
+    sets.push("total_steps = ?");
+    params.push(Math.max(0, Number(update.totalSteps) || 0));
+  }
+  if (update.failedStage !== undefined) {
+    sets.push("failed_stage = ?");
+    params.push(update.failedStage);
+  }
+
+  if (sets.length === 0) return false;
+
+  sets.push("updated_at = CURRENT_TIMESTAMP");
+  params.push(String(executionId));
+
+  db.prepare(`UPDATE pipeline_executions SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+
+  // Broadcast a lightweight progress event (best-effort)
+  try {
+    const row = db
+      .prepare(
+        "SELECT pipeline_id, current_stage, current_message, progress, completed_steps, total_steps FROM pipeline_executions WHERE id = ?",
+      )
+      .get(String(executionId));
+    if (row) {
+      const { broadcast } = require("./socketService");
+      broadcast("pipeline:progress", {
+        pipeline_id: row.pipeline_id,
+        execution_id: executionId,
+        stage: row.current_stage,
+        message: row.current_message,
+        progress: row.progress,
+        completed_steps: row.completed_steps,
+        total_steps: row.total_steps,
+      });
+    }
+  } catch (_) {}
+
+  return true;
+}
+
+function markExecutionFailed(executionId, error, failedStage = null) {
+  const err = error instanceof Error ? error : new Error(String(error || "Unknown error"));
+  return transitionExecution(executionId, STATES.FAILED, {
+    errorMessage: err.message,
+    stackTrace: err.stack,
+    failedStage,
+  });
+}
+
+function markExecutionCompleted(executionId) {
+  return transitionExecution(executionId, STATES.COMPLETED);
+}
+
+/**
+ * Get the active execution for a pipeline (if any).
+ */
+function getActiveExecution(pipelineId) {
+  if (!pipelineId) return null;
+  const execId = ACTIVE_EXECUTIONS.get(pipelineId);
+  if (!execId) return null;
+  const db = getDb();
+  const row = db
+    .prepare("SELECT * FROM pipeline_executions WHERE id = ?")
+    .get(execId);
+  if (!row) {
+    ACTIVE_EXECUTIONS.delete(pipelineId);
+    return null;
+  }
+  return row;
+}
+
+function getExecutionState(executionId) {
+  if (!executionId) return null;
+  const db = getDb();
+  return db
+    .prepare(
+      "SELECT id, pipeline_id, status, state, current_stage, current_message, progress, started_at, finished_at FROM pipeline_executions WHERE id = ?",
+    )
+    .get(String(executionId));
+}
+
+// ── Pause / Resume / Stop requests ────────────────────────────────────────────
+
+function requestPause(pipelineId) {
+  if (!pipelineId) return { ok: false, error: "pipelineId required" };
+  const execId = ACTIVE_EXECUTIONS.get(pipelineId);
+  if (!execId) {
+    // Even if there is no active run, mark the schedule as paused so the
+    // cron scheduler will skip the next tick.
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO settings (key, value) VALUES (?, 'true')
+       ON CONFLICT(key) DO UPDATE SET value = 'true'`,
+    ).run(`pipeline_${pipelineId}_paused`);
+    db.prepare(
+      `UPDATE pipeline_schedules SET current_state = 'paused', last_status = 'paused', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    ).run(pipelineId);
+    broadcastState(pipelineId, null, "paused");
+    return { ok: true, paused: true, scheduleLevel: true };
+  }
+  PAUSE_FLAGS.set(String(execId), "paused");
+  transitionExecution(execId, STATES.PAUSED);
+  // Also flip the schedule-level paused flag so cron won't fire while paused
+  const db = getDb();
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, 'true')
+     ON CONFLICT(key) DO UPDATE SET value = 'true'`,
+  ).run(`pipeline_${pipelineId}_paused`);
+  return { ok: true, paused: true, executionId: execId };
+}
+
+function requestResume(pipelineId) {
+  if (!pipelineId) return { ok: false, error: "pipelineId required" };
+  // Clear schedule-level paused flag
+  const db = getDb();
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, 'false')
+     ON CONFLICT(key) DO UPDATE SET value = 'false'`,
+  ).run(`pipeline_${pipelineId}_paused`);
+
+  const execId = ACTIVE_EXECUTIONS.get(pipelineId);
+  if (!execId) {
+    // Nothing actually running — just unpause the schedule
+    db.prepare(
+      `UPDATE pipeline_schedules SET current_state = 'idle', last_status = COALESCE(NULLIF(last_status, 'paused'), 'idle'), updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    ).run(pipelineId);
+    broadcastState(pipelineId, null, "idle");
+    return { ok: true, resumed: true, scheduleLevel: true };
+  }
+  PAUSE_FLAGS.set(String(execId), "running");
+  transitionExecution(execId, STATES.RESUMING);
+  // The runner loop will pick this up via awaitResume(); transition back to RUNNING happens there
+  setTimeout(() => {
+    try {
+      const row = getExecutionState(execId);
+      if (row && (row.status === "resuming" || row.status === "paused")) {
+        transitionExecution(execId, STATES.RUNNING);
+      }
+    } catch (_) {}
+  }, 500);
+  return { ok: true, resumed: true, executionId: execId };
+}
+
+function requestStop(pipelineId) {
+  if (!pipelineId) return { ok: false, error: "pipelineId required" };
+  const execId = ACTIVE_EXECUTIONS.get(pipelineId);
+  if (!execId) {
+    return { ok: true, stopped: 0, message: "No active execution to stop." };
+  }
+  ABORT_FLAGS.set(String(execId), true);
+  transitionExecution(execId, STATES.STOPPING);
+  return { ok: true, stopped: 1, executionId: execId };
+}
+
+function isPaused(executionId) {
+  return PAUSE_FLAGS.get(String(executionId)) === "paused";
+}
+
+function isAborted(executionId) {
+  return ABORT_FLAGS.get(String(executionId)) === true;
+}
+
+function throwIfAborted(executionId) {
+  if (isAborted(executionId)) {
+    const err = new Error("Pipeline execution aborted");
+    err.code = "ABORTED";
+    throw err;
+  }
+}
+
+/**
+ * Block until the user resumes the execution. Returns false if aborted.
+ */
+async function awaitResume(executionId, emitFn = null) {
+  const key = String(executionId);
+  let announced = false;
+  while (PAUSE_FLAGS.get(key) === "paused") {
+    if (isAborted(executionId)) return false;
+    if (!announced && typeof emitFn === "function") {
+      try {
+        emitFn({ type: "info", message: "Pipeline paused — waiting for resume…" });
+      } catch (_) {}
+      announced = true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return !isAborted(executionId);
+}
+
+// ── Broadcast helper ──────────────────────────────────────────────────────────
+
+function broadcastState(pipelineId, executionId, state, extras = {}) {
+  try {
+    const { broadcast } = require("./socketService");
+    broadcast("pipeline:status", {
+      id: pipelineId,
+      pipeline_id: pipelineId,
+      execution_id: executionId,
+      status: state,
+      state,
+      ...extras,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (_) {}
+}
+
+// ── Startup recovery ──────────────────────────────────────────────────────────
+
+/**
+ * On server boot, sweep pipeline_executions left in transient states
+ * (running, paused, resuming, stopping, retrying) and mark them as 'failed'
+ * (since the process that owned them is gone).
+ *
+ * Also clears stale ACTIVE_EXECUTIONS / ABORT_FLAGS / PAUSE_FLAGS (these are
+ * in-memory only and start empty, so this is just a safety net).
+ *
+ * This is the key piece for "survive application restarts" — when the server
+ * comes back up, no execution is silently "still running" in DB.
+ */
+function recoverOnStartup() {
+  const db = getDb();
+  const stuck = db
+    .prepare(
+      `SELECT id, pipeline_id, status, current_stage, started_at
+       FROM pipeline_executions
+       WHERE status IN ('running', 'paused', 'resuming', 'stopping', 'retrying', 'pending')`,
+    )
+    .all();
+
+  if (stuck.length === 0) {
+    // Still ensure schedule-level state is sane
+    db.prepare(
+      `UPDATE pipeline_schedules
+       SET current_state = 'idle',
+           current_execution_id = NULL,
+           last_status = COALESCE(NULLIF(last_status, 'running'), last_status),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE current_state IN ('running', 'paused', 'resuming', 'stopping', 'retrying')`,
+    ).run();
+    return { recovered: 0 };
+  }
+
+  let recovered = 0;
+  for (const exec of stuck) {
+    try {
+      const now = new Date().toISOString();
+      db.prepare(
+        `UPDATE pipeline_executions
+         SET status = 'failed',
+             state = 'failed',
+             error_message = ?,
+             finished_at = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      ).run(
+        `Server restarted while execution was in state '${exec.status}'`,
+        now,
+        exec.id,
+      );
+
+      pipelineLogger.log({
+        pipelineId: exec.pipeline_id,
+        executionId: exec.id,
+        level: "error",
+        stage: "lifecycle",
+        message: `Execution marked failed on startup recovery (was ${exec.status})`,
+        context: {
+          previousStatus: exec.status,
+          currentStage: exec.current_stage,
+          startedAt: exec.started_at,
+        },
+        source: "system",
+      });
+
+      try {
+        recomputeAggregates(exec.pipeline_id);
+      } catch (_) {}
+      recovered += 1;
+    } catch (err) {
+      logger.error("PIPELINE-STATE", `Failed to recover execution ${exec.id}`, err);
+    }
+  }
+
+  // Reset schedule-level state too
+  db.prepare(
+    `UPDATE pipeline_schedules
+     SET current_state = 'idle',
+         current_execution_id = NULL,
+         last_status = CASE
+           WHEN last_status IN ('running', 'paused', 'resuming', 'stopping', 'retrying') THEN 'failed'
+           ELSE last_status
+         END,
+         updated_at = CURRENT_TIMESTAMP`,
+  ).run();
+
+  // Clear stale pause flags so cron can run again
+  const pausedKeys = db
+    .prepare("SELECT key FROM settings WHERE key LIKE 'pipeline_%_paused' AND value = 'true'")
+    .all();
+  // Note: we deliberately DO NOT auto-clear pause flags here — if the user
+  // paused a pipeline, that intent should survive a restart.
+  void pausedKeys;
+
+  logger.info("PIPELINE-STATE", `Startup recovery: ${recovered} execution(s) marked failed.`);
+  return { recovered };
+}
+
+/**
+ * Returns true if a new execution can be started for this pipeline right now.
+ * (i.e. no active execution, schedule not paused, schedule enabled OR manual trigger)
+ */
+function canStart(pipelineId, opts = {}) {
+  if (ACTIVE_EXECUTIONS.has(pipelineId)) return false;
+  const db = getDb();
+  const paused = db
+    .prepare("SELECT value FROM settings WHERE key = ?")
+    .get(`pipeline_${pipelineId}_paused`);
+  if (String(paused?.value || "false") === "true" && !opts.force) return false;
+  return true;
+}
+
+module.exports = {
+  STATES,
+  VALID_STATES,
+  isValidState,
+  createExecution,
+  transitionExecution,
+  updateExecutionProgress,
+  markExecutionFailed,
+  markExecutionCompleted,
+  getActiveExecution,
+  getExecutionState,
+  requestPause,
+  requestResume,
+  requestStop,
+  isPaused,
+  isAborted,
+  throwIfAborted,
+  awaitResume,
+  recoverOnStartup,
+  canStart,
+  registerRunner,
+  RUNNERS,
+  // Private hook used by the retry-stage / resume-from-checkpoint routes to
+  // re-arm the in-memory ACTIVE_EXECUTIONS map for an existing executionId
+  // (without going through createExecution, which would refuse because the
+  // pipelineId is no longer in the map after the previous run terminated).
+  __setActive: (pipelineId, executionId) => {
+    if (!pipelineId || !executionId) return;
+    ACTIVE_EXECUTIONS.set(String(pipelineId), String(executionId));
+    ABORT_FLAGS.delete(String(executionId));
+    PAUSE_FLAGS.set(String(executionId), "running");
+  },
+};

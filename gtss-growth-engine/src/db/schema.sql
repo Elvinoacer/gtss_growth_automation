@@ -207,7 +207,7 @@ CREATE TABLE IF NOT EXISTS ig_discovery_queue (
 CREATE INDEX IF NOT EXISTS idx_ig_discovery_queue_username ON ig_discovery_queue(ig_username);
 
 CREATE TABLE IF NOT EXISTS pipeline_schedules (
-  id          TEXT PRIMARY KEY,          -- 'outreach' | 'content'
+  id          TEXT PRIMARY KEY,          -- 'outreach' | 'content' | 'dm_check'
   name        TEXT NOT NULL,
   description TEXT,
   enabled     INTEGER NOT NULL DEFAULT 0,
@@ -215,11 +215,96 @@ CREATE TABLE IF NOT EXISTS pipeline_schedules (
   limits_json TEXT NOT NULL DEFAULT '{}', -- arbitrary per-pipeline limit bag
   last_run_at DATETIME,
   next_run_at DATETIME,
-  last_status TEXT,                       -- 'completed' | 'failed' | 'running'
+  last_status TEXT,                       -- 'completed' | 'failed' | 'running' | 'paused' | 'stopped' | 'idle'
   run_count   INTEGER NOT NULL DEFAULT 0,
+  -- ── Production-grade health & state columns (added in pipelines overhaul) ──
+  current_state       TEXT DEFAULT 'idle',  -- idle | scheduled | running | paused | resuming | stopping | stopped | completed | failed | retrying
+  current_execution_id TEXT,                -- FK to pipeline_executions.id (text UUID) for the active execution, if any
+  last_error          TEXT,
+  last_success_at     DATETIME,
+  last_failure_at     DATETIME,
+  total_runs          INTEGER NOT NULL DEFAULT 0,
+  total_failures      INTEGER NOT NULL DEFAULT 0,
+  total_retries       INTEGER NOT NULL DEFAULT 0,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  avg_duration_ms     INTEGER,
   created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_schedules_state ON pipeline_schedules(current_state);
+
+-- ── Per-execution lifecycle tracking (covers all 3 pipelines: outreach, content, dm_check) ──
+CREATE TABLE IF NOT EXISTS pipeline_executions (
+  id              TEXT PRIMARY KEY,         -- UUID
+  pipeline_id     TEXT NOT NULL,            -- 'outreach' | 'content' | 'dm_check'
+  trigger         TEXT NOT NULL,            -- 'cron' | 'manual' | 'api' | 'retry' | 'resume'
+  status          TEXT NOT NULL DEFAULT 'pending',  -- pending | running | paused | resuming | stopping | stopped | completed | failed | retrying
+  state           TEXT NOT NULL DEFAULT 'idle',     -- mirror of status (kept for UI compatibility)
+  current_stage   TEXT,
+  current_message TEXT,
+  progress        INTEGER DEFAULT 0,        -- 0..100
+  total_steps     INTEGER DEFAULT 0,
+  completed_steps INTEGER DEFAULT 0,
+  failed_stage    TEXT,
+  error_message   TEXT,
+  stack_trace     TEXT,
+  retry_count     INTEGER NOT NULL DEFAULT 0,
+  max_retries     INTEGER NOT NULL DEFAULT 3,
+  started_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  finished_at     DATETIME,
+  paused_at       DATETIME,
+  resumed_at      DATETIME,
+  stopped_at      DATETIME,
+  duration_ms     INTEGER,
+  metadata_json   TEXT,                     -- arbitrary payload snapshot (limits, keywords, platforms, etc.)
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_executions_pipeline ON pipeline_executions(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_executions_status ON pipeline_executions(status);
+CREATE INDEX IF NOT EXISTS idx_pipeline_executions_started ON pipeline_executions(started_at DESC);
+
+-- ── Per-stage checkpoints (resume-from-last-success support) ──
+CREATE TABLE IF NOT EXISTS pipeline_checkpoints (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  execution_id    TEXT NOT NULL,
+  pipeline_id     TEXT NOT NULL,
+  stage           TEXT NOT NULL,
+  status          TEXT NOT NULL,           -- 'completed' | 'failed' | 'skipped'
+  attempt         INTEGER DEFAULT 1,
+  payload_json    TEXT,                    -- stage result snapshot (counts, post_id, etc.)
+  error_message   TEXT,
+  duration_ms     INTEGER,
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_checkpoints_exec ON pipeline_checkpoints(execution_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_checkpoints_pipeline ON pipeline_checkpoints(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_checkpoints_stage ON pipeline_checkpoints(stage);
+
+-- ── Structured searchable logs (extends pipeline_events with stage/level/search fields) ──
+CREATE TABLE IF NOT EXISTS pipeline_logs (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  pipeline_id     TEXT NOT NULL,
+  execution_id    TEXT,
+  stage           TEXT,
+  level           TEXT NOT NULL DEFAULT 'info',  -- debug | info | warn | error | retry | success
+  message         TEXT NOT NULL,
+  stack_trace     TEXT,
+  context_json    TEXT,
+  browser_event   TEXT,                    -- optional: e.g. 'navigation', 'click', 'timeout', 'captcha'
+  retry_attempt   INTEGER,
+  source          TEXT DEFAULT 'system',   -- 'system' | 'browser' | 'user' | 'scheduler'
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_logs_pipeline ON pipeline_logs(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_logs_execution ON pipeline_logs(execution_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_logs_level ON pipeline_logs(level);
+CREATE INDEX IF NOT EXISTS idx_pipeline_logs_stage ON pipeline_logs(stage);
+CREATE INDEX IF NOT EXISTS idx_pipeline_logs_created ON pipeline_logs(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS pipeline_events (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,

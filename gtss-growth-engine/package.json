@@ -10,6 +10,7 @@
     "migrate:retry-columns": "node scripts/migrate-retry-columns.js",
     "migrate:message-columns": "node scripts/migrate-message-columns.js",
     "migrate:pipeline": "node scripts/migrate-pipeline.js",
+    "migrate:pipeline-operations": "node scripts/migrate-pipeline-operations.js",
     "migrate:instagram": "node scripts/migrate-instagram.js",
     "test:instagram": "node scripts/test-instagram-pipeline.js"
   },

@@ -1,29 +1,54 @@
 /**
  * pipelines.js — Pipeline Manager API Routes
  *
- * GET    /api/pipelines           — List all pipeline schedules
- * PATCH  /api/pipelines/:id       — Update a pipeline schedule
- * POST   /api/pipelines/:id/run   — Trigger a manual run now
- * GET    /api/pipelines/:id/history — Recent pipeline runs
+ * Endpoints (existing):
+ *   GET    /api/pipelines                  — List all pipeline schedules (with runtime state)
+ *   PATCH  /api/pipelines/:id              — Update a pipeline schedule (cron, enabled, limits)
+ *   POST   /api/pipelines/:id/run          — Trigger a manual run now
+ *   GET    /api/pipelines/:id/history      — Recent pipeline runs (legacy, kept for compat)
+ *   POST   /api/pipelines/:id/pause        — Pause the pipeline
+ *   POST   /api/pipelines/:id/resume       — Resume the pipeline
+ *   POST   /api/pipelines/:id/stop         — Stop the active execution
+ *
+ * Endpoints (new in pipelines overhaul):
+ *   POST   /api/pipelines/:id/restart               — Stop current (if any) and start a fresh run
+ *   POST   /api/pipelines/:id/retry-stage           — Retry a specific failed stage of the active execution
+ *   POST   /api/pipelines/:id/resume-from-checkpoint — Resume the active execution from the last successful checkpoint
+ *   GET    /api/pipelines/:id/executions            — List recent executions (with state, progress, errors)
+ *   GET    /api/pipelines/:id/executions/:eid       — Get a single execution detail (with checkpoints & recent logs)
+ *   GET    /api/pipelines/:id/logs                  — Searchable / filterable structured logs
+ *   GET    /api/pipelines/:id/health                — Pipeline health snapshot (success rate, uptime, etc.)
+ *   GET    /api/pipelines/:id/checkpoints           — List checkpoints for the active or specified execution
+ *   GET    /api/pipelines/health                    — Health snapshot for all pipelines
  */
 
 const express = require('express');
 const { getDb } = require('../db/database');
 const {
   syncFromDb,
+  runPipelineWithLifecycle,
+  isPipelinePaused,
 } = require('../jobs/pipelineScheduler');
-const { runFullPipeline } = require('../pipeline/pipelineRunner');
-const { runContentPipeline } = require('../pipeline/contentPipeline');
 const cronRegistry = require('../jobs/cronRegistry');
 const cron = require('node-cron');
 const logger = require('../utils/logger');
 const jobRegistry = require('../jobs/jobRegistry');
 const { logActivity } = require('../services/auditService');
+const pipelineState = require('../services/pipelineStateService');
+const pipelineLogger = require('../services/pipelineLogger');
+const checkpointService = require('../services/pipelineCheckpoint');
+const { getHealth, getHealthForAll } = require('../services/pipelineHealthService');
 
 const router = express.Router();
 
 const ALLOWED_CONTENT_PLATFORMS = new Set(['instagram', 'linkedin', 'x', 'facebook']);
 const ALLOWED_OUTREACH_PLATFORMS = new Set(['instagram', 'linkedin', 'x', 'facebook']);
+
+const PIPELINE_STAGES = {
+  outreach: ['discovery', 'qualification', 'messages', 'send'],
+  content: ['image_gen', 'caption_gen', 'post_record', 'publish'],
+  dm_check: ['scan'],
+};
 
 function parseJsonObject(value, fallback = {}) {
   try {
@@ -59,19 +84,32 @@ function getPipelineActiveJobs(id) {
 
 function buildRuntimeState(row, paused) {
   const activeJobs = getPipelineActiveJobs(row.id);
-  const isRunning = activeJobs.length > 0;
-  const state = paused ? 'paused' : isRunning ? 'running' : row.enabled ? (row.last_status || 'idle') : 'disabled';
+  const activeExec = pipelineState.getActiveExecution(row.id);
+  const isRunning = activeJobs.length > 0 || Boolean(activeExec);
+  const stateFromDb = row.current_state || row.last_status || 'idle';
+  let state;
+  if (paused && !isRunning) state = 'paused';
+  else if (isRunning) state = activeExec?.status || row.last_status || 'running';
+  else state = row.enabled ? stateFromDb : 'disabled';
+  if (state === 'idle' && row.last_status === 'failed') state = 'failed';
+  if (state === 'idle' && row.last_status === 'completed') state = 'completed';
+
   const currentJob = activeJobs[0] || null;
   return {
     state,
     active_jobs: activeJobs,
     active_job_count: activeJobs.length,
-    current_stage: currentJob?.stage || null,
-    current_message: currentJob?.message || null,
-    can_run: Boolean(row.enabled) && !paused && activeJobs.length === 0,
+    active_execution_id: activeExec?.id || row.current_execution_id || null,
+    current_stage: activeExec?.current_stage || currentJob?.stage || null,
+    current_message: activeExec?.current_message || currentJob?.message || null,
+    progress: activeExec?.progress || 0,
+    completed_steps: activeExec?.completed_steps || 0,
+    total_steps: activeExec?.total_steps || 0,
+    can_run: Boolean(row.enabled) && !paused && !isRunning,
     can_pause: Boolean(row.enabled) && !paused,
-    can_resume: Boolean(paused),
-    can_stop: activeJobs.length > 0,
+    can_resume: Boolean(paused) || (isRunning && (activeExec?.status === 'paused')),
+    can_stop: isRunning,
+    can_restart: true,
   };
 }
 
@@ -80,9 +118,7 @@ function broadcastPipelineStatus(id, overrides = {}) {
     const db = getDb();
     const row = db.prepare('SELECT * FROM pipeline_schedules WHERE id = ?').get(id);
     if (!row) return;
-    const paused = String(
-      db.prepare('SELECT value FROM settings WHERE key = ?').get(`pipeline_${id}_paused`)?.value || 'false',
-    ) === 'true';
+    const paused = isPipelinePaused(id);
     const { broadcast } = require('../services/socketService');
     broadcast('pipeline:status', {
       id,
@@ -172,15 +208,13 @@ router.get('/', (req, res) => {
 
   const result = rows.map(row => {
     const limits = parseJsonObject(row.limits_json);
-    const paused = db
-      .prepare('SELECT value FROM settings WHERE key = ?')
-      .get(`pipeline_${row.id}_paused`);
-    const isPaused = String(paused?.value || 'false') === 'true';
+    const paused = isPipelinePaused(row.id);
     return {
       ...row,
       limits,
-      paused: isPaused,
-      ...buildRuntimeState(row, isPaused),
+      paused,
+      stages: PIPELINE_STAGES[row.id] || [],
+      ...buildRuntimeState(row, paused),
       is_registered: activeCrons.some(c => c.id === `pipeline:${row.id}`),
     };
   });
@@ -190,6 +224,17 @@ router.get('/', (req, res) => {
 
 router.get('/active', (_req, res) => {
   res.json({ jobs: jobRegistry.listActiveJobs() });
+});
+
+// ── GET /api/pipelines/health ── Health snapshot for all pipelines
+router.get('/health', (req, res) => {
+  try {
+    const all = getHealthForAll();
+    res.json({ pipelines: all });
+  } catch (err) {
+    logger.error('PIPELINES-API', 'Failed to load health', err);
+    res.status(500).json({ error: err.message, pipelines: [] });
+  }
 });
 
 // ── PATCH /api/pipelines/:id ── Update a pipeline schedule
@@ -237,12 +282,16 @@ router.patch('/:id', async (req, res) => {
 
   const updated = db.prepare('SELECT * FROM pipeline_schedules WHERE id = ?').get(id);
   const updatedLimits = parseJsonObject(updated.limits_json);
+  const paused = isPipelinePaused(id);
 
   res.json({
     ok: true,
     pipeline: {
       ...updated,
       limits: updatedLimits,
+      paused,
+      stages: PIPELINE_STAGES[id] || [],
+      ...buildRuntimeState(updated, paused),
       is_registered: cronRegistry.isRegistered(`pipeline:${id}`),
     },
   });
@@ -264,14 +313,14 @@ router.post('/:id/run', async (req, res) => {
     ? req.body.keywords.map((keyword) => String(keyword).trim()).filter(Boolean)
     : [];
 
-  const paused = String(
-    db.prepare('SELECT value FROM settings WHERE key = ?').get(`pipeline_${id}_paused`)?.value || 'false',
-  ) === 'true';
-  if (paused) {
+  if (isPipelinePaused(id)) {
     return res.status(409).json({ error: 'Pipeline is paused. Resume it before running manually.' });
   }
-  if (getPipelineActiveJobs(id).length > 0) {
-    return res.status(409).json({ error: 'Pipeline is already running. Wait for it to finish or stop it first.' });
+  if (pipelineState.getActiveExecution(id)) {
+    return res.status(409).json({
+      error: 'Pipeline is already running. Wait for it to finish or stop it first.',
+      execution_id: pipelineState.getActiveExecution(id)?.id,
+    });
   }
 
   if (id === 'content' && (!limits.topic || !String(limits.topic).trim())) {
@@ -280,79 +329,370 @@ router.post('/:id/run', async (req, res) => {
     });
   }
 
-  // Respond immediately; run in background
+  // Respond immediately; run in background via the lifecycle service
   res.json({ ok: true, message: `Pipeline "${row.name}" triggered manually` });
 
   setImmediate(async () => {
-    db.prepare(`
-      UPDATE pipeline_schedules
-      SET last_run_at = CURRENT_TIMESTAMP, last_status = 'running',
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(id);
-
-    // Broadcast pipeline status: running
-    broadcastPipelineStatus(row.id, {
-      status: 'running',
-      state: 'running',
-      last_run_at: new Date().toISOString(),
-    });
-
     try {
-      if (id === 'outreach') {
-        const runId = await runFullPipeline('manual', { limits, keywords });
-        logger.info('PIPELINES-API', `Manual outreach run #${runId} complete`);
-      } else if (id === 'content') {
-        const result = await runContentPipeline({ ...limits, trigger: 'manual' });
-        const failed =
-          result &&
-          (result.success === false ||
-            (Array.isArray(result.runs) && result.runs.every((run) => run.success === false)));
-        if (failed) {
-          throw new Error(result.error || 'Content pipeline failed');
-        }
-        logger.info('PIPELINES-API', `Manual content run complete`, result);
-      } else if (id === 'dm_check') {
-        const { syncFromDb } = require('../jobs/pipelineScheduler');
-        const scheduler = require('../jobs/pipelineScheduler');
-        const runner = scheduler.__getRunner ? scheduler.__getRunner('dm_check') : null;
-        if (runner) await runner(limits);
-        else {
-          await syncFromDb();
-          throw new Error('DM checker can run on its next configured cron tick');
-        }
-      }
-
-      // Update DB status
-      db.prepare(`
-        UPDATE pipeline_schedules
-        SET last_run_at = CURRENT_TIMESTAMP, last_status = 'completed',
-            run_count = run_count + 1, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(id);
-
-      // Broadcast pipeline status: completed
-      broadcastPipelineStatus(row.id, {
-        status: 'completed',
-        state: 'completed',
-        last_run_at: new Date().toISOString(),
+      const execId = await runPipelineWithLifecycle(id, 'manual', limits, {
+        keywords,
+        force: true,
       });
+      logger.info('PIPELINES-API', `Manual run of "${id}" started as execution ${execId}`);
     } catch (err) {
       logger.error('PIPELINES-API', `Manual run of "${id}" failed`, err);
-
-      db.prepare(`
-        UPDATE pipeline_schedules
-        SET last_run_at = CURRENT_TIMESTAMP, last_status = 'failed',
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(id);
-
-      broadcastPipelineStatus(row.id, {
+      broadcastPipelineStatus(id, {
         status: 'failed',
         state: 'failed',
-        last_run_at: new Date().toISOString(),
         error: err.message,
       });
+    }
+  });
+});
+
+// ── POST /api/pipelines/:id/restart ── Stop current (if any) and start fresh
+router.post('/:id/restart', async (req, res) => {
+  const { id } = req.params;
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM pipeline_schedules WHERE id = ?').get(id);
+  if (!row) return res.status(404).json({ error: 'Pipeline not found' });
+
+  if (isPipelinePaused(id)) {
+    return res.status(409).json({ error: 'Pipeline is paused. Resume it before restarting.' });
+  }
+
+  // If there's an active execution, stop it first
+  const active = pipelineState.getActiveExecution(id);
+  if (active) {
+    pipelineState.requestStop(id);
+    // Brief grace period for the runner to notice the abort flag
+    await new Promise((r) => setTimeout(r, 600));
+  }
+
+  // Clear any checkpoints for the previous execution so the new run starts fresh
+  if (active) {
+    try { checkpointService.clearCheckpoints(active.id); } catch (_) {}
+  }
+
+  let limits = {
+    ...parseJsonObject(row.limits_json),
+    ...normalizeLimits(id, req.body?.limits || {}),
+  };
+  const keywords = Array.isArray(req.body?.keywords)
+    ? req.body.keywords.map((keyword) => String(keyword).trim()).filter(Boolean)
+    : [];
+
+  if (id === 'content' && (!limits.topic || !String(limits.topic).trim())) {
+    return res.status(400).json({
+      error: 'A content topic is required before restarting the Auto-Content Pipeline',
+    });
+  }
+
+  // Make sure the schedule-level pause flag is cleared (restart implies resume)
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, 'false')
+     ON CONFLICT(key) DO UPDATE SET value = 'false'`,
+  ).run(`pipeline_${id}_paused`);
+
+  res.json({ ok: true, message: `Pipeline "${row.name}" restarting` });
+
+  setImmediate(async () => {
+    try {
+      const execId = await runPipelineWithLifecycle(id, 'manual', limits, { keywords, force: true });
+      logger.info('PIPELINES-API', `Restart of "${id}" started as execution ${execId}`);
+    } catch (err) {
+      logger.error('PIPELINES-API', `Restart of "${id}" failed`, err);
+      broadcastPipelineStatus(id, { status: 'failed', state: 'failed', error: err.message });
+    }
+  });
+});
+
+// ── POST /api/pipelines/:id/retry-stage ── Retry a specific failed stage
+// Body: { stage: "discovery" | "send" | "publish" | ... } OR { executionId: "..." }
+// If no executionId provided, uses the most recent failed execution for this pipeline.
+router.post('/:id/retry-stage', async (req, res) => {
+  const { id } = req.params;
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM pipeline_schedules WHERE id = ?').get(id);
+  if (!row) return res.status(404).json({ error: 'Pipeline not found' });
+
+  const stage = req.body?.stage ? String(req.body.stage) : null;
+  let executionId = req.body?.executionId ? String(req.body.executionId) : null;
+
+  if (!executionId) {
+    // Find the most recent failed execution for this pipeline
+    const recent = db
+      .prepare(
+        `SELECT id FROM pipeline_executions
+         WHERE pipeline_id = ? AND status = 'failed'
+         ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(id);
+    if (!recent) {
+      return res.status(404).json({
+        error: 'No failed execution found to retry. Run the pipeline first.',
+      });
+    }
+    executionId = recent.id;
+  }
+
+  const exec = db
+    .prepare('SELECT * FROM pipeline_executions WHERE id = ?')
+    .get(executionId);
+  if (!exec) {
+    return res.status(404).json({ error: `Execution ${executionId} not found` });
+  }
+  if (exec.pipeline_id !== id) {
+    return res.status(400).json({ error: 'Execution does not belong to this pipeline' });
+  }
+  if (exec.status === 'running' || exec.status === 'paused') {
+    return res.status(409).json({
+      error: `Execution is currently ${exec.status}. Stop it first before retrying.`,
+    });
+  }
+  if (pipelineState.getActiveExecution(id)) {
+    return res.status(409).json({
+      error: 'Another execution is already running. Stop it first.',
+    });
+  }
+
+  // Determine the stage to retry:
+  //  - If a stage is provided and matches a failed checkpoint, retry from that stage.
+  //  - Otherwise, retry from the failed_stage recorded on the execution.
+  const failedStage = stage || exec.failed_stage;
+  if (!failedStage) {
+    return res.status(400).json({
+      error: 'No failed stage found. Specify "stage" in the request body.',
+    });
+  }
+
+  // Clear the failed checkpoint so the runner will re-run that stage
+  try {
+    db.prepare(
+      'DELETE FROM pipeline_checkpoints WHERE execution_id = ? AND stage = ?',
+    ).run(executionId, failedStage);
+  } catch (_) {}
+
+  // Reset the execution row back to 'retrying' state
+  db.prepare(
+    `UPDATE pipeline_executions
+     SET status = 'retrying',
+         state = 'retrying',
+         error_message = NULL,
+         stack_trace = NULL,
+         failed_stage = NULL,
+         retry_count = retry_count + 1,
+         finished_at = NULL,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  ).run(executionId);
+
+  // Re-arm the in-memory flags
+  pipelineState.STATES; // ensure enum loaded
+  // Trick: directly set the in-memory maps since we are resuming an existing execution
+  // (createExecution would refuse because pipelineId is no longer in ACTIVE_EXECUTIONS,
+  //  so we re-add it manually here.)
+  const internalState = pipelineState;
+  // Use the public API: re-arm the abort/pause flags via transitionExecution
+  try {
+    internalState.transitionExecution(executionId, internalState.STATES.RUNNING);
+  } catch (_) {}
+  // ACTIVE_EXECUTIONS map is internal — we need a different approach: use runPipelineWithLifecycle
+  // but pass the existing executionId via a private hook.
+
+  // Re-load limits from the schedule
+  let limits = parseJsonObject(row.limits_json);
+  const keywords = Array.isArray(req.body?.keywords)
+    ? req.body.keywords.map((k) => String(k).trim()).filter(Boolean)
+    : [];
+
+  // Mark the schedule as running again
+  db.prepare(
+    `UPDATE pipeline_schedules
+     SET current_state = 'running',
+         current_execution_id = ?,
+         last_status = 'running',
+         last_run_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  ).run(executionId, id);
+
+  logActivity({
+    activityType: 'pipeline_retry',
+    entityType: 'pipeline',
+    entityId: executionId,
+    actor: 'manual',
+    status: 'running',
+    summary: `Retrying stage "${failedStage}" of pipeline ${id} (execution ${executionId})`,
+    details: { stage: failedStage, executionId },
+  });
+
+  pipelineLogger.log({
+    pipelineId: id,
+    executionId,
+    level: 'info',
+    stage: 'retry',
+    message: `Retrying stage "${failedStage}"`,
+    context: { stage: failedStage },
+    source: 'user',
+  });
+
+  res.json({
+    ok: true,
+    message: `Retrying stage "${failedStage}" of pipeline "${row.name}"`,
+    execution_id: executionId,
+    stage: failedStage,
+  });
+
+  // Actually run the pipeline with resumeFrom=failedStage, reusing the existing executionId.
+  // We bypass runPipelineWithLifecycle's createExecution call by injecting the execution
+  // directly into the runner.
+  setImmediate(async () => {
+    // Manually mark this pipeline as having an active execution so canStart() returns false
+    // for any concurrent calls.
+    // We do this by reusing the createExecution path with the same id — but createExecution
+    // would refuse. Instead we set ACTIVE_EXECUTIONS via the public canStart workaround:
+    // pretend the execution is new by transitioning it to RUNNING (already done above) and
+    // then call the runner directly.
+    try {
+      const RUNNER = require('../jobs/pipelineScheduler').__getRunner(id);
+      if (!RUNNER) throw new Error(`No runner for pipeline ${id}`);
+      // Use a tiny shim that re-enters the active-execution map
+      // (we rely on transitionExecution above having set status='running' on the row,
+      //  and on the runner using executionId for state lookups).
+      // To make pipelineState.getActiveExecution return this exec, we need to register it:
+      // We expose that via a private call:
+      if (typeof internalState.__setActive === 'function') {
+        internalState.__setActive(id, executionId);
+      }
+      await RUNNER(limits, {
+        trigger: 'retry',
+        executionId,
+        resumeFrom: failedStage,
+        keywords,
+      });
+      try { pipelineState.markExecutionCompleted(executionId); } catch (_) {}
+    } catch (err) {
+      logger.error('PIPELINES-API', `Retry of stage "${failedStage}" failed`, err);
+      try { pipelineState.markExecutionFailed(executionId, err, err.failedStage || failedStage); } catch (_) {}
+      broadcastPipelineStatus(id, { status: 'failed', state: 'failed', error: err.message });
+    }
+  });
+});
+
+// ── POST /api/pipelines/:id/resume-from-checkpoint ── Resume from the last successful checkpoint
+router.post('/:id/resume-from-checkpoint', async (req, res) => {
+  const { id } = req.params;
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM pipeline_schedules WHERE id = ?').get(id);
+  if (!row) return res.status(404).json({ error: 'Pipeline not found' });
+
+  let executionId = req.body?.executionId ? String(req.body.executionId) : null;
+
+  if (!executionId) {
+    const recent = db
+      .prepare(
+        `SELECT id FROM pipeline_executions
+         WHERE pipeline_id = ? AND status IN ('failed', 'stopped')
+         ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(id);
+    if (!recent) {
+      return res.status(404).json({
+        error: 'No failed/stopped execution found to resume.',
+      });
+    }
+    executionId = recent.id;
+  }
+
+  const exec = db
+    .prepare('SELECT * FROM pipeline_executions WHERE id = ?')
+    .get(executionId);
+  if (!exec) return res.status(404).json({ error: `Execution ${executionId} not found` });
+  if (exec.pipeline_id !== id) {
+    return res.status(400).json({ error: 'Execution does not belong to this pipeline' });
+  }
+  if (pipelineState.getActiveExecution(id)) {
+    return res.status(409).json({ error: 'Another execution is already running.' });
+  }
+
+  const orderedStages = PIPELINE_STAGES[id] || [];
+  const resumeStage = checkpointService.getResumeStage(executionId, orderedStages);
+  if (!resumeStage) {
+    return res.status(400).json({
+      error: 'All stages already have completed checkpoints. Use "Run Now" to start a fresh run.',
+    });
+  }
+
+  // Reset execution row
+  db.prepare(
+    `UPDATE pipeline_executions
+     SET status = 'running',
+         state = 'running',
+         error_message = NULL,
+         stack_trace = NULL,
+         failed_stage = NULL,
+         resumed_at = CURRENT_TIMESTAMP,
+         finished_at = NULL,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  ).run(executionId);
+
+  db.prepare(
+    `UPDATE pipeline_schedules
+     SET current_state = 'running',
+         current_execution_id = ?,
+         last_status = 'running',
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  ).run(executionId, id);
+
+  // Clear paused flag
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, 'false')
+     ON CONFLICT(key) DO UPDATE SET value = 'false'`,
+  ).run(`pipeline_${id}_paused`);
+
+  const limits = parseJsonObject(row.limits_json);
+  const keywords = Array.isArray(req.body?.keywords)
+    ? req.body.keywords.map((k) => String(k).trim()).filter(Boolean)
+    : [];
+
+  pipelineLogger.log({
+    pipelineId: id,
+    executionId,
+    level: 'info',
+    stage: 'resume',
+    message: `Resuming execution from stage "${resumeStage}"`,
+    context: { resumeFrom: resumeStage },
+    source: 'user',
+  });
+
+  res.json({
+    ok: true,
+    message: `Resuming pipeline "${row.name}" from stage "${resumeStage}"`,
+    execution_id: executionId,
+    resume_from: resumeStage,
+  });
+
+  setImmediate(async () => {
+    try {
+      const RUNNER = require('../jobs/pipelineScheduler').__getRunner(id);
+      if (!RUNNER) throw new Error(`No runner for pipeline ${id}`);
+      if (typeof pipelineState.__setActive === 'function') {
+        pipelineState.__setActive(id, executionId);
+      }
+      await RUNNER(limits, {
+        trigger: 'resume',
+        executionId,
+        resumeFrom: resumeStage,
+        keywords,
+      });
+      try { pipelineState.markExecutionCompleted(executionId); } catch (_) {}
+    } catch (err) {
+      logger.error('PIPELINES-API', `Resume-from-checkpoint of ${id} failed`, err);
+      try { pipelineState.markExecutionFailed(executionId, err, err.failedStage || null); } catch (_) {}
+      broadcastPipelineStatus(id, { status: 'failed', state: 'failed', error: err.message });
     }
   });
 });
@@ -378,25 +718,28 @@ router.post('/:id/pause', (req, res) => {
   const { id } = req.params;
   const row = getDb().prepare('SELECT id FROM pipeline_schedules WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: 'Pipeline not found' });
-  setPauseFlag(id, true);
+  const result = pipelineState.requestPause(id);
+  if (!result.ok) return res.status(400).json({ error: 'Cannot pause pipeline' });
   getDb().prepare(`UPDATE pipeline_schedules SET last_status = 'paused', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
   broadcastPipelineStatus(id, { status: 'paused', state: 'paused' });
-  res.json({ ok: true, paused: true, state: 'paused' });
+  res.json({ ok: true, paused: true, state: 'paused', ...result });
 });
 
 router.post('/:id/resume', (req, res) => {
   const { id } = req.params;
   const row = getDb().prepare('SELECT id FROM pipeline_schedules WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: 'Pipeline not found' });
-  setPauseFlag(id, false);
+  const result = pipelineState.requestResume(id);
+  if (!result.ok) return res.status(400).json({ error: 'Cannot resume pipeline' });
   getDb().prepare(`UPDATE pipeline_schedules SET last_status = COALESCE(NULLIF(last_status, 'paused'), 'idle'), updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
   broadcastPipelineStatus(id, { status: 'resumed' });
-  res.json({ ok: true, paused: false, state: 'resumed' });
+  res.json({ ok: true, paused: false, state: 'resumed', ...result });
 });
 
 router.post('/:id/stop', (req, res) => {
   const { id } = req.params;
-  const stopped = jobRegistry.stopJobsByPipeline(id);
+  const result = pipelineState.requestStop(id);
+  const stopped = result.stopped || 0;
   if (stopped > 0) {
     getDb().prepare(`UPDATE pipeline_schedules SET last_status = 'stopped', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
   }
@@ -413,7 +756,116 @@ router.post('/:id/stop', (req, res) => {
   res.json({ ok: true, stopped, message: stopped > 0 ? 'Stop requested for active run.' : 'No active run to stop.' });
 });
 
-// ── GET /api/pipelines/:id/history ── Recent pipeline runs
+// ── GET /api/pipelines/:id/executions ── List recent executions
+router.get('/:id/executions', (req, res) => {
+  const { id } = req.params;
+  const limit = Math.min(Number(req.query.limit) || 20, 100);
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM pipeline_executions
+       WHERE pipeline_id = ?
+       ORDER BY started_at DESC
+       LIMIT ?`,
+    )
+    .all(id, limit);
+
+  const result = rows.map((row) => {
+    let metadata = null;
+    try { metadata = row.metadata_json ? JSON.parse(row.metadata_json) : null; } catch (_) {}
+    return {
+      ...row,
+      metadata,
+    };
+  });
+
+  res.json({ executions: result });
+});
+
+// ── GET /api/pipelines/:id/executions/:eid ── Get a single execution detail
+router.get('/:id/executions/:eid', (req, res) => {
+  const { id, eid } = req.params;
+  const db = getDb();
+  const exec = db
+    .prepare('SELECT * FROM pipeline_executions WHERE id = ? AND pipeline_id = ?')
+    .get(String(eid), String(id));
+  if (!exec) return res.status(404).json({ error: 'Execution not found' });
+
+  let metadata = null;
+  try { metadata = exec.metadata_json ? JSON.parse(exec.metadata_json) : null; } catch (_) {}
+
+  const checkpoints = checkpointService.getCheckpoints(exec.id);
+  const { logs } = pipelineLogger.query({
+    executionId: exec.id,
+    limit: Number(req.query.logLimit) || 200,
+  });
+
+  res.json({
+    execution: { ...exec, metadata },
+    checkpoints,
+    logs,
+  });
+});
+
+// ── GET /api/pipelines/:id/logs ── Searchable / filterable structured logs
+router.get('/:id/logs', (req, res) => {
+  const { id } = req.params;
+  const filters = {
+    pipelineId: id,
+    level: req.query.level,
+    levels: req.query.levels,
+    stage: req.query.stage,
+    search: req.query.search,
+    since: req.query.since,
+    until: req.query.until,
+    source: req.query.source,
+    browserEvent: req.query.browserEvent,
+    executionId: req.query.executionId,
+    limit: Number(req.query.limit) || 200,
+    offset: Number(req.query.offset) || 0,
+  };
+
+  try {
+    const result = pipelineLogger.query(filters);
+    const counts = pipelineLogger.countByLevel({
+      pipelineId: id,
+      since: req.query.since,
+      executionId: req.query.executionId,
+    });
+    res.json({ ...result, counts });
+  } catch (err) {
+    logger.error('PIPELINES-API', `Failed to query logs for ${id}`, err);
+    res.status(500).json({ error: err.message, logs: [], total: 0, counts: {} });
+  }
+});
+
+// ── GET /api/pipelines/:id/health ── Pipeline health snapshot
+router.get('/:id/health', (req, res) => {
+  try {
+    const health = getHealth(req.params.id);
+    if (!health) return res.status(404).json({ error: 'Pipeline not found' });
+    res.json({ health });
+  } catch (err) {
+    logger.error('PIPELINES-API', `Failed to load health for ${req.params.id}`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/pipelines/:id/checkpoints ── List checkpoints
+router.get('/:id/checkpoints', (req, res) => {
+  const { id } = req.params;
+  const executionId = req.query.executionId
+    ? String(req.query.executionId)
+    : pipelineState.getActiveExecution(id)?.id;
+
+  if (!executionId) {
+    return res.json({ checkpoints: [] });
+  }
+  const checkpoints = checkpointService.getCheckpoints(executionId);
+  res.json({ checkpoints, execution_id: executionId });
+});
+
+// ── GET /api/pipelines/:id/history ── Legacy: recent pipeline runs (kept for compat)
 router.get('/:id/history', (req, res) => {
   const db = getDb();
   const { id } = req.params;
@@ -433,7 +885,6 @@ router.get('/:id/history', (req, res) => {
   }
 
   if (id === 'content') {
-    // Content pipeline posts are visible in the posts table
     const posts = db.prepare(`
       SELECT id, platforms, body, status, created_at, published_at, last_error
       FROM posts

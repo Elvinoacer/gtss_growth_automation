@@ -1,26 +1,47 @@
 /**
  * pipelineScheduler.js
  * Reads pipeline_schedules from DB and registers/unregisters cron tasks.
+ *
+ * Production-grade behaviors added in the pipelines overhaul:
+ *   - Single-instance enforcement via pipelineStateService (no duplicate executions)
+ *   - Survives application restarts (stateService.recoverOnStartup clears stale 'running' rows)
+ *   - Respects schedule-level paused flag (pipeline_<id>_paused)
+ *   - Emits structured pipeline_logs entries (via stateService + pipelineLogger)
+ *   - Updates pipeline_executions lifecycle (created by runners, finalised here)
+ *
  * Call syncFromDb() at startup and after any UI update.
  */
 const { getDb } = require('../db/database');
 const cronRegistry = require('./cronRegistry');
 const { runFullPipeline } = require('../pipeline/pipelineRunner');
-const { runContentPipeline } = require('../pipeline/contentPipeline'); // Phase 3
+const { runContentPipeline } = require('../pipeline/contentPipeline');
 const { detectReplies } = require('../services/replyDetector');
 const { checkInbox, isCheckingInbox } = require('../services/instagramReplyChecker');
 const { isSessionValid } = require('../automation/sessionManager');
 const { isScheduledPosterRunning } = require('./scheduledPoster');
+const pipelineState = require('../services/pipelineStateService');
+const pipelineLogger = require('../services/pipelineLogger');
 const logger = require('../utils/logger');
 
 /** Map pipeline id → runner function */
 const RUNNERS = {
-  outreach: async (limits) => {
-    const runId = await runFullPipeline('cron', { limits });
+  outreach: async (limits, options = {}) => {
+    const runId = await runFullPipeline(options.trigger || 'cron', {
+      limits,
+      keywords: options.keywords || [],
+      executionId: options.executionId,
+      resumeFrom: options.resumeFrom,
+    });
     logger.info('PIPELINE-SCHEDULER', `Outreach pipeline run #${runId} complete`);
+    return runId;
   },
-  content: async (limits) => {
-    const result = await runContentPipeline({ ...limits, trigger: 'cron' });
+  content: async (limits, options = {}) => {
+    const result = await runContentPipeline({
+      ...limits,
+      trigger: options.trigger || 'cron',
+      executionId: options.executionId,
+      resumeFrom: options.resumeFrom,
+    });
     const failed =
       result &&
       (result.success === false ||
@@ -29,7 +50,7 @@ const RUNNERS = {
       throw new Error(result.error || 'Content pipeline failed');
     }
   },
-  dm_check: async (limits = {}) => {
+  dm_check: async (limits = {}, options = {}) => {
     if (isPipelinePaused('dm_check')) {
       logger.info('PIPELINE-SCHEDULER', 'DM checker skipped: pipeline paused');
       return;
@@ -47,40 +68,64 @@ const RUNNERS = {
       return;
     }
 
-    const jobId = require('crypto').randomUUID();
+    const jobId = options.executionId || require('crypto').randomUUID();
     const platforms = Array.isArray(limits.platforms) && limits.platforms.length > 0
       ? limits.platforms
       : ['instagram'];
-    logger.db('info', 'dm_check', 'start', 'DM inbox checker started', {
-      jobId,
-      platforms,
+    pipelineLogger.log({
+      pipelineId: 'dm_check',
+      executionId: jobId,
+      level: 'info',
+      stage: 'start',
+      message: 'DM inbox checker started',
+      context: { platforms },
     });
 
     let repliesFound = 0;
     for (const platform of platforms) {
+      if (pipelineState.isAborted(jobId)) break;
       if (!isSessionValid(platform)) {
-        logger.db('warn', 'dm_check', 'platform', `Skipping ${platform}: no valid session`, {
-          jobId,
-          platform,
+        pipelineLogger.log({
+          pipelineId: 'dm_check',
+          executionId: jobId,
+          level: 'warn',
+          stage: 'platform',
+          message: `Skipping ${platform}: no valid session`,
+          context: { platform },
         });
         continue;
       }
-      if (platform === 'instagram') {
-        const result = await checkInbox({ prompt: limits.prompt });
-        repliesFound += result?.repliesFound || 0;
-      } else {
-        const result = await detectReplies(platform, () => {}, {
-          headless: true,
-          allowHeadlessSocial: true,
-          trace: false,
+      try {
+        if (platform === 'instagram') {
+          const result = await checkInbox({ prompt: limits.prompt });
+          repliesFound += result?.repliesFound || 0;
+        } else {
+          const result = await detectReplies(platform, () => {}, {
+            headless: true,
+            allowHeadlessSocial: true,
+            trace: false,
+          });
+          repliesFound += result?.repliesFound || 0;
+        }
+      } catch (err) {
+        pipelineLogger.log({
+          pipelineId: 'dm_check',
+          executionId: jobId,
+          level: 'error',
+          stage: 'platform',
+          message: `DM check failed on ${platform}: ${err.message}`,
+          context: { platform, error: err.message },
         });
-        repliesFound += result?.repliesFound || 0;
       }
     }
 
-    logger.db('info', 'dm_check', 'complete', 'DM inbox checker completed', {
-      jobId,
-      repliesFound,
+    pipelineLogger.log({
+      pipelineId: 'dm_check',
+      executionId: jobId,
+      level: 'success',
+      stage: 'complete',
+      message: 'DM inbox checker completed',
+      context: { repliesFound },
     });
   },
 };
@@ -190,6 +235,56 @@ function computeNextRun(cronExpression, fromDate = new Date()) {
   return null;
 }
 
+/**
+ * Run a single pipeline via the state service, with single-instance enforcement.
+ *
+ * @param {string} pipelineId
+ * @param {string} trigger - 'cron' | 'manual' | 'api' | 'retry' | 'resume'
+ * @param {Object} limits - limits_json bag
+ * @param {Object} [options] - { executionId, resumeFrom, keywords }
+ */
+async function runPipelineWithLifecycle(pipelineId, trigger, limits, options = {}) {
+  if (!pipelineState.canStart(pipelineId, { force: trigger === 'manual' && options.force })) {
+    const active = pipelineState.getActiveExecution(pipelineId);
+    const message = `Pipeline "${pipelineId}" is already running${active ? ` (execution ${active.id})` : ''} or paused.`;
+    pipelineLogger.log({
+      pipelineId,
+      level: 'warn',
+      stage: 'scheduler',
+      message,
+      context: { trigger, activeExecutionId: active?.id || null },
+    });
+    throw new Error(message);
+  }
+
+  const totalSteps = pipelineId === 'outreach' ? 4 : pipelineId === 'content' ? 4 : 1;
+  const exec = pipelineState.createExecution(pipelineId, trigger, {
+    startMessage: `Initializing ${pipelineId} pipeline…`,
+    totalSteps,
+    maxRetries: 3,
+    limits,
+    resumeFrom: options.resumeFrom || null,
+    keywords: options.keywords || null,
+    platforms: limits?.platforms || null,
+  });
+
+  try {
+    const runner = RUNNERS[pipelineId];
+    if (!runner) throw new Error(`No runner registered for pipeline "${pipelineId}"`);
+    await runner(limits, {
+      trigger,
+      executionId: exec.id,
+      resumeFrom: options.resumeFrom,
+      keywords: options.keywords,
+    });
+    pipelineState.markExecutionCompleted(exec.id);
+    return exec.id;
+  } catch (err) {
+    pipelineState.markExecutionFailed(exec.id, err, err.failedStage || null);
+    throw err;
+  }
+}
+
 async function syncFromDb() {
   const db = getDb();
   const rows = db.prepare('SELECT * FROM pipeline_schedules').all();
@@ -214,59 +309,33 @@ async function syncFromDb() {
         row.cron,
         async () => {
           logger.info('PIPELINE-SCHEDULER', `Cron trigger: ${row.name}`);
-          // Mark as running
-          db.prepare(`
-            UPDATE pipeline_schedules
-            SET last_run_at = CURRENT_TIMESTAMP, last_status = 'running'
-            WHERE id = ?
-          `).run(row.id);
 
-          // Broadcast running status via Socket.IO
-          try {
-            const { broadcast } = require('../services/socketService');
-            broadcast('pipeline:status', {
-              id: row.id,
-              status: 'running',
-              last_run_at: new Date().toISOString(),
+          // Respect paused flag
+          if (isPipelinePaused(row.id)) {
+            pipelineLogger.log({
+              pipelineId: row.id,
+              level: 'info',
+              stage: 'scheduler',
+              message: `Cron tick skipped: pipeline is paused`,
             });
-          } catch (_) {}
+            return;
+          }
+
+          // Single-instance enforcement
+          if (pipelineState.getActiveExecution(row.id)) {
+            pipelineLogger.log({
+              pipelineId: row.id,
+              level: 'warn',
+              stage: 'scheduler',
+              message: `Cron tick skipped: previous execution is still running`,
+            });
+            return;
+          }
 
           try {
-            await runner(limits);
-            db.prepare(`
-              UPDATE pipeline_schedules
-              SET last_status = 'completed', run_count = run_count + 1,
-                  next_run_at = ?, updated_at = CURRENT_TIMESTAMP
-              WHERE id = ?
-            `).run(computeNextRun(row.cron), row.id);
-
-            // Broadcast completed status
-            try {
-              const { broadcast } = require('../services/socketService');
-              broadcast('pipeline:status', {
-                id: row.id,
-                status: 'completed',
-                last_run_at: new Date().toISOString(),
-              });
-            } catch (_) {}
+            await runPipelineWithLifecycle(row.id, 'cron', limits);
           } catch (err) {
-            logger.error('PIPELINE-SCHEDULER', `${row.name} failed`, err);
-            db.prepare(`
-              UPDATE pipeline_schedules
-              SET last_status = 'failed', next_run_at = ?, updated_at = CURRENT_TIMESTAMP
-              WHERE id = ?
-            `).run(computeNextRun(row.cron), row.id);
-
-            // Broadcast failed status
-            try {
-              const { broadcast } = require('../services/socketService');
-              broadcast('pipeline:status', {
-                id: row.id,
-                status: 'failed',
-                last_run_at: new Date().toISOString(),
-                error: err.message,
-              });
-            } catch (_) {}
+            logger.error('PIPELINE-SCHEDULER', `${row.name} cron run failed`, err);
           }
         },
         row.name,
@@ -317,5 +386,7 @@ module.exports = {
   setPipelineLimits,
   computeNextRun,
   isWithinActiveHours,
+  isPipelinePaused,
+  runPipelineWithLifecycle,
   __getRunner: (id) => RUNNERS[id],
 };

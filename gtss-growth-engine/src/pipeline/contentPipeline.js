@@ -26,8 +26,13 @@ const { withRetry } = require("../utils/retryHelper");
 const jobRegistry = require("../jobs/jobRegistry");
 const logger = require("../utils/logger");
 const { enqueuePipelineRun } = require("./pipelineQueue");
+const pipelineState = require("../services/pipelineStateService");
+const pipelineLogger = require("../services/pipelineLogger");
+const checkpointService = require("../services/pipelineCheckpoint");
 
 const UPLOADS_DIR = path.resolve(__dirname, "../../public/uploads");
+
+const CONTENT_STAGES = ["image_gen", "caption_gen", "post_record", "publish"];
 
 function buildContentEmitter(jobId) {
   return (event) => {
@@ -145,13 +150,33 @@ async function runContentPipelineNow(config = {}) {
 
   try {
     for (let i = 0; i < maxRuns; i++) {
-      const jobId = crypto.randomUUID();
+      const jobId = config.executionId || crypto.randomUUID();
       const emit = buildContentEmitter(jobId);
       const db = getDb();
       const controller = config.signal
         ? { signal: config.signal }
         : jobRegistry.startJob(jobId, { pipelineId: "content", type: "content" });
       const signal = controller.signal;
+
+      // Bridge to the new lifecycle state service (only if an executionId was passed)
+      const lifecycleExecId = config.executionId || null;
+      const updateLifecycle = (stage, message, progress, completedSteps) => {
+        if (!lifecycleExecId) return;
+        try {
+          pipelineState.updateExecutionProgress(lifecycleExecId, {
+            stage,
+            message,
+            progress,
+            completedSteps,
+          });
+        } catch (_) {}
+      };
+      const checkAbort = () => {
+        if (lifecycleExecId) {
+          try { pipelineState.throwIfAborted(lifecycleExecId); } catch (err) { throw err; }
+        }
+        if (signal?.aborted) throw new Error("Content pipeline aborted");
+      };
 
       emit({
         stage: "start",
@@ -202,88 +227,148 @@ async function runContentPipelineNow(config = {}) {
             stage: "asset_library",
             message: `Selected library asset: ${selectedAsset.name}`,
           });
+          updateLifecycle("asset_library", `Selected library asset: ${selectedAsset.name}`, 25, 1);
         } else {
           // ── Stage 1: Generate image ──────────────────────────────────────
+          checkAbort();
+          updateLifecycle("image_gen", `Generating image for topic: "${topic}"…`, 5, 0);
           emit({
             stage: "image_gen",
             message: `Generating image for topic: "${topic}"...`,
           });
 
-          const { filePath, fileName } = await withRetry(
-            () =>
-              runImageGenJob({
-                jobId,
-                topic,
-                style,
-                platform: platforms[0] || "instagram",
-              }),
-            {
-              signal,
-              label: "content:image_gen",
-              entityType: "pipeline",
-              entityId: jobId,
-              onRetry: (attempt, err) =>
-                emit({
-                  stage: "image_gen",
-                  type: "retry",
-                  level: "retry",
-                  message: `Image generation retry ${attempt}: ${err.message}`,
+          // Skip if checkpoint already exists for image_gen
+          if (lifecycleExecId && checkpointService.isStageComplete(lifecycleExecId, "image_gen")) {
+            emit({ stage: "image_gen", message: "Image generation skipped: checkpoint already complete" });
+            updateLifecycle("image_gen", "Image generation skipped (checkpoint)", 25, 1);
+          } else {
+            const { filePath, fileName } = await withRetry(
+              () =>
+                runImageGenJob({
+                  jobId,
+                  topic,
+                  style,
+                  platform: platforms[0] || "instagram",
                 }),
-            },
-          );
+              {
+                signal,
+                label: "content:image_gen",
+                entityType: "pipeline",
+                entityId: jobId,
+                onRetry: (attempt, err) => {
+                  emit({
+                    stage: "image_gen",
+                    type: "retry",
+                    level: "retry",
+                    message: `Image generation retry ${attempt}: ${err.message}`,
+                  });
+                  if (lifecycleExecId) {
+                    pipelineLogger.log({
+                      pipelineId: "content",
+                      executionId: lifecycleExecId,
+                      level: "retry",
+                      stage: "image_gen",
+                      message: `Image generation retry ${attempt}: ${err.message}`,
+                      retryAttempt: attempt,
+                    });
+                  }
+                },
+              },
+            );
 
-          emit({ stage: "image_gen", message: `Image saved: ${fileName}` });
+            emit({ stage: "image_gen", message: `Image saved: ${fileName}` });
 
-          fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-          const destName = `auto-${Date.now()}-${fileName}`;
-          const destPath = path.join(UPLOADS_DIR, destName);
-          await fs.promises.copyFile(filePath, destPath);
-          mediaRelPath = `/uploads/${destName}`;
+            fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+            const destName = `auto-${Date.now()}-${fileName}`;
+            const destPath = path.join(UPLOADS_DIR, destName);
+            await fs.promises.copyFile(filePath, destPath);
+            mediaRelPath = `/uploads/${destName}`;
 
-          emit({
-            stage: "image_gen",
-            message: `Image copied to uploads: ${destName}`,
-          });
+            emit({
+              stage: "image_gen",
+              message: `Image copied to uploads: ${destName}`,
+            });
+
+            if (lifecycleExecId) {
+              checkpointService.saveCheckpoint({
+                executionId: lifecycleExecId,
+                pipelineId: "content",
+                stage: "image_gen",
+                status: "completed",
+                payload: { filePath: mediaRelPath, fileName: destName },
+              });
+            }
+            updateLifecycle("image_gen", `Image generated: ${destName}`, 25, 1);
+          }
         }
 
         // ── Stage 2: Generate captions per platform ──────────────────────
         const captions = {};
-        for (const platform of platforms) {
-          throwIfAborted(signal);
-          emit({
-            stage: "caption_gen",
-            message: `Generating caption for ${platform}...`,
-          });
-          const caption = await withRetry(
-            () => generateCaption(topic, platform, null),
-            {
-              signal,
-              label: `content:caption:${platform}`,
-              entityType: "pipeline",
-              entityId: jobId,
-              platform,
-              onRetry: (attempt, err) =>
-                emit({
-                  stage: "caption_gen",
-                  type: "retry",
-                  level: "retry",
-                  platform,
-                  message: `Caption retry ${attempt} for ${platform}: ${err.message}`,
-                }),
-            },
-          );
-          captions[platform] = caption;
-          emit({
-            stage: "caption_gen",
-            message: `Caption ready for ${platform}`,
-          });
+        const skipCaptions = lifecycleExecId && checkpointService.isStageComplete(lifecycleExecId, "caption_gen");
+        if (!skipCaptions) {
+          for (const platform of platforms) {
+            checkAbort();
+            emit({
+              stage: "caption_gen",
+              message: `Generating caption for ${platform}...`,
+            });
+            updateLifecycle("caption_gen", `Generating caption for ${platform}…`, 30 + (platforms.indexOf(platform) * 10), 1);
+            const caption = await withRetry(
+              () => generateCaption(topic, platform, null),
+              {
+                signal,
+                label: `content:caption:${platform}`,
+                entityType: "pipeline",
+                entityId: jobId,
+                platform,
+                onRetry: (attempt, err) => {
+                  emit({
+                    stage: "caption_gen",
+                    type: "retry",
+                    level: "retry",
+                    platform,
+                    message: `Caption retry ${attempt} for ${platform}: ${err.message}`,
+                  });
+                  if (lifecycleExecId) {
+                    pipelineLogger.log({
+                      pipelineId: "content",
+                      executionId: lifecycleExecId,
+                      level: "retry",
+                      stage: "caption_gen",
+                      message: `Caption retry ${attempt} for ${platform}: ${err.message}`,
+                      retryAttempt: attempt,
+                      context: { platform },
+                    });
+                  }
+                },
+              },
+            );
+            captions[platform] = caption;
+            emit({
+              stage: "caption_gen",
+              message: `Caption ready for ${platform}`,
+            });
+          }
+          if (lifecycleExecId) {
+            checkpointService.saveCheckpoint({
+              executionId: lifecycleExecId,
+              pipelineId: "content",
+              stage: "caption_gen",
+              status: "completed",
+              payload: { platforms: Object.keys(captions) },
+            });
+          }
+        } else {
+          emit({ stage: "caption_gen", message: "Captions skipped: checkpoint already complete" });
         }
+        updateLifecycle("caption_gen", "Captions ready", 60, 2);
 
         // Use the primary platform's caption as the post body
         const primaryCaption =
           captions[platforms[0]] || Object.values(captions)[0] || "";
 
         // ── Stage 3: Create post record ──────────────────────────────────
+        checkAbort();
         const insertResult = db
           .prepare(
             `
@@ -298,12 +383,24 @@ async function runContentPipelineNow(config = {}) {
           stage: "post_record",
           message: `Post draft created (id: ${postId})`,
         });
+        if (lifecycleExecId) {
+          checkpointService.saveCheckpoint({
+            executionId: lifecycleExecId,
+            pipelineId: "content",
+            stage: "post_record",
+            status: "completed",
+            payload: { postId, mediaPath: mediaRelPath },
+          });
+        }
+        updateLifecycle("post_record", `Post draft created (id: ${postId})`, 75, 3);
 
         // ── Stage 4: Publish ─────────────────────────────────────────────
+        checkAbort();
         emit({
           stage: "publish",
           message: `Publishing to: ${platforms.join(", ")}...`,
         });
+        updateLifecycle("publish", `Publishing to: ${platforms.join(", ")}…`, 80, 3);
 
         const publishResult = await publishPost(postId, emit, { trace: false });
         if (selectedAsset && Array.isArray(publishResult.success) && publishResult.success.length > 0) {
@@ -322,6 +419,15 @@ async function runContentPipelineNow(config = {}) {
             stage: "publish",
             message: `✓ Published to: ${publishedPlatforms.join(", ")}`,
           });
+          if (lifecycleExecId) {
+            checkpointService.saveCheckpoint({
+              executionId: lifecycleExecId,
+              pipelineId: "content",
+              stage: "publish",
+              status: "completed",
+              payload: { postId, publishedPlatforms, failedPlatforms },
+            });
+          }
           results.push({
             success: true,
             postId,
@@ -331,6 +437,7 @@ async function runContentPipelineNow(config = {}) {
             stage: "complete",
             message: `Run complete (post ${postId} published)`,
           });
+          updateLifecycle("publish", `Published to: ${publishedPlatforms.join(", ")}`, 100, 4);
           logActivity({
             activityType: "pipeline_run",
             entityType: "pipeline",
@@ -345,6 +452,15 @@ async function runContentPipelineNow(config = {}) {
             stage: "publish",
             message: `✗ All platforms failed: ${failedPlatforms.join(", ")}`,
           });
+          if (lifecycleExecId) {
+            checkpointService.saveCheckpoint({
+              executionId: lifecycleExecId,
+              pipelineId: "content",
+              stage: "publish",
+              status: "failed",
+              payload: { postId, failedPlatforms },
+            });
+          }
           results.push({
             success: false,
             postId,
@@ -354,10 +470,21 @@ async function runContentPipelineNow(config = {}) {
             stage: "complete",
             message: `Run complete (post ${postId} failed)`,
           });
+          updateLifecycle("publish", `✗ All platforms failed: ${failedPlatforms.join(", ")}`, 90, 3);
         }
       } catch (err) {
         logger.error("CONTENT-PIPELINE", `Run ${i + 1} failed`, err);
         emit({ stage: "error", message: err.message });
+        if (lifecycleExecId) {
+          pipelineLogger.log({
+            pipelineId: "content",
+            executionId: lifecycleExecId,
+            level: "error",
+            stage: "error",
+            message: err.message,
+            error: err,
+          });
+        }
         logActivity({
           activityType: "pipeline_run",
           entityType: "pipeline",

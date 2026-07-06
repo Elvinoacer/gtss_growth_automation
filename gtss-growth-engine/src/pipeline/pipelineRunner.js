@@ -21,6 +21,11 @@ const jobRegistry = require("../jobs/jobRegistry");
 const logger = require("../utils/logger");
 const { broadcast } = require("../services/socketService");
 const { enqueuePipelineRun } = require("./pipelineQueue");
+const pipelineState = require("../services/pipelineStateService");
+const pipelineLogger = require("../services/pipelineLogger");
+const checkpointService = require("../services/pipelineCheckpoint");
+
+const OUTREACH_STAGES = ["discovery", "qualification", "messages", "send"];
 
 // ---------------------------------------------------------------------------
 // Pipeline run tracking
@@ -317,12 +322,71 @@ async function runFullPipelineNow(triggerSource = "scheduled", options = {}) {
       : jobRegistry.startJob(pipelineRunId, { pipelineId: "outreach", type: "outreach" });
   const signal = controller.signal;
 
+  // ── Lifecycle bridge: link the legacy runId to the new state service ──
+  // If an executionId was provided (from the new pipelineStateService),
+  // use it for pause/abort checks and checkpoint saves. Otherwise fall back
+  // to the legacy in-memory flags keyed by pipelineRunId.
+  const executionId = options.executionId || String(pipelineRunId);
+  const lifecycleEmit = (event) => {
+    try { emit(event); } catch (_) {}
+    try {
+      if (event.message) {
+        pipelineState.updateExecutionProgress(executionId, {
+          stage: event.stage || event.type || null,
+          message: event.message,
+        });
+      }
+    } catch (_) {}
+  };
+
   const stagesToRun = options.stages || [
     "discovery",
     "qualification",
     "messages",
     "send",
   ];
+
+  // Resume-from-checkpoint support: if resumeFrom is set, skip stages that
+  // already have a 'completed' checkpoint for this execution.
+  let effectiveStages = stagesToRun;
+  if (options.resumeFrom) {
+    const resumeStage = options.resumeFrom;
+    const idx = stagesToRun.indexOf(resumeStage);
+    if (idx >= 0) {
+      effectiveStages = stagesToRun.slice(idx);
+      emit({
+        type: "info",
+        message: `Resuming from checkpoint at stage "${resumeStage}" — skipping earlier stages.`,
+      });
+      pipelineLogger.log({
+        pipelineId: "outreach",
+        executionId,
+        level: "info",
+        stage: "resume",
+        message: `Resuming from stage "${resumeStage}"`,
+        context: { resumeFrom: resumeStage, skippedStages: stagesToRun.slice(0, idx) },
+      });
+    }
+  } else {
+    // Even without explicit resumeFrom, skip stages that already completed
+    // for this execution (e.g. after a retry-stage call).
+    const completedStages = new Set(
+      checkpointService
+        .getCheckpoints(executionId)
+        .filter((c) => c.status === "completed")
+        .map((c) => c.stage),
+    );
+    if (completedStages.size > 0) {
+      effectiveStages = stagesToRun.filter((s) => !completedStages.has(s));
+      if (effectiveStages.length < stagesToRun.length) {
+        emit({
+          type: "info",
+          message: `Skipping ${stagesToRun.length - effectiveStages.length} already-completed stage(s): ${stagesToRun.filter((s) => completedStages.has(s)).join(", ")}`,
+        });
+      }
+    }
+  }
+
   const globalMode = stageMode("discovery"); // reads PIPELINE_MODE
 
   emit({
@@ -340,14 +404,16 @@ async function runFullPipelineNow(triggerSource = "scheduled", options = {}) {
   });
 
   try {
-    if (isPaused("outreach")) {
+    if (isPaused("outreach") || pipelineState.isPaused(executionId)) {
       emit({ type: "warn", message: "Outreach pipeline is paused; run skipped" });
       finalisePipelineRun(pipelineRunId, "skipped");
       return pipelineRunId;
     }
     // ── Stage 1: Discovery ──────────────────────────────────────────────
-    if (stagesToRun.includes("discovery")) {
+    if (effectiveStages.includes("discovery")) {
       throwIfAborted(signal, pipelineRunId);
+      pipelineState.throwIfAborted(executionId);
+      pipelineState.updateExecutionProgress(executionId, { stage: "discovery", message: "Starting Stage 1: Lead Discovery", progress: 5 });
       emit({ type: "stage", message: "Starting Stage 1: Lead Discovery" });
       try {
         const result = await runStageWithRetry(
@@ -370,24 +436,37 @@ async function runFullPipelineNow(triggerSource = "scheduled", options = {}) {
           message: `Discovery: ${result.newLeads} new leads found across ${result.keywordsRun} keywords`,
         });
         updatePipelineRun(pipelineRunId, { discovery: result });
+        checkpointService.saveCheckpoint({
+          executionId, pipelineId: "outreach", stage: "discovery",
+          status: "completed", payload: result,
+        });
+        pipelineState.updateExecutionProgress(executionId, { stage: "discovery", message: `Discovery complete: ${result.newLeads} new leads`, progress: 25, completedSteps: 1 });
       } catch (err) {
+        checkpointService.saveCheckpoint({
+          executionId, pipelineId: "outreach", stage: "discovery",
+          status: "failed", error: err, payload: { errorMessage: err.message },
+        });
         emit({
           type: "error",
           message: `Discovery stage failed: ${err.message} — continuing to qualification`,
         });
         // Non-fatal: there may be pre-existing leads to qualify
       }
+    } else {
+      pipelineState.updateExecutionProgress(executionId, { stage: "discovery", message: "Discovery: skipped (already complete or not in scope)", progress: 25, completedSteps: (pipelineState.getExecutionState(executionId)?.completed_steps || 0) + 1 });
     }
 
-    if (!(await awaitResume(pipelineRunId, emit))) {
+    if (!(await awaitResume(pipelineRunId, emit)) || !(await pipelineState.awaitResume(executionId, emit))) {
       emit({ type: "warn", message: "Pipeline aborted by user." });
       finalisePipelineRun(pipelineRunId, "aborted");
       return pipelineRunId;
     }
 
     // ── Stage 2: Qualification ──────────────────────────────────────────
-    if (stagesToRun.includes("qualification")) {
+    if (effectiveStages.includes("qualification")) {
       throwIfAborted(signal, pipelineRunId);
+      pipelineState.throwIfAborted(executionId);
+      pipelineState.updateExecutionProgress(executionId, { stage: "qualification", message: "Starting Stage 2: Lead Qualification", progress: 30 });
       emit({ type: "stage", message: "Starting Stage 2: Lead Qualification" });
       try {
         const result = await runStageWithRetry(
@@ -403,7 +482,17 @@ async function runFullPipelineNow(triggerSource = "scheduled", options = {}) {
           message: `Qualification: ${result.qualified} qualified, ${result.deprioritized} deprioritized`,
         });
         updatePipelineRun(pipelineRunId, { qualification: result });
+        checkpointService.saveCheckpoint({
+          executionId, pipelineId: "outreach", stage: "qualification",
+          status: "completed", payload: result,
+        });
+        pipelineState.updateExecutionProgress(executionId, { stage: "qualification", message: `Qualification complete: ${result.qualified} qualified`, progress: 50, completedSteps: 2 });
       } catch (err) {
+        checkpointService.saveCheckpoint({
+          executionId, pipelineId: "outreach", stage: "qualification",
+          status: "failed", error: err, payload: { errorMessage: err.message },
+        });
+        err.failedStage = "qualification";
         emit({
           type: "error",
           message: `Qualification stage failed: ${err.message} — aborting pipeline`,
@@ -411,19 +500,21 @@ async function runFullPipelineNow(triggerSource = "scheduled", options = {}) {
         finalisePipelineRun(pipelineRunId, "failed");
         closePipelineStream(pipelineRunId);
         await sendPipelineSummaryEmail(pipelineRunId);
-        return pipelineRunId;
+        throw err;
       }
     }
 
-    if (!(await awaitResume(pipelineRunId, emit))) {
+    if (!(await awaitResume(pipelineRunId, emit)) || !(await pipelineState.awaitResume(executionId, emit))) {
       emit({ type: "warn", message: "Pipeline aborted by user." });
       finalisePipelineRun(pipelineRunId, "aborted");
       return pipelineRunId;
     }
 
     // ── Stage 3: Message Generation ─────────────────────────────────────
-    if (stagesToRun.includes("messages")) {
+    if (effectiveStages.includes("messages")) {
       throwIfAborted(signal, pipelineRunId);
+      pipelineState.throwIfAborted(executionId);
+      pipelineState.updateExecutionProgress(executionId, { stage: "messages", message: "Starting Stage 3: Message Generation", progress: 55 });
       emit({ type: "stage", message: "Starting Stage 3: Message Generation" });
       try {
         const result = await runStageWithRetry(
@@ -439,7 +530,17 @@ async function runFullPipelineNow(triggerSource = "scheduled", options = {}) {
           message: `Messages: ${result.generated} generated, ${result.approved} auto-approved (variant ${autoApproveVariant()})`,
         });
         updatePipelineRun(pipelineRunId, { messages: result });
+        checkpointService.saveCheckpoint({
+          executionId, pipelineId: "outreach", stage: "messages",
+          status: "completed", payload: result,
+        });
+        pipelineState.updateExecutionProgress(executionId, { stage: "messages", message: `Messages complete: ${result.generated} generated`, progress: 75, completedSteps: 3 });
       } catch (err) {
+        checkpointService.saveCheckpoint({
+          executionId, pipelineId: "outreach", stage: "messages",
+          status: "failed", error: err, payload: { errorMessage: err.message },
+        });
+        err.failedStage = "messages";
         emit({
           type: "error",
           message: `Message generation failed: ${err.message} — aborting pipeline`,
@@ -447,19 +548,21 @@ async function runFullPipelineNow(triggerSource = "scheduled", options = {}) {
         finalisePipelineRun(pipelineRunId, "failed");
         closePipelineStream(pipelineRunId);
         await sendPipelineSummaryEmail(pipelineRunId);
-        return pipelineRunId;
+        throw err;
       }
     }
 
-    if (!(await awaitResume(pipelineRunId, emit))) {
+    if (!(await awaitResume(pipelineRunId, emit)) || !(await pipelineState.awaitResume(executionId, emit))) {
       emit({ type: "warn", message: "Pipeline aborted by user." });
       finalisePipelineRun(pipelineRunId, "aborted");
       return pipelineRunId;
     }
 
     // ── Stage 4: Send ───────────────────────────────────────────────────
-    if (stagesToRun.includes("send")) {
+    if (effectiveStages.includes("send")) {
       throwIfAborted(signal, pipelineRunId);
+      pipelineState.throwIfAborted(executionId);
+      pipelineState.updateExecutionProgress(executionId, { stage: "send", message: "Starting Stage 4: Send", progress: 80 });
       emit({ type: "stage", message: "Starting Stage 4: Send" });
       try {
         const result = await runStageWithRetry(
@@ -482,7 +585,17 @@ async function runFullPipelineNow(triggerSource = "scheduled", options = {}) {
           message: `Send: ${result.sent} sent, ${result.failed} failed, ${result.skipped} skipped`,
         });
         updatePipelineRun(pipelineRunId, { send: result });
+        checkpointService.saveCheckpoint({
+          executionId, pipelineId: "outreach", stage: "send",
+          status: "completed", payload: result,
+        });
+        pipelineState.updateExecutionProgress(executionId, { stage: "send", message: `Send complete: ${result.sent} sent`, progress: 100, completedSteps: 4 });
       } catch (err) {
+        checkpointService.saveCheckpoint({
+          executionId, pipelineId: "outreach", stage: "send",
+          status: "failed", error: err, payload: { errorMessage: err.message },
+        });
+        err.failedStage = "send";
         emit({ type: "error", message: `Send stage failed: ${err.message}` });
       }
     }
@@ -505,8 +618,9 @@ async function runFullPipelineNow(triggerSource = "scheduled", options = {}) {
       runId: pipelineRunId,
       error: err.message,
     });
-    finalisePipelineRun(pipelineRunId, isPipelineAborted(pipelineRunId) ? "aborted" : "failed");
-    emit({ type: isPipelineAborted(pipelineRunId) ? "warn" : "error", message: `Pipeline ${isPipelineAborted(pipelineRunId) ? "aborted" : "failed"}: ${err.message}` });
+    const aborted = isPipelineAborted(pipelineRunId) || pipelineState.isAborted(executionId);
+    finalisePipelineRun(pipelineRunId, aborted ? "aborted" : "failed");
+    emit({ type: aborted ? "warn" : "error", message: `Pipeline ${aborted ? "aborted" : "failed"}: ${err.message}` });
     logActivity({
       activityType: "pipeline_run",
       entityType: "pipeline",
@@ -514,8 +628,12 @@ async function runFullPipelineNow(triggerSource = "scheduled", options = {}) {
       actor: triggerSource,
       status: "failure",
       summary: `Outreach pipeline #${pipelineRunId} failed`,
-      details: { error: err.message },
+      details: { error: err.message, failedStage: err.failedStage || null },
     });
+    if (err.failedStage) {
+      try { pipelineState.markExecutionFailed(executionId, err, err.failedStage); } catch (_) {}
+    }
+    throw err;
   } finally {
     jobRegistry.finishJob(pipelineRunId);
     closePipelineStream(pipelineRunId);
