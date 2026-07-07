@@ -103,13 +103,27 @@ const PROFILE_STRIP_DIRS = [
 ];
 
 class CdpManager {
-  constructor({ dataRoot, logStream, port = DEFAULT_PORT }) {
+  // `serverRoot` is the gtss-growth-engine source root. We keep the CDP
+  // profile directory INSIDE serverRoot so it matches the path used by
+  // gtss-growth-engine/scripts/launch-chrome.sh (which the engine's
+  // automation layer spawns as a fallback when port 9222 is closed). If
+  // the desktop launcher and the engine's bash fallback used different
+  // profile dirs, the engine's fallback Chrome would launch with a fresh
+  // profile containing none of the user's authenticated sessions — which
+  // is exactly the regression the user reported ("CDP that we are
+  // launching right now has no sessions at all"). When `serverRoot` is
+  // not supplied (e.g., in unit tests), we fall back to the legacy
+  // `<dataRoot>/chrome-cdp-profile/` location.
+  constructor({ dataRoot, logStream, port = DEFAULT_PORT, serverRoot = null }) {
     this.dataRoot = dataRoot;
     this.logStream = logStream;
     this.port = port;
     this.child = null;
     this.state = "stopped"; // stopped | starting | running | stopping | crashed
-    this.cdpProfileDir = path.join(dataRoot, CDP_PROFILE_DIRNAME);
+    this.serverRoot = serverRoot;
+    this.cdpProfileDir = serverRoot
+      ? path.join(serverRoot, CDP_PROFILE_DIRNAME)
+      : path.join(dataRoot, CDP_PROFILE_DIRNAME);
     this.chromePath = null;
     this.lastError = null;
     this.startedAt = null;
@@ -534,10 +548,46 @@ class CdpManager {
   // ─── Profile management ──────────────────────────────────────────────────
 
   async ensureCdpProfile() {
+    // ─── Harden the "already initialized" check ───────────────────────────
+    // Previously we only checked `fs.existsSync(<cdpProfileDir>/Default)`.
+    // That check passes for an EMPTY Default dir — which is exactly what
+    // happens if a previous launch crashed mid-copy (mkdir succeeded, then
+    // copyDirSelective failed before writing any files). On every subsequent
+    // launch, the empty Default dir would short-circuit the copy step and
+    // Chrome would start with a fresh profile containing NO authenticated
+    // sessions. The user would then see "CDP Chrome has no sessions at all"
+    // — the regression we are fixing.
+    //
+    // We now require BOTH:
+    //   1. The Default dir exists, AND
+    //   2. Either the Cookies file or the Login Data file exists inside it.
+    // These SQLite files are what Chrome uses to persist session cookies
+    // and saved logins — their presence is a strong signal the profile
+    // was fully copied on a previous launch.
     const defaultProfile = path.join(this.cdpProfileDir, "Default");
-    if (fs.existsSync(defaultProfile)) {
+    const cookiesFile = path.join(defaultProfile, "Cookies");
+    const loginDataFile = path.join(defaultProfile, "Login Data");
+    const profileLooksPopulated =
+      fs.existsSync(defaultProfile) &&
+      (fs.existsSync(cookiesFile) || fs.existsSync(loginDataFile));
+    if (profileLooksPopulated) {
       // Profile already initialized on a previous launch.
       return;
+    }
+
+    // If the Default dir exists but is empty/stale, remove it so the copy
+    // below starts clean. Otherwise copyDirSelective would skip the mkdir
+    // but still try to copy files into a half-populated dir.
+    if (fs.existsSync(defaultProfile) && !profileLooksPopulated) {
+      this.logStream.append(
+        "cdp",
+        `Existing CDP profile at ${defaultProfile} looks empty (no Cookies/Login Data). Re-copying from your Chrome profile to restore sessions.`,
+      );
+      try {
+        fs.rmSync(defaultProfile, { recursive: true, force: true });
+      } catch (err) {
+        this.logStream.append("cdp:stderr", `Could not remove stale profile dir: ${err.message}`);
+      }
     }
 
     const source = locateUserChromeProfile();
@@ -557,6 +607,20 @@ class CdpManager {
     const sourceDefault = path.join(source, "Default");
     if (fs.existsSync(sourceDefault)) {
       copyDirSelective(sourceDefault, defaultProfile, PROFILE_STRIP_DIRS);
+    } else {
+      // Some Chrome installs use "Profile 1", "Profile 2", etc. instead of
+      // "Default". As a fallback, copy the first "Profile *" dir we find.
+      const profileDirs = fs.readdirSync(source, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && /^Profile\b/.test(e.name))
+        .map((e) => e.name);
+      if (profileDirs.length > 0) {
+        const sourceProfile = path.join(source, profileDirs[0]);
+        this.logStream.append(
+          "cdp",
+          `Default profile not found; copying ${profileDirs[0]} instead.`,
+        );
+        copyDirSelective(sourceProfile, defaultProfile, PROFILE_STRIP_DIRS);
+      }
     }
     // Copy "Local State" — needed for encrypted cookie decryption.
     const localState = path.join(source, "Local State");
@@ -564,7 +628,18 @@ class CdpManager {
       fs.copyFileSync(localState, path.join(this.cdpProfileDir, "Local State"));
     }
 
-    this.logStream.append("cdp", "Profile copy complete. Your existing logins are preserved.");
+    // Verify the copy actually produced a Cookies file. If not, the user's
+    // source profile might be locked (Chrome is running) and we should warn
+    // them — the CDP Chrome will not have any sessions until they close
+    // Chrome and re-launch the desktop app.
+    if (!fs.existsSync(cookiesFile)) {
+      this.logStream.append(
+        "cdp:stderr",
+        "Profile copy did not produce a Cookies file. If Chrome is currently running, close it and click Restart Chrome so the profile (with your logins) can be copied cleanly.",
+      );
+    } else {
+      this.logStream.append("cdp", "Profile copy complete. Your existing logins are preserved.");
+    }
   }
 
   // ─── Health check ─────────────────────────────────────────────────────────
@@ -650,22 +725,65 @@ function locateChrome() {
 }
 
 function locateUserChromeProfile() {
+  const candidates = [];
+
   if (process.platform === "win32") {
-    return path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "User Data");
+    candidates.push(path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "User Data"));
+    // Chrome Beta / Canary / Dev variants
+    candidates.push(path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome Beta", "User Data"));
+    candidates.push(path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome SxS", "User Data"));
+  } else if (process.platform === "darwin") {
+    candidates.push(path.join(os.homedir(), "Library", "Application Support", "Google", "Chrome"));
+    candidates.push(path.join(os.homedir(), "Library", "Application Support", "Google", "Chrome Beta"));
+    candidates.push(path.join(os.homedir(), "Library", "Application Support", "Chromium"));
+  } else {
+    // Linux
+    candidates.push(path.join(os.homedir(), ".config", "google-chrome"));
+    candidates.push(path.join(os.homedir(), ".config", "google-chrome-beta"));
+    candidates.push(path.join(os.homedir(), ".config", "chromium"));
+    candidates.push(path.join(os.homedir(), ".config", "chrome"));
+    // Snap installs use ~/snap/chromium/common/chromium
+    candidates.push(path.join(os.homedir(), "snap", "chromium", "common", "chromium"));
+    candidates.push(path.join(os.homedir(), "snap", "google-chrome", "common", "google-chrome"));
   }
-  if (process.platform === "darwin") {
-    return path.join(os.homedir(), "Library", "Application Support", "Google", "Chrome");
+
+  // Prefer the first candidate that has a populated Default (or Profile N)
+  // dir — i.e., one that actually contains a Cookies file. A bare config
+  // dir without cookies is useless to us (the whole point of copying is to
+  // inherit the user's authenticated sessions).
+  for (const c of candidates) {
+    if (!c || !fs.existsSync(c)) continue;
+    if (profileHasCookies(c)) return c;
   }
-  // Linux
-  const linuxPaths = [
-    path.join(os.homedir(), ".config", "google-chrome"),
-    path.join(os.homedir(), ".config", "chromium"),
-    path.join(os.homedir(), ".config", "chrome"),
-  ];
-  for (const c of linuxPaths) {
-    if (fs.existsSync(c)) return c;
+
+  // Fall back to the first existing candidate even if it has no Cookies
+  // file (better than returning null — let ensureCdpProfile() warn the
+  // user that no sessions were carried over).
+  for (const c of candidates) {
+    if (c && fs.existsSync(c)) return c;
   }
   return null;
+}
+
+// Returns true if the given Chrome user-data-dir has a Default (or
+// Profile N) directory that contains a Cookies file. Used by
+// locateUserChromeProfile() to prefer profiles that actually have
+// authenticated sessions.
+function profileHasCookies(userdataDir) {
+  try {
+    const candidates = ["Default"];
+    const entries = fs.readdirSync(userdataDir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.isDirectory() && /^Profile\b/.test(e.name)) {
+        candidates.push(e.name);
+      }
+    }
+    for (const name of candidates) {
+      const cookiesFile = path.join(userdataDir, name, "Cookies");
+      if (fs.existsSync(cookiesFile)) return true;
+    }
+  } catch (_) {}
+  return false;
 }
 
 // Recursively copy a directory but skip the named subdirs (relative to the

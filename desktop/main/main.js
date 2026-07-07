@@ -91,7 +91,13 @@ app.whenReady().then(async () => {
   // 2. Wire up managers.
   logStream = new LogStream({ maxLines: 5000 });
   const serverManager = new ServerManager({ serverRoot: envBootstrap.resolvedServerRoot, dataRoot: DATA_ROOT, logStream });
-  const cdpManager = new CdpManager({ dataRoot: DATA_ROOT, logStream });
+  // Pass `serverRoot` so the CDP profile directory lives INSIDE the
+  // engine source tree — the same path used by
+  // gtss-growth-engine/scripts/launch-chrome.sh. Without this, the desktop
+  // launcher and the engine's bash fallback would use DIFFERENT profile
+  // directories, and the fallback Chrome would launch with no sessions
+  // (the regression the user reported).
+  const cdpManager = new CdpManager({ dataRoot: DATA_ROOT, logStream, serverRoot: envBootstrap.resolvedServerRoot });
   lifecycle = new Lifecycle({ serverManager, cdpManager, envBootstrap, logStream });
 
   firstRun = new FirstRun({ envBootstrap });

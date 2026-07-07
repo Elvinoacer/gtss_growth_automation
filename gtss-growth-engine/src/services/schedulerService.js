@@ -685,20 +685,42 @@ function resolveMediaFilePath(mediaPath) {
   if (!mediaPath) return null;
 
   const candidates = [];
+
+  // ── Absolute filesystem path (e.g., from the asset library's file_path) ──
+  // The asset library now stores the absolute `file_path` (set by multer at
+  // upload time) directly in posts.media_path, so this is the common case
+  // for "use my library assets" posts. We just verify it exists.
   if (path.isAbsolute(mediaPath)) {
     candidates.push(path.resolve(mediaPath));
+    // Some legacy posts may have stored an absolute-looking "/uploads/..."
+    // URL (which on Linux is path.isAbsolute()===true). For those, also
+    // try resolving against the public/ dir.
+    if (mediaPath.startsWith("/uploads/") || mediaPath.startsWith("/uploads")) {
+      candidates.push(
+        path.resolve(__dirname, "..", "..", "public", `.${mediaPath}`),
+      );
+      candidates.push(
+        path.resolve(__dirname, "..", "..", "public", mediaPath),
+      );
+    }
+  } else if (mediaPath.startsWith("/uploads/")) {
+    // Relative URL like "/uploads/library/foo.jpg" — resolve against
+    // the server's public/ dir.
     candidates.push(
       path.resolve(__dirname, "..", "..", "public", `.${mediaPath}`),
     );
-  } else if (mediaPath.startsWith("/uploads/")) {
     candidates.push(
-      path.resolve(__dirname, "..", "..", "public", `.${mediaPath}`),
+      path.resolve(__dirname, "..", "..", "public", mediaPath),
     );
   } else if (mediaPath.startsWith("uploads/")) {
     candidates.push(path.resolve(__dirname, "..", "..", "public", mediaPath));
   } else {
+    // Bare filename or unknown shape — try a few reasonable spots.
     candidates.push(path.resolve(mediaPath));
     candidates.push(path.resolve(UPLOADS_DIR, path.basename(mediaPath)));
+    candidates.push(
+      path.resolve(__dirname, "..", "..", "public", "uploads", path.basename(mediaPath)),
+    );
   }
 
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;

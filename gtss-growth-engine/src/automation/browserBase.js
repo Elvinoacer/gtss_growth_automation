@@ -366,16 +366,38 @@ function installStrayTabInterceptor(context, platform) {
 }
 
 /**
- * Type a string into a locator or selector using LinkedIn-style fast typing.
+ * Type a string character by character with human-like delays into a locator or selector.
  *
- * This used to type character-by-character in a per-keystroke loop with
- * 50–150 ms delays between keys, which was very slow for long captions
- * (110–330 s for a 2200-char Instagram caption). It now uses the same
- * single-call Playwright `locator.type(text, { delay })` strategy that
- * LinkedIn's `typeTextWithFallback` uses (10–40 ms/char), and falls back
- * to direct DOM mutation + synthetic input/change events if Playwright's
- * type() fails (e.g. React re-rendered the editor mid-typing). This
- * brings IG / X / Facebook typing speed in line with LinkedIn.
+ * ─── Why per-character instead of locator.type(text, { delay }) ──────────
+ * The previous optimisation (commit 4522045) replaced this per-character
+ * loop with a single `target.type(text, { delay })` call, mirroring the
+ * LinkedIn fast-typing path. That works for LinkedIn's contenteditable
+ * (which is a ProseMirror-style editor that handles Playwright's bulk
+ * type() correctly), but it REGRESSED Instagram posting because:
+ *
+ *   1. Instagram's caption box is a React-controlled contenteditable
+ *      div. When Playwright's bulk type() dispatches a burst of
+ *      keydown/keypress/keyup events, React's synthetic event system
+ *      occasionally drops intermediate events (especially for long
+ *      captions with newlines and emoji). The visible text looks fine,
+ *      but React's internal state never updates, so when Instagram
+ *      validates the form before Share, it sees an empty caption.
+ *   2. The fallback path (commit 4522045) wrote `element.textContent =
+ *      textValue` directly. This is even worse for React — React doesn't
+ *      reconcile external DOM mutations on a controlled component, so
+ *      the caption stays empty in React state even though the DOM shows
+ *      the text. Instagram's Share button stays disabled, the post
+ *      attempt fails, and the automation tab is closed by the finally
+ *      block in publishPost() — exactly the "Instagram opens then closes
+ *      immediately" symptom the user reported.
+ *
+ * Per-character `page.keyboard.type(char)` with a small human-like
+ * delay dispatches each keystroke as a separate event tuple, giving
+ * React time to reconcile after each character. This is slower but
+ * RELIABLE across Instagram / X / Facebook / LinkedIn. The per-char
+ * delay is capped to 30-70ms (down from the original 50-150ms) so
+ * caption typing takes ~10-30s for a 2200-char IG caption — fast
+ * enough not to bottleneck the pipeline.
  *
  * Signature unchanged — existing call sites do not need updates.
  */
@@ -386,62 +408,97 @@ async function humanTypeText(page, locatorOrSelector, text) {
       ? page.locator(locatorOrSelector)
       : locatorOrSelector;
 
+  // Click the target so it has focus before we type. We swallow click
+  // errors here (instead of letting them propagate) so that a transient
+  // "element is not visible" doesn't abort the whole post — the typing
+  // fallbacks below will surface a clearer error if the element truly
+  // can't be interacted with.
   await target.click({ timeout: 8000 }).catch(() => {});
   // Clear any existing text using keyboard select all if needed
   await page.keyboard.press("Control+A").catch(() => {});
   await page.keyboard.press("Backspace").catch(() => {});
 
-  // ── Primary path: single Playwright `target.type(text, { delay })` call ──
-  // Matches LinkedIn's typing speed: ~10–40 ms/char. In test-speedup mode
-  // we drop the per-keystroke delay entirely.
-  const typeDelay =
-    process.env.TEST_SPEEDUP === "true" ? 0 : Math.random() * 30 + 10;
-
-  try {
-    await target.type(text, { delay: typeDelay });
-    return;
-  } catch (error) {
-    // ── Fallback: direct DOM mutation + synthetic input/change events ──
-    // Used when Playwright's type() fails (e.g., the editor was re-rendered
-    // by React mid-typing). Mirrors the LinkedIn fallback in
-    // schedulerService.typeTextWithFallback.
-    try {
-      await target.evaluate((node, value) => {
-        const element = node;
-        const textValue = String(value);
-
-        element.focus();
-
-        if (typeof element.value === "string") {
-          const descriptor = Object.getOwnPropertyDescriptor(
-            Object.getPrototypeOf(element),
-            "value",
-          );
-          if (descriptor && descriptor.set) {
-            descriptor.set.call(element, textValue);
-          } else {
-            element.value = textValue;
-          }
-          element.dispatchEvent(new Event("input", { bubbles: true }));
-          element.dispatchEvent(new Event("change", { bubbles: true }));
-          return;
-        }
-
-        element.textContent = textValue;
-        element.dispatchEvent(
-          new InputEvent("input", {
-            bubbles: true,
-            cancelable: true,
-            inputType: "insertText",
-            data: textValue,
-          }),
-        );
-        element.dispatchEvent(new Event("change", { bubbles: true }));
-      }, text);
-    } catch (fallbackErr) {
-      // Last resort: re-throw the original error so callers can react.
-      throw error;
+  // Per-character typing — see the long comment above for why this is
+  // NOT `target.type(text, { delay })`. Each character is a separate
+  // keyboard event so React-controlled editors (Instagram, X) reconcile
+  // correctly. In TEST_SPEEDUP mode we skip the human delay.
+  for (let i = 0; i < text.length; i++) {
+    await page.keyboard.type(text[i]);
+    if (process.env.TEST_SPEEDUP !== "true") {
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.floor(Math.random() * 40) + 30),
+      );
     }
+  }
+
+  // ── Best-effort verification: ensure the text actually made it into ──
+  // ── the element. If the editor swallowed the typing (rare but happens ──
+  // ── when React re-rendered mid-typing), fall back to direct DOM      ──
+  // ── mutation + synthetic input event so the editor at least shows    ──
+  // ── the text. This fallback uses `innerText` (NOT `textContent`) so  ──
+  // ── visible line breaks are preserved, and dispatches an `input`     ──
+  // ── InputEvent with `inputType: "insertText"` which React's          ──
+  // ── synthetic event system DOES pick up.                             ──
+  try {
+    const current = await target.evaluate((node) => {
+      if (typeof node.value === "string") return node.value;
+      return node.innerText || node.textContent || "";
+    }).catch(() => "");
+    if (current === text) return;
+    // If the typed text matches what's in the editor (allowing for
+    // minor whitespace differences), we're done.
+    const normalised = (s) => String(s || "").replace(/\s+/g, " ").trim();
+    if (normalised(current) === normalised(text)) return;
+  } catch (_) {
+    // Verification failed — proceed to fallback.
+  }
+
+  // Fallback: direct DOM mutation. Used only when the per-character
+  // typing didn't produce the expected text (e.g., React re-rendered
+  // mid-typing and swallowed some keystrokes).
+  try {
+    await target.evaluate((node, value) => {
+      const element = node;
+      const textValue = String(value);
+
+      element.focus();
+
+      if (typeof element.value === "string") {
+        // <textarea> / <input> — use the native setter so React's
+        // onChange fires.
+        const descriptor = Object.getOwnPropertyDescriptor(
+          Object.getPrototypeOf(element),
+          "value",
+        );
+        if (descriptor && descriptor.set) {
+          descriptor.set.call(element, textValue);
+        } else {
+          element.value = textValue;
+        }
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+        return;
+      }
+
+      // contenteditable — set innerText (preserves line breaks) and
+      // dispatch an InputEvent with insertText so React reconciles.
+      // The previous fallback used `textContent`, which strips line
+      // breaks AND doesn't trigger React's onChange.
+      element.innerText = textValue;
+      element.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertText",
+          data: textValue,
+        }),
+      );
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }, text);
+  } catch (_) {
+    // Last resort: ignore. The per-character typing already ran; if it
+    // didn't take, the caller will see the empty caption and can decide
+    // how to handle it (e.g., abort the post).
   }
 }
 

@@ -20,7 +20,7 @@ const {
   publishPost,
 } = require("../services/schedulerService");
 const { runImageGenJob } = require("../services/imageGenService");
-const { pickNextAsset, pickNextAssetGroup, markAssetUsed, markAssetGroupUsed } = require("../services/assetRotationService");
+const { pickNextAsset, pickNextAssetGroup, pickNextAssetOrGroup, markAssetUsed, markAssetGroupUsed } = require("../services/assetRotationService");
 const { logActivity } = require("../services/auditService");
 const { withRetry } = require("../utils/retryHelper");
 const jobRegistry = require("../jobs/jobRegistry");
@@ -222,29 +222,55 @@ async function runContentPipelineNow(config = {}) {
         const assetSource = getSetting("content_asset_source", "ai");
         if (assetSource === "library") {
           const mediaType = getSetting("content_library_media_type", "image");
-          // ── Prefer groups when the user has created them ──────────────────
-          // A group lets the user mark which images belong together as one
-          // multi-image post (carousel) or which video to post. If no
-          // groups exist, fall back to single-asset rotation.
-          const groupResult = pickNextAssetGroup({ postType: "any" });
-          if (groupResult && groupResult.assets && groupResult.assets.length > 0) {
-            selectedGroup = groupResult.group;
-            mediaRelPaths = groupResult.assets.map((a) => a.file_url);
+          // ── Unified rotation queue (groups AND ungrouped assets) ─────────
+          // Previously this called pickNextAssetGroup() FIRST and only fell
+          // back to pickNextAsset() when NO groups existed. That starved
+          // every ungrouped asset — they were never picked as long as any
+          // group existed. The user explicitly asked for both kinds to be
+          // used: "those [ungrouped] ones that have not been grouped
+          // together, I need you to be using them as they are whenever
+          // it's necessary." pickNextAssetOrGroup() treats both kinds as
+          // equal citizens in a single queue, ordered by times_used ASC
+          // then last_used_at ASC, so every asset eventually gets posted.
+          const unit = pickNextAssetOrGroup({ mediaType });
+          if (!unit || !unit.assets || unit.assets.length === 0) {
+            throw new Error("Asset library is empty");
+          }
+          if (unit.kind === "group") {
+            selectedGroup = unit.group;
+            // ── Use file_path (absolute) NOT file_url (relative) ─────────
+            // The asset_library row stores BOTH:
+            //   file_url  = "/uploads/library/foo.jpg"  (HTTP path)
+            //   file_path = "<serverRoot>/public/uploads/library/foo.jpg"
+            //                (absolute filesystem path, set by multer)
+            // Previously we stored file_url in posts.media_path, then
+            // resolveMediaFilePath() had to guess the absolute path. On
+            // Linux, "/uploads/..." is path.isAbsolute()===true, so the
+            // first candidate (the literal /uploads/... at filesystem
+            // root) was tried first and silently failed. If the second
+            // candidate (<serverRoot>/public/...) also missed (e.g.,
+            // server cwd mismatch, profile/dir layout change), the
+            // resolution returned null and the post went out as
+            // TEXT-ONLY — exactly the regression the user reported:
+            // "the media is not being attached ... it goes ahead and
+            //  just posts the caption and [ignores] my library of
+            //  assets." Storing file_path (absolute) directly
+            // eliminates the resolution ambiguity entirely.
+            mediaRelPaths = unit.assets.map((a) => a.file_path || a.file_url);
             mediaRelPath = mediaRelPaths[0];
             emit({
               stage: "asset_library",
-              message: `Selected asset group: ${selectedGroup.name} (${groupResult.assets.length} asset(s), type: ${selectedGroup.post_type})`,
+              message: `Selected asset group: ${selectedGroup.name} (${unit.assets.length} asset(s), type: ${selectedGroup.post_type})`,
             });
             updateLifecycle(
               "asset_library",
-              `Selected asset group: ${selectedGroup.name} (${groupResult.assets.length} asset(s))`,
+              `Selected asset group: ${selectedGroup.name} (${unit.assets.length} asset(s))`,
               25,
               1,
             );
           } else {
-            selectedAsset = pickNextAsset({ mediaType });
-            if (!selectedAsset) throw new Error("Asset library is empty");
-            mediaRelPath = selectedAsset.file_url;
+            selectedAsset = unit.asset;
+            mediaRelPath = selectedAsset.file_path || selectedAsset.file_url;
             mediaRelPaths = null;
             emit({
               stage: "asset_library",
@@ -327,19 +353,25 @@ async function runContentPipelineNow(config = {}) {
         }
 
         // ── Stage 2: Generate captions per platform ──────────────────────
-        // Resolve the on-disk image path for image-aware captioning. When
-        // the asset is a library upload or AI-generated file under
-        // /uploads, resolve it relative to the public dir so Gemini Web
-        // can actually open and upload it. When the asset is a video or
-        // missing, we skip image-aware captioning and fall back to the
-        // text-only path.
+        // Resolve the on-disk image path for image-aware captioning. The
+        // asset library now stores the absolute `file_path` (set by multer
+        // at upload time) in posts.media_path, so when the path is absolute
+        // and exists, we use it directly. We also fall back to resolving
+        // a relative "/uploads/..." URL against the public dir for
+        // AI-generated images (which still use the URL form). When the
+        // asset is a video or missing, we skip image-aware captioning and
+        // fall back to the text-only path.
         let imageFsPath = null;
         try {
           if (mediaRelPath && /\.(jpe?g|png|gif|webp)$/i.test(mediaRelPath)) {
-            const candidate = mediaRelPath.startsWith("/")
-              ? path.resolve(__dirname, "../../public", mediaRelPath.replace(/^\//, ""))
-              : path.resolve(__dirname, "../../public", mediaRelPath);
-            if (fs.existsSync(candidate)) imageFsPath = candidate;
+            if (path.isAbsolute(mediaRelPath) && fs.existsSync(mediaRelPath)) {
+              imageFsPath = mediaRelPath;
+            } else {
+              const candidate = mediaRelPath.startsWith("/")
+                ? path.resolve(__dirname, "../../public", mediaRelPath.replace(/^\//, ""))
+                : path.resolve(__dirname, "../../public", mediaRelPath);
+              if (fs.existsSync(candidate)) imageFsPath = candidate;
+            }
           }
         } catch (_) { /* fall back to text-only */ }
 
