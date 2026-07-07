@@ -351,8 +351,6 @@ CREATE TABLE IF NOT EXISTS asset_library (
 
 CREATE INDEX IF NOT EXISTS idx_asset_library_media_type ON asset_library(media_type);
 CREATE INDEX IF NOT EXISTS idx_asset_library_times_used ON asset_library(times_used ASC);
-CREATE INDEX IF NOT EXISTS idx_asset_library_group_id ON asset_library(group_id);
-
 CREATE TABLE IF NOT EXISTS asset_groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
