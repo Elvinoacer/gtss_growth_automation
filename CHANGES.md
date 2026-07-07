@@ -3,6 +3,221 @@
 This document summarises the edits made to the project in this pass. The
 `.git` directory is untouched.
 
+## 0. Pipeline control buttons — robust & consistent across all pipelines
+
+**Problem:** The 7 pipeline control buttons (Start, Restart, Pause, Stop,
+Retry Failed Step, Resume from Checkpoint, Force Clear) were not working
+effectively. Symptoms included: buttons appearing to do nothing, state
+getting stuck on "Running" forever, the user having to click multiple
+buttons in sequence (Force Clear → then Retry → then Resume) to recover
+from a stuck run, and inconsistent behavior across the 3 pipelines
+(outreach, content, dm_check).
+
+**Root causes identified & fixed:**
+
+### Backend — `src/services/pipelineStateService.js`
+
+1. **New `isExecutionProgressing(pipelineId, staleMs)` helper** — returns
+   true when the active execution's DB row was updated recently (within
+   `staleMs`, default 60s). Used by Run/Restart/Retry/Resume to decide
+   whether to auto-clear a stuck execution (when not progressing) or
+   refuse with a clear error (when genuinely working). This is the
+   middle ground between "always refuse" (the original bug) and "always
+   auto-clear" (which can interrupt real work).
+
+2. **New `hasStuckDbRow(pipelineId)` helper** — returns true if the DB
+   has any rows in a transient state (running/paused/resuming/stopping/
+   retrying) for this pipeline. Used by Restart to decide whether a
+   preemptive sweep is needed.
+
+3. **`forceClearExecution` improvements:**
+   - Sets `ABORT_FLAG` BEFORE killing jobRegistry jobs, so cooperative
+     runners get a chance to throw on their next `throwIfAborted` check.
+   - New `keepPauseIntent` option — when true, preserves the schedule-
+     level pause flag (used by the Stop endpoint, where the user's
+     intent is "stop the current run" not "unpause the schedule").
+   - Releases the content pipeline DB lock (`content_pipeline_lock`)
+     so the content pipeline can be re-run after a stuck state.
+
+4. **`requestResume` fix** — removed the racy `setTimeout` that
+   transitioned from `resuming` to `running` after 500ms. The runner's
+   own `awaitResume` loop handles the transition. The previous code
+   could leave the execution stuck in `resuming` if the runner had
+   already finished its current stage before the timer fired.
+
+5. **`canStart` fix** — a disabled schedule (`enabled=0`) no longer
+   blocks manual runs. The cron scheduler won't fire for disabled
+   pipelines, but the user can still click Run/Restart to trigger a
+   one-off manual run. This was the original "buttons don't work"
+   complaint — Run was greyed out for disabled pipelines.
+
+### Backend — `src/jobs/pipelineScheduler.js`
+
+6. **New `runExistingExecution(pipelineId, executionId, trigger, limits, options)`
+   public API** — re-runs an EXISTING execution (used by retry-stage
+   and resume-from-checkpoint) without creating a new
+   `pipeline_executions` row. Replaces the previous private-API dance
+   of calling `__getRunner` + `__setActive` directly from the routes.
+   Handles the `__setActive` call and the RUNNING transition
+   internally.
+
+7. **`runPipelineWithLifecycle` improvement** — uses the new
+   `isExecutionProgressing` heuristic to decide whether to auto-clear
+   a stuck execution or refuse with a clear error. Previously it
+   always auto-cleared, which could interrupt a runner that was just
+   slow but actually working.
+
+8. **`dm_check` runner now registers with `jobRegistry`** — gives
+   force-clear / stop real "teeth" for the dm_check pipeline. Without
+   this, a stuck Instagram scan could only be killed by restarting the
+   server. Now the abort signal propagates via the jobRegistry's
+   AbortController.
+
+### Backend — `src/routes/pipelines.js`
+
+9. **`POST /:id/run`** — refuses with a clear 409 error when the
+   active execution is genuinely progressing (instead of auto-clearing
+   it). Auto-clears only when the execution is stuck (no progress for
+   >60s). Returns a `hint` field so the frontend can show a one-click
+   recovery button.
+
+10. **`POST /:id/restart`** — increased the stop grace period from
+    600ms to 1.5s so cooperative runners have more time to notice the
+    abort flag. Uses `hasStuckDbRow` to decide whether a preemptive
+    sweep is needed (instead of always force-clearing).
+
+11. **`POST /:id/pause`** — improved response messages and state
+    tracking. Sets `current_state = 'paused'` on the schedule row.
+
+12. **`POST /:id/resume`** — no longer overwrites `last_status` with
+    the non-existent 'resumed' state. Either keeps the existing
+    `last_status` (schedule-level resume) or lets the runner's
+    `transitionExecution` handle it (active-execution resume).
+
+13. **`POST /:id/stop`** — improved response messages and state
+    tracking. Clears `current_execution_id` and sets `current_state =
+    'idle'` on the schedule row.
+
+14. **`POST /:id/retry-stage`** — rewritten to use the public
+    `runExistingExecution` helper instead of the private `__getRunner`
+    + `__setActive` dance. Now accepts 'stopped' executions (not just
+    'failed') for retry. Returns clear 409 errors with `hint` fields
+    when the execution is currently running/paused or when another
+    execution is making progress.
+
+15. **`POST /:id/resume-from-checkpoint`** — rewritten to use the
+    public `runExistingExecution` helper. Returns clear 409 errors
+    when the target execution is already the active execution, when
+    another execution is progressing, or when there's nothing to
+    resume.
+
+16. **`POST /:id/force-clear`** — now accepts `keep_pause_intent` in
+    the body to preserve the pause flag (used when the user's intent
+    is "stop the current run" not "unpause the schedule"). Releases
+    the content pipeline DB lock.
+
+17. **`buildRuntimeState`** — `can_run` no longer requires
+    `enabled=true` (manual runs are allowed on disabled schedules).
+    `can_pause` no longer requires `enabled=true` (pause is always
+    available so the user can pause a long-running execution that
+    started before the schedule was disabled).
+
+### Backend — `src/pipeline/pipelineRunner.js`
+
+18. **Catch block now ALWAYS calls `markExecutionFailed`** — the
+    previous code only marked failed if `err.failedStage` was set,
+    which left the execution stuck in `running` state when the runner
+    threw without a `failedStage` (e.g., an abort signal thrown by
+    `throwIfAborted`). `markExecutionFailed` is a no-op if the
+    execution is already STOPPED, so this is safe.
+
+### Frontend — `public/js/pipelines.js`
+
+19. **`withActionFeedback`** — no longer reloads pipelines on error
+    (the state hasn't changed, so reloading just flickers the UI).
+    Only reloads on success. On error, patches the card back to its
+    pre-optimistic state.
+
+20. **Split `pausePipeline` into `pausePipeline` + `resumePipeline`**
+    — the previous `pausePipeline(id, paused, btn)` signature was
+    confusing (the `paused` parameter was the action, not the state).
+    The new functions are clearer and the call sites have been
+    updated.
+
+21. **`showPipelineActionError`** — now reads the `hint` field from
+    the backend error response and renders a one-click recovery
+    button. For example, if the error hint is `another_running`, the
+    banner shows a "Force Clear & Retry" button that the user can
+    click to recover in one step.
+
+22. **`resumeFromCheckpoint`** — removed the `confirm()` dialog. This
+    is a non-destructive recovery action, and the confirm dialog was
+    part of the original "buttons don't work" complaint (the user
+    would click, see a dialog, click OK, and then nothing visible
+    would happen because the action was async).
+
+23. **`restartPipeline`** — only shows the `confirm()` dialog when
+    there's an active execution that would be killed. If the pipeline
+    is idle, restart is equivalent to Run Now — no need to confirm.
+
+### Frontend — `public/js/app.js`
+
+24. **`fetchJSON`** — now attaches the full response body and `hint`
+    field to the thrown error, so callers can inspect structured error
+    fields. The previous code discarded everything except the message
+    string. Also handles non-JSON responses gracefully (instead of
+    crashing on `JSON.parse`).
+
+### Tests — `test/pipelineControls.test.js` (new file)
+
+25. **12 unit tests** covering the state machine transitions that the
+    7 control buttons depend on:
+    - `forceClearExecution` marks stuck DB rows as failed
+    - `forceClearExecution` clears the pause flag by default
+    - `forceClearExecution` preserves the pause flag with
+      `keepPauseIntent: true`
+    - `forceClearExecution` releases the content pipeline DB lock
+    - `canStart` allows manual runs on disabled schedules
+    - `canStart` refuses when paused (unless `force: true`)
+    - `hasStuckDbRow` detects transient-state rows
+    - `isExecutionProgressing` returns true for recently-updated rows
+    - `requestResume` clears the pause flag at the schedule level
+    - `requestStop` sweeps stuck DB rows when no in-memory runner
+    - `createExecution` refuses when an active execution exists
+    - `markExecutionFailed` does not overwrite a STOPPED state
+
+    All 12 tests pass. The tests mock the database and socket layer so
+    they can run without `better-sqlite3` installed.
+
+**Files modified:**
+- `gtss-growth-engine/src/services/pipelineStateService.js`
+- `gtss-growth-engine/src/jobs/pipelineScheduler.js`
+- `gtss-growth-engine/src/routes/pipelines.js`
+- `gtss-growth-engine/src/pipeline/pipelineRunner.js`
+- `gtss-growth-engine/public/js/pipelines.js`
+- `gtss-growth-engine/public/js/app.js`
+
+**Files added:**
+- `gtss-growth-engine/test/pipelineControls.test.js`
+
+**How to verify:**
+
+```bash
+cd gtss-growth-engine
+node --test test/pipelineControls.test.js
+# Expected: 12 tests, 12 pass, 0 fail
+```
+
+The same robust pattern is now applied consistently across all 3
+pipelines (outreach, content, dm_check):
+- All 3 register with `jobRegistry` so force-clear/stop have real teeth.
+- All 3 use the same `runPipelineWithLifecycle` / `runExistingExecution`
+  helpers for state management.
+- All 3 respect the schedule-level pause flag and the in-memory
+  ABORT_FLAGS / PAUSE_FLAGS.
+- All 3 are covered by the same 7 control endpoints in
+  `routes/pipelines.js`.
+
 ## 1. Pipelines page UI — real-time status & better controls
 
 **Files:**

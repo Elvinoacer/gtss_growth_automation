@@ -13,6 +13,7 @@
  */
 const { getDb } = require('../db/database');
 const cronRegistry = require('./cronRegistry');
+const jobRegistry = require('./jobRegistry');
 const { runFullPipeline } = require('../pipeline/pipelineRunner');
 const { runContentPipeline } = require('../pipeline/contentPipeline');
 const { detectReplies } = require('../services/replyDetector');
@@ -72,6 +73,19 @@ const RUNNERS = {
     const platforms = Array.isArray(limits.platforms) && limits.platforms.length > 0
       ? limits.platforms
       : ['instagram'];
+
+    // Register the job so force-clear / stop can abort it via the
+    // jobRegistry. Without this, the dm_check runner has no
+    // AbortController and force-clear's stopJobsByPipeline finds nothing
+    // to abort — so a stuck Instagram scan can only be killed by
+    // restarting the server.
+    const controller = jobRegistry.startJob(jobId, {
+      pipelineId: 'dm_check',
+      type: 'dm_check',
+      stage: 'scan',
+    });
+    const signal = controller.signal;
+
     pipelineLogger.log({
       pipelineId: 'dm_check',
       executionId: jobId,
@@ -82,51 +96,60 @@ const RUNNERS = {
     });
 
     let repliesFound = 0;
-    for (const platform of platforms) {
-      if (pipelineState.isAborted(jobId)) break;
-      if (!isSessionValid(platform)) {
-        pipelineLogger.log({
-          pipelineId: 'dm_check',
-          executionId: jobId,
-          level: 'warn',
-          stage: 'platform',
-          message: `Skipping ${platform}: no valid session`,
-          context: { platform },
-        });
-        continue;
-      }
-      try {
-        if (platform === 'instagram') {
-          const result = await checkInbox({ prompt: limits.prompt });
-          repliesFound += result?.repliesFound || 0;
-        } else {
-          const result = await detectReplies(platform, () => {}, {
-            headless: true,
-            allowHeadlessSocial: true,
-            trace: false,
+    try {
+      for (const platform of platforms) {
+        if (pipelineState.isAborted(jobId) || signal.aborted) break;
+        if (!isSessionValid(platform)) {
+          pipelineLogger.log({
+            pipelineId: 'dm_check',
+            executionId: jobId,
+            level: 'warn',
+            stage: 'platform',
+            message: `Skipping ${platform}: no valid session`,
+            context: { platform },
           });
-          repliesFound += result?.repliesFound || 0;
+          continue;
         }
-      } catch (err) {
-        pipelineLogger.log({
-          pipelineId: 'dm_check',
-          executionId: jobId,
-          level: 'error',
-          stage: 'platform',
-          message: `DM check failed on ${platform}: ${err.message}`,
-          context: { platform, error: err.message },
-        });
+        try {
+          if (platform === 'instagram') {
+            const result = await checkInbox({ prompt: limits.prompt });
+            repliesFound += result?.repliesFound || 0;
+          } else {
+            const result = await detectReplies(platform, () => {}, {
+              headless: true,
+              allowHeadlessSocial: true,
+              trace: false,
+            });
+            repliesFound += result?.repliesFound || 0;
+          }
+        } catch (err) {
+          // If the abort signal fired, don't log it as an error —
+          // it's an expected consequence of the user clicking Stop.
+          if (pipelineState.isAborted(jobId) || signal.aborted) break;
+          pipelineLogger.log({
+            pipelineId: 'dm_check',
+            executionId: jobId,
+            level: 'error',
+            stage: 'platform',
+            message: `DM check failed on ${platform}: ${err.message}`,
+            context: { platform, error: err.message },
+          });
+        }
       }
-    }
 
-    pipelineLogger.log({
-      pipelineId: 'dm_check',
-      executionId: jobId,
-      level: 'success',
-      stage: 'complete',
-      message: 'DM inbox checker completed',
-      context: { repliesFound },
-    });
+      pipelineLogger.log({
+        pipelineId: 'dm_check',
+        executionId: jobId,
+        level: pipelineState.isAborted(jobId) || signal.aborted ? 'warn' : 'success',
+        stage: 'complete',
+        message: pipelineState.isAborted(jobId) || signal.aborted
+          ? 'DM inbox checker aborted by user'
+          : 'DM inbox checker completed',
+        context: { repliesFound },
+      });
+    } finally {
+      jobRegistry.finishJob(jobId);
+    }
   },
 };
 
@@ -244,17 +267,36 @@ function computeNextRun(cronExpression, fromDate = new Date()) {
  * @param {Object} [options] - { executionId, resumeFrom, keywords }
  */
 async function runPipelineWithLifecycle(pipelineId, trigger, limits, options = {}) {
-  if (!pipelineState.canStart(pipelineId, { force: trigger === 'manual' && options.force })) {
+  // `force: true` means "auto-clear any stuck execution before running".
+  // We only auto-clear when the active execution is NOT making progress
+  // (i.e., genuinely stuck). If it IS progressing, we refuse with a clear
+  // error so the user doesn't accidentally interrupt real work.
+  const wantsForce = trigger === 'manual' && options.force;
+  if (!pipelineState.canStart(pipelineId, { force: wantsForce })) {
     const active = pipelineState.getActiveExecution(pipelineId);
-    const message = `Pipeline "${pipelineId}" is already running${active ? ` (execution ${active.id})` : ''} or paused.`;
-    pipelineLogger.log({
-      pipelineId,
-      level: 'warn',
-      stage: 'scheduler',
-      message,
-      context: { trigger, activeExecutionId: active?.id || null },
-    });
-    throw new Error(message);
+    if (active && pipelineState.isExecutionProgressing(pipelineId)) {
+      // Genuinely running — refuse with a clear error.
+      const message = `Pipeline "${pipelineId}" is already running (execution ${active.id}). Wait for it to finish, or click Stop / Force Clear first.`;
+      pipelineLogger.log({
+        pipelineId,
+        level: 'warn',
+        stage: 'scheduler',
+        message,
+        context: { trigger, activeExecutionId: active.id },
+      });
+      throw new Error(message);
+    }
+    // Stuck — auto-clear and proceed.
+    if (active) {
+      pipelineLogger.log({
+        pipelineId,
+        level: 'warn',
+        stage: 'scheduler',
+        message: `Auto force-clearing stuck execution ${active.id} before ${trigger} run.`,
+        context: { trigger, activeExecutionId: active.id },
+      });
+      pipelineState.forceClearExecution(pipelineId, `${trigger} (auto-cleared stale execution)`);
+    }
   }
 
   const totalSteps = pipelineId === 'outreach' ? 4 : pipelineId === 'content' ? 4 : 1;
@@ -281,6 +323,67 @@ async function runPipelineWithLifecycle(pipelineId, trigger, limits, options = {
     return exec.id;
   } catch (err) {
     pipelineState.markExecutionFailed(exec.id, err, err.failedStage || null);
+    throw err;
+  }
+}
+
+/**
+ * Re-run an EXISTING execution (used by retry-stage and resume-from-checkpoint).
+ *
+ * Unlike runPipelineWithLifecycle, this does NOT create a new
+ * pipeline_executions row — it reuses the provided executionId. This is
+ * the public API that the retry-stage and resume-from-checkpoint routes
+ * should use, replacing the previous pattern of calling __getRunner +
+ * __setActive directly (which were private APIs and easy to misuse).
+ *
+ * @param {string} pipelineId
+ * @param {string} executionId - existing execution to re-run
+ * @param {string} trigger - 'retry' | 'resume'
+ * @param {Object} limits - limits_json bag
+ * @param {Object} [options] - { resumeFrom, keywords }
+ */
+async function runExistingExecution(pipelineId, executionId, trigger, limits, options = {}) {
+  if (!pipelineId || !executionId) {
+    throw new Error('pipelineId and executionId are required');
+  }
+  const runner = RUNNERS[pipelineId];
+  if (!runner) throw new Error(`No runner registered for pipeline "${pipelineId}"`);
+
+  // Re-arm the in-memory ACTIVE_EXECUTIONS map for this existing
+  // executionId. Without this, the runner's throwIfAborted / awaitResume
+  // / updateExecutionProgress calls would no-op (because the
+  // executionId is no longer in the map after the previous run
+  // terminated).
+  pipelineState.__setActive(pipelineId, executionId);
+
+  // Transition the execution row to 'running' so the UI shows the
+  // correct state. If the transition fails (e.g., the row is in a
+  // terminal state and the state machine refuses), we log and proceed
+  // anyway — the runner will still update progress.
+  try {
+    pipelineState.transitionExecution(executionId, pipelineState.STATES.RUNNING);
+  } catch (err) {
+    pipelineLogger.log({
+      pipelineId,
+      executionId,
+      level: 'warn',
+      stage: 'scheduler',
+      message: `Could not transition execution to RUNNING: ${err.message}`,
+      context: { trigger },
+    });
+  }
+
+  try {
+    await runner(limits, {
+      trigger,
+      executionId,
+      resumeFrom: options.resumeFrom,
+      keywords: options.keywords,
+    });
+    pipelineState.markExecutionCompleted(executionId);
+    return executionId;
+  } catch (err) {
+    pipelineState.markExecutionFailed(executionId, err, err.failedStage || null);
     throw err;
   }
 }
@@ -388,5 +491,6 @@ module.exports = {
   isWithinActiveHours,
   isPipelinePaused,
   runPipelineWithLifecycle,
+  runExistingExecution,
   __getRunner: (id) => RUNNERS[id],
 };

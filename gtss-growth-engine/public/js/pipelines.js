@@ -212,11 +212,14 @@ async function loadPipelines() {
  *   - If the error response includes a `hint` or `details`, render an
  *     inline banner above the affected pipeline card so the user can
  *     actually read what went wrong and what to do next.
+ *   - If the hint suggests a specific recovery action (e.g., 'force_clear',
+ *     'stop_first'), show a one-click button to take that action.
  */
 function showPipelineActionError(pipelineId, action, err) {
   // eslint-disable-next-line no-console
   console.error(`[pipelines] Action "${action}" failed for pipeline "${pipelineId}":`, err);
   const msg = err?.message || String(err);
+  const hint = err?.hint || err?.body?.hint || null;
   gtss.showToast(`${action} failed: ${msg}`, 'error', 8000);
   // Try to render an inline banner above the affected card.
   try {
@@ -227,15 +230,49 @@ function showPipelineActionError(pipelineId, action, err) {
       const banner = document.createElement('div');
       banner.className = 'pipeline-action-error-banner';
       banner.style.cssText = 'padding:10px 14px;border-radius:10px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.35);margin:8px 0;font-size:12px;color:#fca5a5;display:flex;align-items:flex-start;gap:10px;cursor:pointer';
+
+      // Map backend hints to one-click recovery actions.
+      let recoveryBtnHtml = '';
+      if (hint === 'force_clear' || hint === 'another_running' || hint === 'already_running') {
+        recoveryBtnHtml = `<button type="button" data-recovery-action="force-clear" data-pipeline="${pipelineId}" style="margin-top:6px;padding:5px 10px;border-radius:6px;border:1px solid rgba(248,113,113,0.4);background:rgba(248,113,113,0.18);color:#fca5a5;font-size:11px;font-weight:600;cursor:pointer">✕ Force Clear &amp; Retry</button>`;
+      } else if (hint === 'stop_first') {
+        recoveryBtnHtml = `<button type="button" data-recovery-action="stop" data-pipeline="${pipelineId}" style="margin-top:6px;padding:5px 10px;border-radius:6px;border:1px solid rgba(248,113,113,0.4);background:rgba(248,113,113,0.18);color:#fca5a5;font-size:11px;font-weight:600;cursor:pointer">■ Stop &amp; Retry</button>`;
+      } else if (hint === 'paused') {
+        recoveryBtnHtml = `<button type="button" data-recovery-action="resume" data-pipeline="${pipelineId}" style="margin-top:6px;padding:5px 10px;border-radius:6px;border:1px solid rgba(245,158,11,0.4);background:rgba(245,158,11,0.18);color:#fcd34d;font-size:11px;font-weight:600;cursor:pointer">▶ Resume &amp; Retry</button>`;
+      }
+
       banner.innerHTML = `
         <span style="font-size:14px;flex-shrink:0">⚠</span>
         <div style="flex:1;min-width:0">
           <div style="font-weight:700;margin-bottom:2px">${gtss.escapeHtml(action)} failed</div>
           <div style="word-break:break-word">${gtss.escapeHtml(msg)}</div>
+          ${recoveryBtnHtml}
         </div>
         <span style="font-size:18px;color:#64748b;flex-shrink:0;line-height:1">✕</span>
       `;
-      banner.addEventListener('click', () => banner.remove());
+      banner.addEventListener('click', (e) => {
+        // Don't dismiss if the user clicked the recovery button.
+        if (e.target.tagName === 'BUTTON') return;
+        banner.remove();
+      });
+      // Wire up the recovery button.
+      const recoveryBtn = banner.querySelector('[data-recovery-action]');
+      if (recoveryBtn) {
+        recoveryBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const recoveryAction = recoveryBtn.dataset.recoveryAction;
+          const recoveryPipelineId = recoveryBtn.dataset.pipeline;
+          banner.remove();
+          // Take the recovery action, then retry the original action.
+          if (recoveryAction === 'force-clear') {
+            forceClearPipeline(recoveryPipelineId, null);
+          } else if (recoveryAction === 'stop') {
+            stopPipeline(recoveryPipelineId, null);
+          } else if (recoveryAction === 'resume') {
+            resumePipeline(recoveryPipelineId, null);
+          }
+        });
+      }
       // Insert at the top of the card, just inside
       card.insertBefore(banner, card.firstChild);
       // Auto-remove after 30s
@@ -284,6 +321,12 @@ function showPipelineActionInfo(pipelineId, action, msg, type = 'info') {
  * Optimistic feedback: when the action is one of run/restart/resume/pause/stop,
  * we patch the affected card's action buttons immediately so the user sees
  * instant state feedback instead of waiting for the server round-trip.
+ *
+ * On success: reload pipelines immediately + again after 1s so the user
+ * sees the new state without waiting for the socket event.
+ *
+ * On error: do NOT reload (the state hasn't changed, so reloading would
+ * just flicker the UI). The error is shown via the inline banner.
  */
 async function withActionFeedback(pipelineId, action, btn, fetchPromise) {
   if (btn) {
@@ -307,13 +350,15 @@ async function withActionFeedback(pipelineId, action, btn, fetchPromise) {
       if (card) patchPipelineCardInPlace(card, pipeline, { preserveLoadingButton: btn });
     }
   }
+  let succeeded = false;
   try {
     const result = await fetchPromise;
     if (result && result.message) {
-      const type = result.ok ? 'success' : 'info';
+      const type = result.ok === false ? 'warn' : 'success';
       gtss.showToast(result.message, type, 6000);
       showPipelineActionInfo(pipelineId, action, result.message, type);
     }
+    succeeded = true;
     return result;
   } catch (err) {
     showPipelineActionError(pipelineId, action, err);
@@ -328,10 +373,20 @@ async function withActionFeedback(pipelineId, action, btn, fetchPromise) {
       delete btn.dataset.gtssLoading;
       btn.style.opacity = '';
     }
-    // Always refresh pipelines list immediately + again after 1s, so the
-    // user sees the new state without having to wait for the socket event.
-    loadPipelines();
-    setTimeout(loadPipelines, 1000);
+    // Only reload on success — on error, the state hasn't changed,
+    // so reloading would just flicker the UI without helping the user.
+    if (succeeded) {
+      loadPipelines();
+      setTimeout(loadPipelines, 1000);
+    } else {
+      // On error, still patch the card back to its pre-optimistic state
+      // so the UI doesn't lie about what happened.
+      const pipeline = pipelinesData.find((p) => p.id === pipelineId);
+      if (pipeline) {
+        // Revert the optimistic state by reloading from the server.
+        loadPipelines();
+      }
+    }
   }
 }
 
@@ -441,7 +496,14 @@ async function runNow(id, btn) {
 }
 
 async function restartPipeline(id, btn) {
-  if (!confirm(`Restart pipeline "${id}"?\n\nThis will stop the current run (if any) and start a fresh execution from the first step. If the pipeline is paused, the pause flag will also be cleared.`)) return;
+  // Confirm only if there's an active execution that would be killed.
+  // If the pipeline is idle, restart is equivalent to Run Now — no need
+  // to confirm.
+  const pipeline = pipelinesData.find((p) => p.id === id);
+  const hasActive = pipeline && (pipeline.active_execution_id || pipeline.state === 'running' || pipeline.state === 'paused' || pipeline.state === 'resuming' || pipeline.state === 'stopping' || pipeline.state === 'retrying');
+  if (hasActive) {
+    if (!confirm(`Restart pipeline "${id}"?\n\nThis will stop the current run (if any) and start a fresh execution from the first step. If the pipeline is paused, the pause flag will also be cleared.`)) return;
+  }
   try {
     await withActionFeedback(id, 'Restart', btn,
       gtss.fetchJSON(`/api/pipelines/${id}/restart`, { method: 'POST' })
@@ -449,12 +511,26 @@ async function restartPipeline(id, btn) {
   } catch (_) { /* error already shown */ }
 }
 
-async function pausePipeline(id, paused, btn) {
+async function pausePipeline(id, btn) {
   try {
-    await withActionFeedback(id, paused ? 'Pause' : 'Resume', btn,
-      gtss.fetchJSON(`/api/pipelines/${id}/${paused ? 'pause' : 'resume'}`, { method: 'POST' })
+    await withActionFeedback(id, 'Pause', btn,
+      gtss.fetchJSON(`/api/pipelines/${id}/pause`, { method: 'POST' })
     );
   } catch (_) { /* error already shown */ }
+}
+
+async function resumePipeline(id, btn) {
+  try {
+    await withActionFeedback(id, 'Resume', btn,
+      gtss.fetchJSON(`/api/pipelines/${id}/resume`, { method: 'POST' })
+    );
+  } catch (_) { /* error already shown */ }
+}
+
+// Legacy alias — kept for any callers that still use the old
+// (id, paused, btn) signature. Prefer pausePipeline / resumePipeline.
+async function pausePipelineLegacy(id, paused, btn) {
+  return paused ? pausePipeline(id, btn) : resumePipeline(id, btn);
 }
 
 async function stopPipeline(id, btn) {
@@ -478,7 +554,11 @@ async function retryStage(id, stage, executionId, btn) {
 }
 
 async function resumeFromCheckpoint(id, executionId, btn) {
-  if (!confirm(`Resume pipeline "${id}" from the last successful checkpoint?\n\nEarlier completed stages will be skipped. If there's a stuck execution in memory, it will be force-cleared first so the resume can proceed.`)) return;
+  // No confirm — this is a non-destructive recovery action, and the
+  // server's response will tell the user what happened. Adding a
+  // confirm dialog here was the original "buttons don't work" complaint
+  // (the user would click the button, see a dialog, click OK, and then
+  // nothing visible would happen because the action was async).
   try {
     // We send `force: true` so that if there's a stuck "running" execution
     // in memory (the user's main complaint: pipeline shows Running forever
@@ -1330,8 +1410,8 @@ function attachActionBtnListeners(scope) {
       else if (action === 'restart') restartPipeline(id, btn);
       else if (action === 'executions') loadExecutions(id);
       else if (action === 'logs') openLogsModal(id);
-      else if (action === 'pause') pausePipeline(id, true, btn);
-      else if (action === 'resume') pausePipeline(id, false, btn);
+      else if (action === 'pause') pausePipeline(id, btn);
+      else if (action === 'resume') resumePipeline(id, btn);
       else if (action === 'stop') stopPipeline(id, btn);
       else if (action === 'retry-stage') retryStage(id, stage || null, null, btn);
       else if (action === 'resume-checkpoint') resumeFromCheckpoint(id, null, btn);
@@ -1388,8 +1468,8 @@ function attachCardListeners() {
       else if (action === 'restart') restartPipeline(id, btn);
       else if (action === 'executions') loadExecutions(id);
       else if (action === 'logs') openLogsModal(id);
-      else if (action === 'pause') pausePipeline(id, true, btn);
-      else if (action === 'resume') pausePipeline(id, false, btn);
+      else if (action === 'pause') pausePipeline(id, btn);
+      else if (action === 'resume') resumePipeline(id, btn);
       else if (action === 'stop') stopPipeline(id, btn);
       else if (action === 'retry-stage') retryStage(id, stage || null, null, btn);
       else if (action === 'resume-checkpoint') resumeFromCheckpoint(id, null, btn);

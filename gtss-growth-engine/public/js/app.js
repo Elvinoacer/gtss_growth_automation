@@ -21,13 +21,24 @@ async function fetchJSON(url, options = {}) {
   let data = null;
   const text = await response.text();
   if (text) {
-    data = JSON.parse(text);
+    try {
+      data = JSON.parse(text);
+    } catch (_) {
+      // Non-JSON response — keep data null and fall through to the
+      // error path with the raw text as the message.
+    }
   }
 
   if (!response.ok) {
     const message =
       data && data.error ? data.error : `Request failed: ${response.status}`;
-    throw new Error(message);
+    const err = new Error(message);
+    // Attach the full response body and status so callers can inspect
+    // structured error fields like `hint`, `active_execution_id`, etc.
+    err.status = response.status;
+    err.body = data || {};
+    err.hint = (data && data.hint) || null;
+    throw err;
   }
 
   return data;

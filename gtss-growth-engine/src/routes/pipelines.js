@@ -27,6 +27,7 @@ const { getDb } = require('../db/database');
 const {
   syncFromDb,
   runPipelineWithLifecycle,
+  runExistingExecution,
   isPipelinePaused,
 } = require('../jobs/pipelineScheduler');
 const cronRegistry = require('../jobs/cronRegistry');
@@ -116,8 +117,14 @@ function buildRuntimeState(row, paused) {
     progress: activeExec?.progress || 0,
     completed_steps: activeExec?.completed_steps || 0,
     total_steps: activeExec?.total_steps || 0,
-    can_run: Boolean(row.enabled) && !paused && !isRunning,
-    can_pause: Boolean(row.enabled) && !paused,
+    // Manual run is allowed even when the schedule is disabled — the
+    // user explicitly clicked Run, so we honor it. Pause + active run
+    // still block (the user should Stop or Resume first).
+    can_run: !paused && !isRunning,
+    // Pause is always available (even for disabled pipelines) so the
+    // user can pause a long-running execution that started before the
+    // schedule was disabled.
+    can_pause: !paused,
     can_resume: Boolean(paused) || (isRunning && (activeExec?.status === 'paused')),
     can_stop: isRunning || likelyStuck,
     can_restart: true,
@@ -327,17 +334,28 @@ router.post('/:id/run', async (req, res) => {
     : [];
 
   if (isPipelinePaused(id)) {
-    return res.status(409).json({ error: 'Pipeline is paused. Resume it before running manually.' });
+    return res.status(409).json({
+      error: 'Pipeline is paused. Click Resume first, or use Restart to override the pause.',
+      hint: 'paused',
+    });
   }
-  // If there's a stuck "running" execution in memory (the runner died
-  // without ever calling markExecutionFailed/Completed), auto-clear it
-  // instead of refusing — the user clicked Run Now because they want
-  // progress. The previous behavior returned 409 "already running" and
-  // forced the user to click Force Clear first, then click Run again.
-  // That second-click dance was the original "buttons don't work" complaint.
-  if (pipelineState.getActiveExecution(id)) {
-    logger.warn('PIPELINES-API', `Run of "${id}": auto force-clearing stuck execution before run.`);
-    pipelineState.forceClearExecution(id, `run (auto-cleared by user action)`);
+
+  // If there's an active execution that IS genuinely making progress,
+  // refuse with a clear error — don't interrupt real work. If the
+  // execution is stuck (no progress for >60s), auto-clear it and
+  // proceed. The previous behavior always auto-cleared, which could
+  // interrupt a runner that was just slow but actually working.
+  const active = pipelineState.getActiveExecution(id);
+  if (active) {
+    if (pipelineState.isExecutionProgressing(id)) {
+      return res.status(409).json({
+        error: `Pipeline "${id}" is already running (execution ${active.id}). Wait for it to finish, or click Stop / Force Clear first.`,
+        hint: 'already_running',
+        active_execution_id: active.id,
+      });
+    }
+    logger.warn('PIPELINES-API', `Run of "${id}": auto force-clearing stuck execution ${active.id} before run.`);
+    pipelineState.forceClearExecution(id, `run (auto-cleared stale execution)`);
   }
 
   if (id === 'content' && (!limits.topic || !String(limits.topic).trim())) {
@@ -375,45 +393,43 @@ router.post('/:id/restart', async (req, res) => {
   if (!row) return res.status(404).json({ error: 'Pipeline not found' });
 
   // Restart is the user's "I want this pipeline to start over RIGHT NOW"
-  // button. We previously refused if paused — but that forced the user
-  // to click Resume first, then click Restart, which is the exact
-  // "buttons don't work" frustration they reported. Now restart auto-
-  // clears the pause flag and proceeds. (forceClearExecution also clears
-  // it below, but we do it here too so the explicit pause-check at the
-  // top doesn't bail out.)
+  // button. It always clears the pause flag and proceeds, even if the
+  // pipeline was paused. (Previously, restart refused when paused,
+  // forcing the user to click Resume first, then Restart — the exact
+  // "buttons don't work" frustration they reported.)
   db.prepare(
     `INSERT INTO settings (key, value) VALUES (?, 'false')
      ON CONFLICT(key) DO UPDATE SET value = 'false'`,
   ).run(`pipeline_${id}_paused`);
 
-  // If there's an active execution, attempt a graceful stop first. If the
-  // grace period elapses without the runner noticing the abort flag (i.e.,
-  // the runner is truly stuck), we force-clear the execution so the new run
-  // can start. Previously, a stuck execution would block restart forever —
-  // now restart is always able to recover.
+  // If there's an active execution, attempt a graceful stop first. If
+  // the runner responds to the abort flag within the grace period, we
+  // let it exit cleanly. If not (i.e., the runner is truly stuck), we
+  // force-clear the execution so the new run can start.
   //
-  // The force-clear also kills any registered jobRegistry jobs for this
-  // pipeline AND clears the schedule-level pause flag — so restart works
-  // even when the pipeline was paused before the runner got stuck.
+  // The grace period is 1.5s — long enough for a cooperative runner to
+  // notice the abort flag between stages, short enough that the user
+  // doesn't think restart is hung. For runners stuck INSIDE a long
+  // browser operation, force-clear's jobRegistry.abort() provides the
+  // real teeth.
   const active = pipelineState.getActiveExecution(id);
   if (active) {
     pipelineState.requestStop(id);
     // Brief grace period for the runner to notice the abort flag.
-    await new Promise((r) => setTimeout(r, 600));
+    await new Promise((r) => setTimeout(r, 1500));
     const stillActive = pipelineState.getActiveExecution(id);
     if (stillActive && stillActive.id === active.id) {
       logger.warn('PIPELINES-API', `Restart of "${id}": stuck execution ${active.id} did not respond to stop — force-clearing (also kills background jobs and clears pause flag).`);
       pipelineState.forceClearExecution(id, `restart (stuck execution did not respond to stop)`);
     }
-  } else {
+    // Clear any checkpoints for the previous execution so the new run
+    // starts fresh. (If the execution was force-cleared, this is a
+    // no-op for unrelated executions.)
+    try { checkpointService.clearCheckpoints(active.id); } catch (_) {}
+  } else if (pipelineState.hasStuckDbRow(id)) {
     // Even without an in-memory active execution, the DB may have stale
     // "running" rows that would block createExecution. Sweep them now.
-    pipelineState.forceClearExecution(id, `restart (preemptive sweep of any stale DB rows)`);
-  }
-
-  // Clear any checkpoints for the previous execution so the new run starts fresh
-  if (active) {
-    try { checkpointService.clearCheckpoints(active.id); } catch (_) {}
+    pipelineState.forceClearExecution(id, `restart (preemptive sweep of stale DB rows)`);
   }
 
   let limits = {
@@ -430,12 +446,6 @@ router.post('/:id/restart', async (req, res) => {
     });
   }
 
-  // Make sure the schedule-level pause flag is cleared (restart implies resume)
-  db.prepare(
-    `INSERT INTO settings (key, value) VALUES (?, 'false')
-     ON CONFLICT(key) DO UPDATE SET value = 'false'`,
-  ).run(`pipeline_${id}_paused`);
-
   res.json({ ok: true, message: `Pipeline "${row.name}" restarting` });
 
   setImmediate(async () => {
@@ -450,14 +460,18 @@ router.post('/:id/restart', async (req, res) => {
 });
 
 // ── POST /api/pipelines/:id/retry-stage ── Retry a specific failed stage
-// Body: { stage: "discovery" | "send" | "publish" | ... } OR { executionId: "..." }
-// If no executionId provided, uses the most recent failed execution for this pipeline.
+// Body: { stage?: "discovery" | "send" | "publish" | ..., executionId?: "...", force?: boolean }
 //
-// If no `stage` is provided AND the execution has no recorded `failed_stage`,
-// we default to the FIRST stage of the pipeline (i.e., start over). This
-// fixes the previous behavior of returning 400 "specify stage in the reset
-// body" — which left the user with no way to retry a stuck execution that
-// never recorded a failed_stage because it died mid-stage.
+// Behavior:
+//   - If no executionId is provided, uses the most recent FAILED execution
+//     for this pipeline. Returns 404 if none exists.
+//   - If no `stage` is provided AND the execution has no recorded
+//     `failed_stage`, defaults to the FIRST stage of the pipeline (i.e.,
+//     start over). This fixes the previous "specify stage in the body"
+//     dead-end.
+//   - If there's a stuck in-memory active execution, it is auto-cleared
+//     before the retry proceeds (unless `force: false` is explicitly
+//     passed in the body).
 router.post('/:id/retry-stage', async (req, res) => {
   const { id } = req.params;
   const db = getDb();
@@ -468,17 +482,19 @@ router.post('/:id/retry-stage', async (req, res) => {
   let executionId = req.body?.executionId ? String(req.body.executionId) : null;
 
   if (!executionId) {
-    // Find the most recent failed execution for this pipeline
+    // Find the most recent failed execution for this pipeline. We also
+    // accept 'stopped' executions because the user may have stopped a
+    // run mid-stage and want to retry from that stage.
     const recent = db
       .prepare(
         `SELECT id FROM pipeline_executions
-         WHERE pipeline_id = ? AND status = 'failed'
+         WHERE pipeline_id = ? AND status IN ('failed', 'stopped')
          ORDER BY started_at DESC LIMIT 1`,
       )
       .get(id);
     if (!recent) {
       return res.status(404).json({
-        error: 'No failed execution found to retry. Run the pipeline first.',
+        error: 'No failed or stopped execution found to retry. Run the pipeline first.',
       });
     }
     executionId = recent.id;
@@ -493,28 +509,33 @@ router.post('/:id/retry-stage', async (req, res) => {
   if (exec.pipeline_id !== id) {
     return res.status(400).json({ error: 'Execution does not belong to this pipeline' });
   }
-  if (exec.status === 'running' || exec.status === 'paused') {
+  // Refuse if the execution is currently running / paused — the user
+  // must Stop it first. (We don't auto-clear here because the execution
+  // the user wants to retry is the SAME as the active one — clearing it
+  // would defeat the purpose of the retry.)
+  if (exec.status === 'running' || exec.status === 'paused' || exec.status === 'resuming' || exec.status === 'stopping') {
     return res.status(409).json({
       error: `Execution is currently ${exec.status}. Stop it first before retrying.`,
+      hint: 'stop_first',
     });
   }
-  if (pipelineState.getActiveExecution(id)) {
-    // If there's a stuck "running" execution in memory, auto-clear it
-    // instead of refusing — the user clicked Retry because they want to
-    // make progress, and the previous behavior (return 409 with hint)
-    // forced them to click Force Clear first, then click Retry again,
-    // which is exactly the "buttons don't work" frustration they
-    // reported. The `force` body flag still allows opt-out for callers
-    // that want the old strict behavior.
-    const force = req.body?.force !== false; // default: auto-clear
-    if (!force) {
+
+  // If there's a DIFFERENT in-memory active execution (i.e., the user
+  // started a new run while the old failed one was still in the
+  // history), auto-clear it before retrying. This is the fix for the
+  // "buttons don't work" complaint: previously the user had to click
+  // Force Clear first, then click Retry, which was frustrating.
+  const activeExec = pipelineState.getActiveExecution(id);
+  if (activeExec && activeExec.id !== executionId) {
+    if (pipelineState.isExecutionProgressing(id)) {
       return res.status(409).json({
-        error: 'Another execution is already running. Re-send with { "force": true } in the body to auto-clear and retry.',
-        hint: 'force_clear',
+        error: `Another execution is currently running (${activeExec.id}). Stop it first, or use Force Clear.`,
+        hint: 'another_running',
+        active_execution_id: activeExec.id,
       });
     }
-    logger.warn('PIPELINES-API', `Retry-stage for "${id}": auto force-clearing stuck execution before retry.`);
-    pipelineState.forceClearExecution(id, `retry-stage (auto-cleared by user action)`);
+    logger.warn('PIPELINES-API', `Retry-stage for "${id}": auto force-clearing stuck execution ${activeExec.id} before retry.`);
+    pipelineState.forceClearExecution(id, `retry-stage (auto-cleared stale execution)`);
   }
 
   // Determine the stage to retry:
@@ -530,8 +551,6 @@ router.post('/:id/retry-stage', async (req, res) => {
     failedStage = orderedStages[0] || null;
   }
   if (!failedStage) {
-    // Pipeline has no defined stages (e.g., dm_check has only 'scan' but
-    // we couldn't find it). Just bail with a clearer message.
     return res.status(400).json({
       error: 'Could not determine which stage to retry. Pass "stage" in the request body.',
     });
@@ -544,7 +563,8 @@ router.post('/:id/retry-stage', async (req, res) => {
     ).run(executionId, failedStage);
   } catch (_) {}
 
-  // Reset the execution row back to 'retrying' state
+  // Reset the execution row back to 'retrying' state. The runner will
+  // transition it to 'running' once it starts (via runExistingExecution).
   db.prepare(
     `UPDATE pipeline_executions
      SET status = 'retrying',
@@ -558,35 +578,23 @@ router.post('/:id/retry-stage', async (req, res) => {
      WHERE id = ?`,
   ).run(executionId);
 
-  // Re-arm the in-memory flags
-  pipelineState.STATES; // ensure enum loaded
-  // Trick: directly set the in-memory maps since we are resuming an existing execution
-  // (createExecution would refuse because pipelineId is no longer in ACTIVE_EXECUTIONS,
-  //  so we re-add it manually here.)
-  const internalState = pipelineState;
-  // Use the public API: re-arm the abort/pause flags via transitionExecution
+  // Make sure the schedule-level pause flag is cleared — retry implies
+  // the user wants to make progress, not stay paused.
   try {
-    internalState.transitionExecution(executionId, internalState.STATES.RUNNING);
+    db.prepare(
+      `INSERT INTO settings (key, value) VALUES (?, 'false')
+       ON CONFLICT(key) DO UPDATE SET value = 'false'`,
+    ).run(`pipeline_${id}_paused`);
   } catch (_) {}
-  // ACTIVE_EXECUTIONS map is internal — we need a different approach: use runPipelineWithLifecycle
-  // but pass the existing executionId via a private hook.
 
-  // Re-load limits from the schedule
-  let limits = parseJsonObject(row.limits_json);
+  // Reload limits from the schedule (merged with any body overrides).
+  let limits = {
+    ...parseJsonObject(row.limits_json),
+    ...normalizeLimits(id, req.body?.limits || {}),
+  };
   const keywords = Array.isArray(req.body?.keywords)
     ? req.body.keywords.map((k) => String(k).trim()).filter(Boolean)
     : [];
-
-  // Mark the schedule as running again
-  db.prepare(
-    `UPDATE pipeline_schedules
-     SET current_state = 'running',
-         current_execution_id = ?,
-         last_status = 'running',
-         last_run_at = CURRENT_TIMESTAMP,
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
-  ).run(executionId, id);
 
   logActivity({
     activityType: 'pipeline_retry',
@@ -615,37 +623,19 @@ router.post('/:id/retry-stage', async (req, res) => {
     stage: failedStage,
   });
 
-  // Actually run the pipeline with resumeFrom=failedStage, reusing the existing executionId.
-  // We bypass runPipelineWithLifecycle's createExecution call by injecting the execution
-  // directly into the runner.
+  // Run the existing execution with resumeFrom=failedStage. This uses
+  // the public runExistingExecution helper (which handles __setActive
+  // and the RUNNING transition internally) instead of the previous
+  // private-API dance.
   setImmediate(async () => {
-    // Manually mark this pipeline as having an active execution so canStart() returns false
-    // for any concurrent calls.
-    // We do this by reusing the createExecution path with the same id — but createExecution
-    // would refuse. Instead we set ACTIVE_EXECUTIONS via the public canStart workaround:
-    // pretend the execution is new by transitioning it to RUNNING (already done above) and
-    // then call the runner directly.
     try {
-      const RUNNER = require('../jobs/pipelineScheduler').__getRunner(id);
-      if (!RUNNER) throw new Error(`No runner for pipeline ${id}`);
-      // Use a tiny shim that re-enters the active-execution map
-      // (we rely on transitionExecution above having set status='running' on the row,
-      //  and on the runner using executionId for state lookups).
-      // To make pipelineState.getActiveExecution return this exec, we need to register it:
-      // We expose that via a private call:
-      if (typeof internalState.__setActive === 'function') {
-        internalState.__setActive(id, executionId);
-      }
-      await RUNNER(limits, {
-        trigger: 'retry',
-        executionId,
+      await runExistingExecution(id, executionId, 'retry', limits, {
         resumeFrom: failedStage,
         keywords,
       });
-      try { pipelineState.markExecutionCompleted(executionId); } catch (_) {}
+      logger.info('PIPELINES-API', `Retry of stage "${failedStage}" for "${id}" completed (execution ${executionId})`);
     } catch (err) {
-      logger.error('PIPELINES-API', `Retry of stage "${failedStage}" failed`, err);
-      try { pipelineState.markExecutionFailed(executionId, err, err.failedStage || failedStage); } catch (_) {}
+      logger.error('PIPELINES-API', `Retry of stage "${failedStage}" for "${id}" failed`, err);
       broadcastPipelineStatus(id, { status: 'failed', state: 'failed', error: err.message });
     }
   });
@@ -653,13 +643,17 @@ router.post('/:id/retry-stage', async (req, res) => {
 
 // ── POST /api/pipelines/:id/resume-from-checkpoint ── Resume from the last successful checkpoint
 //
-// Body: { executionId?: string, force?: boolean }
+// Body: { executionId?: string, force?: boolean, limits?: {...}, keywords?: [...] }
 //
-// If `force: true` is passed AND there's a stuck "running" execution in
-// memory that doesn't appear to be making progress, we will force-clear it
-// first (see forceClearExecution) and then resume. This fixes the previous
-// "Another execution is already running" dead-end where the user could not
-// recover from a stuck pipeline without restarting the server.
+// Behavior:
+//   - If no executionId is provided, uses the most recent FAILED or
+//     STOPPED execution. Returns 404 if none exists.
+//   - If there's a stuck in-memory active execution that ISN'T making
+//     progress, it is auto-cleared before resuming (so the user doesn't
+//     need to click Force Clear first). If it IS progressing, we refuse
+//     with a 409 and a clear error.
+//   - If `force: true` is passed, we always clear the stuck execution
+//     (this is the escape hatch the UI uses by default).
 router.post('/:id/resume-from-checkpoint', async (req, res) => {
   const { id } = req.params;
   const db = getDb();
@@ -679,7 +673,7 @@ router.post('/:id/resume-from-checkpoint', async (req, res) => {
       .get(id);
     if (!recent) {
       return res.status(404).json({
-        error: 'No failed/stopped execution found to resume.',
+        error: 'No failed or stopped execution found to resume. Run the pipeline first.',
       });
     }
     executionId = recent.id;
@@ -692,36 +686,54 @@ router.post('/:id/resume-from-checkpoint', async (req, res) => {
   if (exec.pipeline_id !== id) {
     return res.status(400).json({ error: 'Execution does not belong to this pipeline' });
   }
+  // Refuse if the target execution is currently running / paused. The
+  // user must Stop it first OR use the pause/resume buttons (which operate
+  // on the active execution directly).
+  if (['running', 'paused', 'resuming', 'stopping'].includes(exec.status)) {
+    return res.status(409).json({
+      error: `Execution is currently ${exec.status}. Stop it first, or use Pause / Resume to control the active run.`,
+      hint: 'stop_first',
+    });
+  }
 
-  // Check for a stuck "active" execution that would block the resume.
+  // Check for a stuck in-memory active execution that would block the
+  // resume. If it's the SAME as the target execution, we treat it as
+  // already-running and refuse. If it's a DIFFERENT execution, we
+  // auto-clear it (when stuck) or refuse (when progressing).
   const activeExec = pipelineState.getActiveExecution(id);
   if (activeExec) {
-    if (!force) {
-      // Surface a helpful hint instead of just refusing — the user almost
-      // always wants to clear the stuck state and proceed.
+    if (activeExec.id === executionId) {
       return res.status(409).json({
-        error: `Pipeline is already running (execution ${activeExec.id}). Re-send this request with { "force": true } in the body to clear the stuck state and resume, or use POST /api/pipelines/${id}/force-clear.`,
-        hint: 'force_clear',
+        error: `Execution ${executionId} is already the active execution (status: ${activeExec.status}). Use Pause / Resume / Stop to control it.`,
+        hint: 'already_active',
+      });
+    }
+    if (!force && pipelineState.isExecutionProgressing(id)) {
+      return res.status(409).json({
+        error: `Another execution is currently running (${activeExec.id}) and making progress. Stop it first, or re-send with { "force": true } to clear it and resume.`,
+        hint: 'another_running',
         active_execution_id: activeExec.id,
       });
     }
-    // Force-clear the stuck execution, then proceed with the resume.
-    pipelineState.forceClearExecution(id, `resume-from-checkpoint (forced by user)`);
+    pipelineState.forceClearExecution(id, `resume-from-checkpoint (cleared stale execution)`);
   }
 
   const orderedStages = PIPELINE_STAGES[id] || [];
   const resumeStage = checkpointService.getResumeStage(executionId, orderedStages);
   if (!resumeStage) {
     return res.status(400).json({
-      error: 'All stages already have completed checkpoints. Use "Run Now" to start a fresh run.',
+      error: 'All stages already have completed checkpoints. Use "Run Now" to start a fresh run instead.',
+      hint: 'nothing_to_resume',
     });
   }
 
-  // Reset execution row
+  // Reset execution row to 'retrying' (the runner will transition it to
+  // 'running' via runExistingExecution). Don't set to 'running' here —
+  // otherwise the UI shows running with no actual runner attached.
   db.prepare(
     `UPDATE pipeline_executions
-     SET status = 'running',
-         state = 'running',
+     SET status = 'retrying',
+         state = 'retrying',
          error_message = NULL,
          stack_trace = NULL,
          failed_stage = NULL,
@@ -731,22 +743,19 @@ router.post('/:id/resume-from-checkpoint', async (req, res) => {
      WHERE id = ?`,
   ).run(executionId);
 
-  db.prepare(
-    `UPDATE pipeline_schedules
-     SET current_state = 'running',
-         current_execution_id = ?,
-         last_status = 'running',
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
-  ).run(executionId, id);
+  // Clear the schedule-level pause flag — resume implies the user wants
+  // to make progress, not stay paused.
+  try {
+    db.prepare(
+      `INSERT INTO settings (key, value) VALUES (?, 'false')
+       ON CONFLICT(key) DO UPDATE SET value = 'false'`,
+    ).run(`pipeline_${id}_paused`);
+  } catch (_) {}
 
-  // Clear paused flag
-  db.prepare(
-    `INSERT INTO settings (key, value) VALUES (?, 'false')
-     ON CONFLICT(key) DO UPDATE SET value = 'false'`,
-  ).run(`pipeline_${id}_paused`);
-
-  const limits = parseJsonObject(row.limits_json);
+  const limits = {
+    ...parseJsonObject(row.limits_json),
+    ...normalizeLimits(id, req.body?.limits || {}),
+  };
   const keywords = Array.isArray(req.body?.keywords)
     ? req.body.keywords.map((k) => String(k).trim()).filter(Boolean)
     : [];
@@ -770,21 +779,13 @@ router.post('/:id/resume-from-checkpoint', async (req, res) => {
 
   setImmediate(async () => {
     try {
-      const RUNNER = require('../jobs/pipelineScheduler').__getRunner(id);
-      if (!RUNNER) throw new Error(`No runner for pipeline ${id}`);
-      if (typeof pipelineState.__setActive === 'function') {
-        pipelineState.__setActive(id, executionId);
-      }
-      await RUNNER(limits, {
-        trigger: 'resume',
-        executionId,
+      await runExistingExecution(id, executionId, 'resume', limits, {
         resumeFrom: resumeStage,
         keywords,
       });
-      try { pipelineState.markExecutionCompleted(executionId); } catch (_) {}
+      logger.info('PIPELINES-API', `Resume-from-checkpoint of "${id}" completed (execution ${executionId})`);
     } catch (err) {
-      logger.error('PIPELINES-API', `Resume-from-checkpoint of ${id} failed`, err);
-      try { pipelineState.markExecutionFailed(executionId, err, err.failedStage || null); } catch (_) {}
+      logger.error('PIPELINES-API', `Resume-from-checkpoint of "${id}" failed`, err);
       broadcastPipelineStatus(id, { status: 'failed', state: 'failed', error: err.message });
     }
   });
@@ -812,10 +813,24 @@ router.post('/:id/pause', (req, res) => {
   const row = getDb().prepare('SELECT id FROM pipeline_schedules WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: 'Pipeline not found' });
   const result = pipelineState.requestPause(id);
-  if (!result.ok) return res.status(400).json({ error: 'Cannot pause pipeline' });
-  getDb().prepare(`UPDATE pipeline_schedules SET last_status = 'paused', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
+  if (!result.ok) {
+    return res.status(400).json({
+      error: result.error || 'Cannot pause pipeline',
+      hint: 'pause_failed',
+    });
+  }
+  getDb().prepare(`UPDATE pipeline_schedules SET last_status = 'paused', current_state = 'paused', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
   broadcastPipelineStatus(id, { status: 'paused', state: 'paused' });
-  res.json({ ok: true, paused: true, state: 'paused', ...result });
+  res.json({
+    ok: true,
+    paused: true,
+    state: 'paused',
+    scheduleLevel: result.scheduleLevel || false,
+    executionId: result.executionId || null,
+    message: result.scheduleLevel
+      ? 'Pipeline paused at the schedule level. No active execution to pause.'
+      : `Paused active execution ${result.executionId}. The runner will halt at the next stage boundary.`,
+  });
 });
 
 router.post('/:id/resume', (req, res) => {
@@ -823,30 +838,73 @@ router.post('/:id/resume', (req, res) => {
   const row = getDb().prepare('SELECT id FROM pipeline_schedules WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: 'Pipeline not found' });
   const result = pipelineState.requestResume(id);
-  if (!result.ok) return res.status(400).json({ error: 'Cannot resume pipeline' });
-  getDb().prepare(`UPDATE pipeline_schedules SET last_status = COALESCE(NULLIF(last_status, 'paused'), 'idle'), updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
-  broadcastPipelineStatus(id, { status: 'resumed' });
-  res.json({ ok: true, paused: false, state: 'resumed', ...result });
+  if (!result.ok) {
+    return res.status(400).json({
+      error: result.error || 'Cannot resume pipeline',
+      hint: 'resume_failed',
+    });
+  }
+  // Don't overwrite last_status with 'resumed' — that's not a real
+  // pipeline state. Either keep the existing last_status (if the
+  // schedule-level resume happened with no active execution) or let the
+  // runner's transitionExecution handle it (when there IS an active
+  // execution).
+  if (result.scheduleLevel) {
+    getDb().prepare(
+      `UPDATE pipeline_schedules
+       SET current_state = 'idle',
+           last_status = CASE WHEN last_status = 'paused' THEN 'idle' ELSE last_status END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    ).run(id);
+  }
+  broadcastPipelineStatus(id, { status: 'resumed', state: result.scheduleLevel ? 'idle' : 'resuming' });
+  res.json({
+    ok: true,
+    paused: false,
+    state: result.scheduleLevel ? 'idle' : 'resuming',
+    scheduleLevel: result.scheduleLevel || false,
+    executionId: result.executionId || null,
+    message: result.scheduleLevel
+      ? 'Schedule-level pause cleared. The pipeline will run on its next cron tick, or you can click Run Now.'
+      : `Resume requested for execution ${result.executionId}. The runner will continue at the next stage boundary.`,
+  });
 });
 
 router.post('/:id/stop', (req, res) => {
   const { id } = req.params;
   const row = getDb().prepare('SELECT id FROM pipeline_schedules WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: 'Pipeline not found' });
+
+  // Capture pre-stop state so we can give a meaningful response message.
+  const activeExec = pipelineState.getActiveExecution(id);
+
   const result = pipelineState.requestStop(id);
   const stopped = result.stopped || 0;
-  if (stopped > 0) {
-    getDb().prepare(`UPDATE pipeline_schedules SET last_status = 'stopped', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
-  }
+
   // Also kill any registered jobRegistry jobs for this pipeline so that
   // any in-flight AbortController-listening browser operations actually
   // receive the abort signal. Previously, requestStop only set the abort
   // flag — which the runner checks cooperatively between stages — but a
   // runner stuck INSIDE a stage (e.g., waiting for a browser selector)
   // never re-checked the flag. Killing the job registry jobs gives the
-  // abort a real "teeth" for the first time.
+  // abort real "teeth" for the first time.
   let jobsKilled = 0;
   try { jobsKilled = jobRegistry.stopJobsByPipeline(id); } catch (_) {}
+
+  // Update the schedule-level state. If we actually stopped something,
+  // mark it as 'stopped'. If there was nothing to stop, leave the state
+  // alone (the user might have clicked Stop on an already-idle pipeline).
+  if (stopped > 0) {
+    getDb().prepare(
+      `UPDATE pipeline_schedules
+       SET last_status = 'stopped',
+           current_state = 'idle',
+           current_execution_id = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    ).run(id);
+  }
 
   logActivity({
     activityType: 'user_action',
@@ -871,8 +929,8 @@ router.post('/:id/stop', (req, res) => {
     message: stopped > 0
       ? (result.sweptDb
           ? `Stopped stuck execution ${result.executionId} (no live runner was found — cleared DB state).`
-          : `Stop requested for active run${jobsKilled > 0 ? ` and ${jobsKilled} background job(s) killed` : ''}.`)
-      : 'No active run to stop.',
+          : `Stop requested for active run${jobsKilled > 0 ? ` and ${jobsKilled} background job(s) killed` : ''}. The runner will halt at the next stage boundary.`)
+      : 'No active run to stop. The pipeline is already idle.',
   });
 });
 
@@ -883,16 +941,22 @@ router.post('/:id/stop', (req, res) => {
 // markExecutionCompleted — e.g., an unhandled rejection inside a long
 // browser automation step, an OOM kill, or a sync crash).
 //
-// This is the user-facing escape hatch that the previous "Retry Failed Step"
-// and "Resume from Checkpoint" buttons needed but didn't have. It:
-//   - Marks the active execution as 'failed' with a clear error_message.
+// This is the user-facing escape hatch. It:
+//   - Aborts the in-memory runner (sets ABORT_FLAG).
+//   - Kills any registered jobRegistry jobs (sends AbortSignal to in-flight
+//     browser operations).
+//   - Marks ALL stuck DB rows as 'failed' with a clear error_message.
 //   - Clears the in-memory ACTIVE_EXECUTIONS / ABORT_FLAGS / PAUSE_FLAGS.
 //   - Resets the schedule-level state to 'idle'.
+//   - Clears the schedule-level pause flag (so the user can immediately
+//     re-Run) — unless the body contains `keep_pause_intent: true`.
+//   - Releases the content pipeline DB lock if applicable.
 //
 // After this returns, the user can immediately Run / Retry / Resume.
 router.post('/:id/force-clear', (req, res) => {
   const { id } = req.params;
   const reason = req.body?.reason ? String(req.body.reason) : 'manual';
+  const keepPauseIntent = Boolean(req.body?.keep_pause_intent);
   const row = getDb().prepare('SELECT id FROM pipeline_schedules WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: 'Pipeline not found' });
 
@@ -908,7 +972,7 @@ router.post('/:id/force-clear', (req, res) => {
     )
     .all(id);
 
-  const result = pipelineState.forceClearExecution(id, reason);
+  const result = pipelineState.forceClearExecution(id, reason, { keepPauseIntent });
 
   logActivity({
     activityType: 'user_action',
@@ -923,6 +987,7 @@ router.post('/:id/force-clear', (req, res) => {
       executionId: result.executionId || null,
       jobsKilled: result.jobsKilled || 0,
       reason,
+      keepPauseIntent,
       stuckRowsBefore: preClearStuck.map((r) => ({ id: r.id, status: r.status })),
     },
   });
@@ -941,9 +1006,10 @@ router.post('/:id/force-clear', (req, res) => {
     previous_status: result.previousStatus || null,
     jobs_killed: result.jobsKilled || 0,
     stuck_rows_before: preClearStuck.map((r) => ({ id: r.id, status: r.status })),
+    pause_intent_preserved: keepPauseIntent,
     message: result.cleared > 0
       ? `Cleared ${result.cleared} stuck execution(s)${result.jobsKilled ? ` and killed ${result.jobsKilled} background job(s)` : ''}. Previous state: ${result.previousStatus}. You can now Run / Retry / Resume.`
-      : 'Pipeline state reset to idle (no stuck execution found in DB). Pause flag also cleared.',
+      : `Pipeline state reset to idle (no stuck execution found in DB).${keepPauseIntent ? ' Pause intent preserved.' : ' Pause flag also cleared.'}`,
   });
 });
 

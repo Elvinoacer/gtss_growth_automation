@@ -426,6 +426,60 @@ function getActiveExecution(pipelineId) {
   return row;
 }
 
+/**
+ * Heuristic: is the active execution genuinely making progress?
+ *
+ * Returns true when the execution appears to be alive — i.e., its DB row
+ * was updated recently (within `staleMs`). Returns false when:
+ *   - there is no active execution in memory
+ *   - the DB row hasn't been touched for `staleMs` (default 60s)
+ *   - the row is already in a terminal state
+ *
+ * The Run / Restart / Retry / Resume endpoints use this to decide whether
+ * to auto-clear the active execution (when it appears dead) or to refuse
+ * with a clear error (when it is genuinely still working). Previously
+ * these endpoints either always refused (the original "buttons don't
+ * work" complaint) or always auto-cleared (which can interrupt real
+ * work). This gives us the middle ground.
+ */
+function isExecutionProgressing(pipelineId, staleMs = 60_000) {
+  const exec = getActiveExecution(pipelineId);
+  if (!exec) return false;
+  const terminal = new Set([
+    STATES.COMPLETED,
+    STATES.FAILED,
+    STATES.STOPPED,
+  ]);
+  if (terminal.has(String(exec.status || "").toLowerCase())) return false;
+  const updated = exec.updated_at ? new Date(exec.updated_at).getTime() : null;
+  if (!updated) return false;
+  return Date.now() - updated < staleMs;
+}
+
+/**
+ * Returns true if the pipeline currently has any in-memory active
+ * execution OR any DB row in a transient (running/paused/resuming/
+ * stopping/retrying) state. Used by the routes to detect "stuck"
+ * pipelines that need force-clearing.
+ */
+function hasStuckDbRow(pipelineId) {
+  if (!pipelineId) return false;
+  try {
+    const db = getDb();
+    const row = db
+      .prepare(
+        `SELECT 1 FROM pipeline_executions
+         WHERE pipeline_id = ?
+           AND status IN ('running', 'paused', 'resuming', 'stopping', 'retrying')
+         LIMIT 1`,
+      )
+      .get(String(pipelineId));
+    return Boolean(row);
+  } catch (_) {
+    return false;
+  }
+}
+
 function getExecutionState(executionId) {
   if (!executionId) return null;
   const db = getDb();
@@ -477,24 +531,39 @@ function requestResume(pipelineId) {
 
   const execId = ACTIVE_EXECUTIONS.get(pipelineId);
   if (!execId) {
-    // Nothing actually running — just unpause the schedule
+    // Nothing actually running — just unpause the schedule. Reset the
+    // schedule-level state to 'idle' (or 'completed' / 'failed' if that
+    // was the last terminal state) so the UI doesn't keep showing
+    // "Paused" forever.
     db.prepare(
-      `UPDATE pipeline_schedules SET current_state = 'idle', last_status = COALESCE(NULLIF(last_status, 'paused'), 'idle'), updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      `UPDATE pipeline_schedules
+       SET current_state = 'idle',
+           last_status = CASE
+             WHEN last_status = 'paused' THEN 'idle'
+             ELSE last_status
+           END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
     ).run(pipelineId);
     broadcastState(pipelineId, null, "idle");
     return { ok: true, resumed: true, scheduleLevel: true };
   }
+  // Flip the in-memory pause flag so the runner's awaitResume() loop
+  // breaks out and continues. We DO NOT transition to RUNNING here —
+  // the runner will call transitionExecution(execId, RUNNING) itself
+  // once awaitResume() returns. The previous code did a setTimeout to
+  // flip it after 500ms, which raced with the runner's own transition
+  // and could leave the execution stuck in 'resuming' if the runner
+  // had already finished its current stage and called
+  // markExecutionCompleted before the timer fired.
   PAUSE_FLAGS.set(String(execId), "running");
-  transitionExecution(execId, STATES.RESUMING);
-  // The runner loop will pick this up via awaitResume(); transition back to RUNNING happens there
-  setTimeout(() => {
-    try {
-      const row = getExecutionState(execId);
-      if (row && (row.status === "resuming" || row.status === "paused")) {
-        transitionExecution(execId, STATES.RUNNING);
-      }
-    } catch (_) {}
-  }, 500);
+  try {
+    transitionExecution(execId, STATES.RESUMING);
+  } catch (_) {
+    // If the transition fails (e.g., execution already completed), the
+    // PAUSE_FLAGS flip above is still sufficient for any in-flight
+    // awaitResume() loop.
+  }
   return { ok: true, resumed: true, executionId: execId };
 }
 
@@ -610,8 +679,29 @@ function requestStop(pipelineId) {
  * Returns: { ok, cleared, executionId, previousStatus, jobsKilled } or
  *          { ok: true, cleared: 0, message: 'No active execution to clear.' }
  */
-function forceClearExecution(pipelineId, reason = "manual") {
+function forceClearExecution(pipelineId, reason = "manual", opts = {}) {
   if (!pipelineId) return { ok: false, error: "pipelineId required" };
+
+  // By default we clear the schedule-level pause flag (so the user can
+  // immediately re-Run). But if the caller passes `keepPauseIntent: true`,
+  // we preserve the pause flag — this is used by the Stop endpoint, where
+  // the user's intent is "stop the current run" not "unpause the
+  // schedule".
+  const keepPauseIntent = Boolean(opts.keepPauseIntent);
+
+  // ── Step 1: Abort the in-memory runner first ──────────────────────────
+  //
+  // Set the ABORT_FLAG for the active execution BEFORE killing the
+  // jobRegistry jobs. This way, any runner that's mid-stage and
+  // cooperatively checking throwIfAborted() will throw on its next
+  // check, which propagates up the call stack and exits the runner
+  // cleanly. The jobRegistry aborts are the sledgehammer for runners
+  // that DON'T check cooperatively (e.g., a runner stuck inside a
+  // browser.waitForSelector call).
+  const activeExecId = ACTIVE_EXECUTIONS.get(pipelineId);
+  if (activeExecId) {
+    ABORT_FLAGS.set(String(activeExecId), true);
+  }
 
   // Kill any registered job-registry jobs for this pipeline so that any
   // in-flight AbortController-listening operations actually receive the
@@ -623,21 +713,36 @@ function forceClearExecution(pipelineId, reason = "manual") {
     jobsKilled = jobRegistry.stopJobsByPipeline(pipelineId);
   } catch (_) {}
 
-  // Always clear the schedule-level pause flag — force-clear means "make
-  // this pipeline fully usable again", not just "clear the active run".
-  // The previous behavior left the paused flag set if the user had paused
-  // before the runner got stuck, which made every subsequent Run / Restart
-  // fail with 409 "Pipeline is paused" — the exact "buttons don't work"
-  // frustration the user reported.
+  // Clear the schedule-level pause flag (unless the caller asked us to
+  // preserve it). The previous behavior left the paused flag set if the
+  // user had paused before the runner got stuck, which made every
+  // subsequent Run / Restart fail with 409 "Pipeline is paused" — the
+  // exact "buttons don't work" frustration the user reported.
   const db = getDb();
+  if (!keepPauseIntent) {
+    try {
+      db.prepare(
+        `INSERT INTO settings (key, value) VALUES (?, 'false')
+         ON CONFLICT(key) DO UPDATE SET value = 'false'`,
+      ).run(`pipeline_${pipelineId}_paused`);
+    } catch (_) {}
+  }
+
+  // ── Step 2: Release any DB-level locks the pipeline may hold ──────────
+  //
+  // The content pipeline uses a `content_pipeline_lock` setting row to
+  // prevent overlapping runs. When a runner dies without releasing the
+  // lock, every subsequent content Run returns "Already running". We
+  // release it here so force-clear actually frees the pipeline.
   try {
-    db.prepare(
-      `INSERT INTO settings (key, value) VALUES (?, 'false')
-       ON CONFLICT(key) DO UPDATE SET value = 'false'`,
-    ).run(`pipeline_${pipelineId}_paused`);
+    if (pipelineId === "content") {
+      db.prepare(
+        `UPDATE settings SET value = 'false' WHERE key = 'content_pipeline_lock'`,
+      ).run();
+    }
   } catch (_) {}
 
-  const execId = ACTIVE_EXECUTIONS.get(pipelineId);
+  const execId = activeExecId;
   if (!execId) {
     // Even if the in-memory map is empty, the DB might still hold a row
     // marked 'running' (e.g., from a previous server restart that didn't
@@ -941,10 +1046,28 @@ function recoverOnStartup() {
 
 /**
  * Returns true if a new execution can be started for this pipeline right now.
- * (i.e. no active execution, schedule not paused, schedule enabled OR manual trigger)
+ *
+ * Rules:
+ *   - If there's an in-memory ACTIVE_EXECUTIONS entry, return false (one
+ *     at a time per pipeline). The caller can pass `force: true` to
+ *     bypass this check, but the caller is still responsible for actually
+ *     clearing the active execution before calling createExecution.
+ *   - If the schedule-level pause flag is set, return false — UNLESS the
+ *     caller passes `force: true` (the user explicitly wants to override
+ *     the pause, e.g., by clicking Restart).
+ *
+ * Note: a disabled schedule (enabled=0) does NOT block manual runs. The
+ * cron scheduler won't fire for disabled pipelines, but the user can
+ * still click Run / Restart to trigger a one-off manual run. This was
+ * the original "buttons don't work" complaint — Run was greyed out for
+ * disabled pipelines even though manual override should be allowed.
  */
 function canStart(pipelineId, opts = {}) {
-  if (ACTIVE_EXECUTIONS.has(pipelineId)) return false;
+  if (ACTIVE_EXECUTIONS.has(pipelineId)) {
+    // Allow force-override (Restart uses this). The caller is expected
+    // to clear the active execution before calling createExecution.
+    if (!opts.force) return false;
+  }
   const db = getDb();
   const paused = db
     .prepare("SELECT value FROM settings WHERE key = ?")
@@ -964,6 +1087,8 @@ module.exports = {
   markExecutionCompleted,
   getActiveExecution,
   getExecutionState,
+  isExecutionProgressing,
+  hasStuckDbRow,
   requestPause,
   requestResume,
   requestStop,

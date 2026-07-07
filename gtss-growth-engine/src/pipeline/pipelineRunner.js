@@ -626,13 +626,20 @@ async function runFullPipelineNow(triggerSource = "scheduled", options = {}) {
       entityType: "pipeline",
       entityId: pipelineRunId,
       actor: triggerSource,
-      status: "failure",
-      summary: `Outreach pipeline #${pipelineRunId} failed`,
+      status: aborted ? "skipped" : "failure",
+      summary: `Outreach pipeline #${pipelineRunId} ${aborted ? "aborted" : "failed"}`,
       details: { error: err.message, failedStage: err.failedStage || null },
     });
-    if (err.failedStage) {
-      try { pipelineState.markExecutionFailed(executionId, err, err.failedStage); } catch (_) {}
-    }
+    // ALWAYS mark the execution as failed (or let markExecutionFailed
+    // no-op if the execution is already STOPPED — which is the correct
+    // behavior when the user clicked Stop and the abort propagated up
+    // as a thrown error). The previous code only marked failed if
+    // err.failedStage was set, which left the execution stuck in
+    // 'running' state when the runner threw without a failedStage
+    // (e.g., an abort signal thrown by throwIfAborted).
+    try {
+      pipelineState.markExecutionFailed(executionId, err, err.failedStage || null);
+    } catch (_) {}
     throw err;
   } finally {
     jobRegistry.finishJob(pipelineRunId);
