@@ -366,7 +366,18 @@ function installStrayTabInterceptor(context, platform) {
 }
 
 /**
- * Type a string character by character with human-like delays into a locator or selector.
+ * Type a string into a locator or selector using LinkedIn-style fast typing.
+ *
+ * This used to type character-by-character in a per-keystroke loop with
+ * 50–150 ms delays between keys, which was very slow for long captions
+ * (110–330 s for a 2200-char Instagram caption). It now uses the same
+ * single-call Playwright `locator.type(text, { delay })` strategy that
+ * LinkedIn's `typeTextWithFallback` uses (10–40 ms/char), and falls back
+ * to direct DOM mutation + synthetic input/change events if Playwright's
+ * type() fails (e.g. React re-rendered the editor mid-typing). This
+ * brings IG / X / Facebook typing speed in line with LinkedIn.
+ *
+ * Signature unchanged — existing call sites do not need updates.
  */
 async function humanTypeText(page, locatorOrSelector, text) {
   if (!text) return;
@@ -374,17 +385,62 @@ async function humanTypeText(page, locatorOrSelector, text) {
     typeof locatorOrSelector === "string"
       ? page.locator(locatorOrSelector)
       : locatorOrSelector;
-  await target.click();
+
+  await target.click({ timeout: 8000 }).catch(() => {});
   // Clear any existing text using keyboard select all if needed
   await page.keyboard.press("Control+A").catch(() => {});
   await page.keyboard.press("Backspace").catch(() => {});
 
-  for (let i = 0; i < text.length; i++) {
-    await page.keyboard.type(text[i]);
-    if (process.env.TEST_SPEEDUP !== "true") {
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.floor(Math.random() * 100) + 50),
-      );
+  // ── Primary path: single Playwright `target.type(text, { delay })` call ──
+  // Matches LinkedIn's typing speed: ~10–40 ms/char. In test-speedup mode
+  // we drop the per-keystroke delay entirely.
+  const typeDelay =
+    process.env.TEST_SPEEDUP === "true" ? 0 : Math.random() * 30 + 10;
+
+  try {
+    await target.type(text, { delay: typeDelay });
+    return;
+  } catch (error) {
+    // ── Fallback: direct DOM mutation + synthetic input/change events ──
+    // Used when Playwright's type() fails (e.g., the editor was re-rendered
+    // by React mid-typing). Mirrors the LinkedIn fallback in
+    // schedulerService.typeTextWithFallback.
+    try {
+      await target.evaluate((node, value) => {
+        const element = node;
+        const textValue = String(value);
+
+        element.focus();
+
+        if (typeof element.value === "string") {
+          const descriptor = Object.getOwnPropertyDescriptor(
+            Object.getPrototypeOf(element),
+            "value",
+          );
+          if (descriptor && descriptor.set) {
+            descriptor.set.call(element, textValue);
+          } else {
+            element.value = textValue;
+          }
+          element.dispatchEvent(new Event("input", { bubbles: true }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+          return;
+        }
+
+        element.textContent = textValue;
+        element.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            cancelable: true,
+            inputType: "insertText",
+            data: textValue,
+          }),
+        );
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+      }, text);
+    } catch (fallbackErr) {
+      // Last resort: re-throw the original error so callers can react.
+      throw error;
     }
   }
 }

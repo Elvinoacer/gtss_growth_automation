@@ -2289,48 +2289,21 @@ If you include the product link, write it as a bare URL on its own line (e.g. ht
 For X, the final caption must be ${POST_CHAR_LIMITS.x} characters or fewer including spaces and hashtags.
 Return ONLY the caption text, no explanations.`;
 
-  // ── Image-aware caption (optional) ────────────────────────────────────
-  // When the caller passes options.imagePath (resolved filesystem path),
-  // we FIRST try Gemini Web's image+prompt path so the caption can actually
-  // match what's in the image. On any failure we fall through to the
-  // text-only Gemini API path (which itself falls back to text-only Gemini
-  // Web). The image-aware path is best-effort — it must never block the
-  // pipeline from producing a usable caption.
+  // ── Image-aware caption path: DISABLED ────────────────────────────────
+  // The image-aware path previously uploaded the chosen asset to Gemini Web
+  // (generateImageAwareCaptionViaGeminiWeb) so the LLM could "see" the image
+  // and write a caption that referenced its contents. Per project decision
+  // we no longer upload images to Gemini; captions are now produced via the
+  // text-only Gemini API path below (which itself falls back to text-only
+  // Gemini Web). The image-aware code is intentionally bypassed so that
+  // library assets never leave the local machine. options.imagePath is
+  // therefore ignored for caption generation, but the asset itself is still
+  // attached to the post at publish time.
   if (options.imagePath) {
-    try {
-      const { generateImageAwareCaptionViaGeminiWeb } = require("../automation/geminiWeb");
-      const imagePrompt = `${prompt}
-
-You are also being shown an image. Please write the caption so that it specifically references what you see in the image (the product, the scene, the people, the mood) — generic captions that ignore the image are unacceptable. Stay within the ${limit}-character limit.`;
-      const result = await generateImageAwareCaptionViaGeminiWeb(
-        options.imagePath,
-        imagePrompt,
-        options.emit || (() => {}),
-      );
-      if (result && result.text) {
-        const caption = String(result.text).trim();
-        if (caption.length > 0) {
-          logger.db("info", "content", "caption_gen", "Image-aware Gemini Web caption generated", {
-            platform,
-            source: "web-image",
-            imagePath: options.imagePath,
-          });
-          return {
-            text: preparePlatformPostBody(platform, caption),
-            source: "web-image",
-            model: "gemini-web",
-            ok: true,
-          };
-        }
-      }
-    } catch (err) {
-      logger.warn("SCHEDULER", "Image-aware caption failed, falling back to text-only", {
-        platform,
-        imagePath: options.imagePath,
-        error: err.message,
-      });
-      // Fall through to text-only path
-    }
+    logger.db("info", "content", "caption_gen", "Image-aware caption path skipped (Gemini upload disabled); using text-only Gemini", {
+      platform,
+      imagePath: options.imagePath,
+    });
   }
 
   try {
