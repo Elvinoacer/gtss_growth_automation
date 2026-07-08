@@ -8,10 +8,10 @@
     "email": "founder@growthtoscalesocial.systems"
   },
   "license": "ISC",
-  "homepage": "https://github.com/gtss/growth-automation",
+  "homepage": "https://github.com/Elvinoacer/gtss_growth_automation",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gtss/growth-automation.git"
+    "url": "https://github.com/Elvinoacer/gtss_growth_automation.git"
   },
   "bin": {
     "gtss-growth": "./cli/gtss-growth.js"
