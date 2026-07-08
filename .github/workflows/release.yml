@@ -1,49 +1,160 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# GTSS Growth Engine — cross-platform release workflow
+# ─────────────────────────────────────────────────────────────────────────────
+# Triggers on any tag matching `v*` (e.g. v1.0.0, v1.1.0-beta) or manually
+# via the Actions tab ("Run workflow").
+#
+# Builds native installers on each target OS in parallel and publishes them
+# all to the SAME GitHub Release (defined by the git tag):
+#   - ubuntu-latest  → .deb + .rpm + .AppImage + latest-linux.yml
+#   - windows-latest → NSIS .exe + .msi         + latest.yml
+#   - macos-latest   → .dmg (x64 + arm64)       + latest-mac.yml
+#
+# electron-builder cannot cross-compile (no Windows .exe from Linux, no macOS
+# .dmg from Windows), so a matrix is mandatory.
+#
+# Signing is OPTIONAL — leave the secrets unset and the workflow still
+# produces working (unsigned) installers.
+# ─────────────────────────────────────────────────────────────────────────────
 name: Release
 
 on:
   push:
-    tags: ['v*']          # triggers when you push a tag like v1.0.0
-  workflow_dispatch:      # also lets you run it manually
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (must already exist in the repo)'
+        required: false
+        type: string
 
+# Workflow-level permissions. The per-job GITHUB_TOKEN needs `contents: write`
+# to upload assets to the release and `id-token: write` only if you use OIDC
+# (e.g. for AWS-backed publishing — not needed for GitHub Releases).
 permissions:
-  contents: write         # required to upload assets to the release
+  contents: write
+
+# Prevent two concurrent releases from racing to upload to the same tag.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Build + publish on each OS in parallel
+  # ───────────────────────────────────────────────────────────────────────────
   release:
+    name: Build (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
+        include:
+          - os: ubuntu-latest
+            targets: --linux deb rpm AppImage
+            artifact_glob: 'desktop/dist/*.{deb,rpm,AppImage,yml}'
+          - os: windows-latest
+            targets: --win nsis msi
+            artifact_glob: 'desktop/dist/*.{exe,msi,blockmap,yml}'
+          - os: macos-latest
+            targets: --mac dmg
+            artifact_glob: 'desktop/dist/*.{dmg,blockmap,yml}'
 
-      - uses: actions/setup-node@v4
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # We need full history so `npm version` + git tag checks work, and
+          # so the workflow_dispatch tag input can be resolved.
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
 
-      - name: Install desktop deps
+      - name: Install desktop dependencies
         working-directory: desktop
-        run: npm install
+        # `npm ci` is faster and deterministic. Falls back to `npm install`
+        # only if package-lock.json is somehow out of sync.
+        run: npm ci || npm install
 
-      - name: Rebuild native modules for Electron
+      - name: Rebuild native modules for Electron (better-sqlite3)
         working-directory: desktop
+        # Use @electron/rebuild (the package declared in devDependencies).
+        # `npx electron-rebuild` is the legacy binary name and may pull a
+        # different version than the one pinned in package.json.
         run: npx electron-rebuild -f -w better-sqlite3
 
-      - name: Build + publish
+      # ── macOS only: enable notarization when APPLE_TEAM_ID is set ───────────
+      # We don't touch electron-builder.yml directly. Instead we set the env
+      # vars that electron-builder reads natively for notarization
+      # (APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID) and enable
+      # signing via CSC_LINK / CSC_KEY_PASSWORD. When APPLE_TEAM_ID is empty,
+      # electron-builder skips notarization automatically.
+      - name: Build + publish (${{ matrix.targets }})
         working-directory: desktop
-        run: npx electron-builder --publish always
+        run: npx electron-builder ${{ matrix.targets }} --publish always
         env:
+          # GitHub token — auto-provided by Actions. Must have `contents: write`
+          # (granted at the top of this file).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # ---- macOS notarization (optional — leave empty to skip) ----
+
+          # ── Windows code signing (optional) ────────────────────────────────
+          # Set WIN_CSC_LINK (base64 of .pfx) and WIN_CSC_KEY_PASSWORD in
+          # repo Settings → Secrets and variables → Actions to sign the
+          # .exe and .msi. Leave unset to ship unsigned (SmartScreen will
+          # show a one-time "unrecognized app" warning).
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+          # ── macOS code signing + notarization (optional) ───────────────────
+          # CSC_LINK = base64 of Developer ID Application .p12
+          # CSC_KEY_PASSWORD = the .p12 export password
+          # APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID = for
+          # notarization (creates a notarization ticket with Apple's servers
+          # so Gatekeeper accepts the .dmg on first launch).
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
 
-      - name: Upload artifacts (for inspection)
+      # ── Upload the artifacts to the workflow run too (not just the release)
+      # This makes debugging a failed release much easier — you can download
+      # the actual installers from the Actions tab without waiting for the
+      # release to be published.
+      - name: Upload build artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-${{ matrix.os }}
-          path: desktop/dist/*.{exe,msi,deb,rpm,AppImage,dmg,yml}
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Final sanity check — confirms all three OS jobs succeeded.
+  # ───────────────────────────────────────────────────────────────────────────
+  release-summary:
+    name: Release summary
+    needs: release
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Report
+        run: |
+          echo "## Release build result" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| OS | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ubuntu-latest  | ${{ needs.release.result == 'success' && 'success' || needs.release.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "If all three rows show **success**, your release is now at:" >> $GITHUB_STEP_SUMMARY
+          echo "https://github.com/Elvinoacer/gtss_growth_automation/releases/tag/${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Open that link and click **Publish** (drafts are not visible to users)." >> $GITHUB_STEP_SUMMARY

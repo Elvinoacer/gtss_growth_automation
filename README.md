@@ -23,7 +23,7 @@ the Electron app directly.
 ## Quick start (non-technical users)
 
 1. Download the installer for your platform from the
-   [Releases page](https://github.com/gtss/growth-automation/releases):
+   [Releases page](https://github.com/Elvinoacer/gtss_growth_automation/releases):
    - **Windows:** `GTSS-Growth-Engine-Setup-x64.exe`
    - **macOS:** `GTSS-Growth-Engine-x64.dmg` (Intel) or
      `GTSS-Growth-Engine-arm64.dmg` (Apple Silicon)
@@ -43,8 +43,8 @@ You never need to touch a terminal.
 
 ```bash
 # 1. Clone and install the backend.
-git clone https://github.com/gtss/growth-automation.git
-cd growth-automation/gtss-growth-engine
+git clone https://github.com/Elvinoacer/gtss_growth_automation.git
+cd gtss_growth_automation/gtss-growth-engine
 npm install
 npx playwright install chromium
 npm run setup  # generates .env with a default passphrase
@@ -68,7 +68,7 @@ passphrase and a Gemini API key.
 
 | Method | Audience | Command |
 |--------|----------|---------|
-| Native installer (.exe / .dmg / .deb / .AppImage / .rpm) | **Non-technical users** (recommended) | Download from [Releases](https://github.com/gtss/growth-automation/releases) |
+| Native installer (.exe / .dmg / .deb / .AppImage / .rpm) | **Non-technical users** (recommended) | Download from [Releases](https://github.com/Elvinoacer/gtss_growth_automation/releases) |
 | `curl` installer (macOS / Linux) | Power users | `curl -fsSL https://gtss.dev/install.sh \| bash` |
 | PowerShell installer (Windows) | Power users | `iwr -UseBasicParsing https://gtss.dev/install.ps1 \| iex` |
 | `npm install -g gtss-growth-desktop` | Developers | Installs CLI; on first run, downloads the native installer |

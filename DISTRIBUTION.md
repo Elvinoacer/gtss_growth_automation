@@ -43,6 +43,11 @@ This will:
 5. Auto-update feeds (`electron-updater`'s `latest.yml` / `latest-mac.yml` /
    `latest-linux.yml`) are uploaded alongside the artifacts.
 
+> **Note:** In production, the build + publish step is performed by the
+> `.github/workflows/release.yml` GitHub Actions matrix (one job per OS), not
+> by this script locally — electron-builder cannot cross-compile Windows
+> `.exe` from Linux or macOS `.dmg` from Windows reliably.
+
 ## Per-platform builds
 
 ```bash
@@ -105,8 +110,8 @@ The update feed is configured in `desktop/electron-builder.yml`:
 ```yaml
 publish:
   - provider: github
-    owner: gtss
-    repo: growth-automation
+    owner: Elvinoacer
+    repo: gtss_growth_automation
     releaseType: release
 ```
 

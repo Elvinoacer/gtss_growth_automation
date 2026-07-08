@@ -26,8 +26,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$script:GitHubOwner = "gtss"
-$script:GitHubRepo  = "growth-automation"
+$script:GitHubOwner = "Elvinoacer"
+$script:GitHubRepo  = "gtss_growth_automation"
 $script:NpmPackage  = "gtss-growth-desktop"
 
 function Write-GtssLog  { param([string]$Msg) Write-Host "[gtss] $Msg" -ForegroundColor Cyan }

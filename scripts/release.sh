@@ -58,4 +58,4 @@ npx electron-builder --win nsis msi --linux deb rpm AppImage --mac dmg --publish
 
 echo ""
 echo ">> Release $TAG published."
-echo "   https://github.com/gtss/growth-automation/releases/tag/$TAG"
+echo "   https://github.com/Elvinoacer/gtss_growth_automation/releases/tag/$TAG"

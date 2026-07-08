@@ -23,8 +23,8 @@ set -euo pipefail
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
-GITHUB_OWNER="gtss"
-GITHUB_REPO="growth-automation"
+GITHUB_OWNER="Elvinoacer"
+GITHUB_REPO="gtss_growth_automation"
 NPM_PACKAGE="gtss-growth-desktop"
 
 # ANSI colors — disabled if not a TTY.
