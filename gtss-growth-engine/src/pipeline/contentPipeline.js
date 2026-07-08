@@ -30,7 +30,14 @@ const pipelineState = require("../services/pipelineStateService");
 const pipelineLogger = require("../services/pipelineLogger");
 const checkpointService = require("../services/pipelineCheckpoint");
 
-const UPLOADS_DIR = path.resolve(__dirname, "../../public/uploads");
+// Resolve the writable uploads directory. The desktop launcher sets
+// UPLOADS_DIR=<userData>/public/uploads (writable). In standalone dev mode
+// (running `npm start` inside gtss-growth-engine/), UPLOADS_DIR is unset
+// and we fall back to the bundled <serverRoot>/public/uploads (writable
+// in dev). See src/routes/assets.js for the same pattern.
+const UPLOADS_DIR = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.resolve(__dirname, "../../public/uploads");
 
 const CONTENT_STAGES = ["image_gen", "caption_gen", "post_record", "publish"];
 
@@ -367,10 +374,18 @@ async function runContentPipelineNow(config = {}) {
             if (path.isAbsolute(mediaRelPath) && fs.existsSync(mediaRelPath)) {
               imageFsPath = mediaRelPath;
             } else {
-              const candidate = mediaRelPath.startsWith("/")
-                ? path.resolve(__dirname, "../../public", mediaRelPath.replace(/^\//, ""))
-                : path.resolve(__dirname, "../../public", mediaRelPath);
-              if (fs.existsSync(candidate)) imageFsPath = candidate;
+              // Try the WRITABLE UPLOADS_DIR first (desktop app), then
+              // the bundled public/ dir (dev mode).
+              const candidates = [];
+              if (mediaRelPath.startsWith("/")) {
+                candidates.push(path.resolve(UPLOADS_DIR, `.${mediaRelPath}`));
+                candidates.push(path.resolve(UPLOADS_DIR, mediaRelPath));
+                candidates.push(path.resolve(__dirname, "../../public", mediaRelPath.replace(/^\//, "")));
+              } else {
+                candidates.push(path.resolve(UPLOADS_DIR, mediaRelPath));
+                candidates.push(path.resolve(__dirname, "../../public", mediaRelPath));
+              }
+              imageFsPath = candidates.find((c) => fs.existsSync(c)) || null;
             }
           }
         } catch (_) { /* fall back to text-only */ }

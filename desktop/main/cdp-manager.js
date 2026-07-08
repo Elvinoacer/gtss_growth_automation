@@ -103,17 +103,20 @@ const PROFILE_STRIP_DIRS = [
 ];
 
 class CdpManager {
-  // `serverRoot` is the gtss-growth-engine source root. We keep the CDP
-  // profile directory INSIDE serverRoot so it matches the path used by
-  // gtss-growth-engine/scripts/launch-chrome.sh (which the engine's
-  // automation layer spawns as a fallback when port 9222 is closed). If
-  // the desktop launcher and the engine's bash fallback used different
-  // profile dirs, the engine's fallback Chrome would launch with a fresh
-  // profile containing none of the user's authenticated sessions — which
-  // is exactly the regression the user reported ("CDP that we are
-  // launching right now has no sessions at all"). When `serverRoot` is
-  // not supplied (e.g., in unit tests), we fall back to the legacy
-  // `<dataRoot>/chrome-cdp-profile/` location.
+  // `dataRoot` is the writable per-user data directory (appData). The CDP
+  // profile directory lives at `<dataRoot>/chrome-cdp-profile/` so it:
+  //   - is writable on every platform (Linux .deb installs to /opt which
+  //     is read-only for non-root; macOS .app bundles are read-only)
+  //   - survives app updates (the user's authenticated Chrome sessions
+  //     aren't wiped when they install a new version of GTSS)
+  //   - matches the path the engine's bash fallback expects, because
+  //     EnvBootstrap writes CDP_PROFILE_DIR=<dataRoot>/chrome-cdp-profile
+  //     into the .env file and the engine reads that env var
+  //     (see scripts/launch-chrome.sh and src/automation/browserBase.js).
+  //
+  // The `serverRoot` constructor parameter is retained for backwards
+  // compatibility with unit tests but is no longer used to compute the
+  // profile dir.
   constructor({ dataRoot, logStream, port = DEFAULT_PORT, serverRoot = null }) {
     this.dataRoot = dataRoot;
     this.logStream = logStream;
@@ -121,9 +124,7 @@ class CdpManager {
     this.child = null;
     this.state = "stopped"; // stopped | starting | running | stopping | crashed
     this.serverRoot = serverRoot;
-    this.cdpProfileDir = serverRoot
-      ? path.join(serverRoot, CDP_PROFILE_DIRNAME)
-      : path.join(dataRoot, CDP_PROFILE_DIRNAME);
+    this.cdpProfileDir = path.join(dataRoot, CDP_PROFILE_DIRNAME);
     this.chromePath = null;
     this.lastError = null;
     this.startedAt = null;

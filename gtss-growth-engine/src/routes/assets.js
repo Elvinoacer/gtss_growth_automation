@@ -6,7 +6,23 @@ const { getDb } = require("../db/database");
 const { pickNextAsset, pickNextAssetGroup } = require("../services/assetRotationService");
 
 const router = express.Router();
-const uploadDir = path.resolve(__dirname, "../../public/uploads/library");
+
+// Resolve the writable uploads directory. The desktop launcher sets
+// UPLOADS_DIR=<userData>/public/uploads (writable); in standalone dev mode
+// (running `npm start` inside gtss-growth-engine/), UPLOADS_DIR is unset
+// and we fall back to the bundled <serverRoot>/public/uploads (writable
+// in dev because the dev's clone is owned by them).
+//
+// We DO NOT use path.resolve(__dirname, "../../public/uploads/library")
+// directly because when the server is bundled inside the desktop app,
+// __dirname points at the read-only <resources>/server/src/routes/
+// directory, and the resulting path would be inside the read-only
+// <resources>/server/public/uploads/library/ — multer would fail to
+// write uploaded files (EROFS).
+const UPLOADS_BASE = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.resolve(__dirname, "../../public/uploads");
+const uploadDir = path.join(UPLOADS_BASE, "library");
 fs.mkdirSync(uploadDir, { recursive: true });
 
 const storage = multer.diskStorage({

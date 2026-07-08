@@ -14,21 +14,46 @@ productName: GTSS Growth Engine
 copyright: Copyright © 2026 GTSS
 
 # The Node.js server lives outside asar so __dirname / path references resolve
-# exactly as they do in development. better-sqlite3 is rebuilt against
-# Electron's ABI by `electron-builder install-app-deps` (postinstall hook).
+# exactly as they do in development. better-sqlite3 / sharp are rebuilt against
+# Electron's ABI by the `electron-rebuild` step in the build scripts
+# (scripts/build-*.sh and .github/workflows/release.yml) — NOT by the
+# `postinstall: electron-builder install-app-deps` hook, because the native
+# modules live in gtss-growth-engine/node_modules/, not desktop/node_modules/.
 asar: true
 asarUnpack:
   - "**/*.node"
   - "**/better-sqlite3/**"
+  - "**/sharp/**"
 
-# Bundle the entire gtss-growth-engine/ source tree as extra resources.
-# At runtime this lands at: <AppData>/resources/server/
+# Bundle the entire gtss-growth-engine/ source tree — INCLUDING node_modules —
+# as extra resources. At runtime this lands at: <resourcesPath>/server/
+#
+# CRITICAL: node_modules MUST be bundled. The previous config excluded it
+# (`!node_modules/**`) under the assumption that the user had already run
+# `npm install` inside gtss-growth-engine/ — which is true in development
+# but NEVER true for end users installing the .deb / .exe / .dmg. Without
+# node_modules, the server crashes immediately on launch with
+# "Cannot find module 'express'" (or 'dotenv', 'better-sqlite3', etc.).
+#
+# Native modules (better-sqlite3, sharp) inside the bundled node_modules
+# are rebuilt against Electron's ABI by the build scripts, so the server
+# can be spawned with `ELECTRON_RUN_AS_NODE=1` using Electron's bundled
+# Node.js — no system Node.js required on the user's machine.
+#
+# We exclude:
+#   - Dev-only files (test/, *.test.js, madge, @playwright/test)
+#   - Playwright's downloaded browser binaries (we use the user's installed
+#     Chrome via CDP — see desktop/main/cdp-manager.js)
+#   - The engine's mutable runtime dirs (data/, sessions/, etc.) — these
+#     live in the writable userData dir at runtime, not in resources/server/
+#   - Sharp's prebuilt libvips .dll/.dylib/.so for the wrong platform
+#   - npm cache / lockfile cruft
 extraResources:
   - from: ../gtss-growth-engine
     to: server
     filter:
       - "**/*"
-      - "!node_modules/**"
+      # ─── Mutable runtime state (lives in userData at runtime) ────────────
       - "!data/**"
       - "!sessions/**"
       - "!profiles/**"
@@ -36,12 +61,45 @@ extraResources:
       - "!media/**"
       - "!public/uploads/**"
       - "!chrome-cdp-profile/**"
-      - "!test/**"
-      - "!test-results/**"
-      - "!playwright-report/**"
+      # ─── Environment & logs ──────────────────────────────────────────────
       - "!.env"
       - "!.env.*"
       - "!*.log"
+      # ─── Test / dev scaffolding (not needed at runtime) ──────────────────
+      - "!test/**"
+      - "!test-results/**"
+      - "!playwright-report/**"
+      - "!playwright/.cache/**"
+      # ─── Playwright browser binaries — we use the user's installed Chrome ─
+      # The playwright npm package itself IS bundled (its JS driver is needed
+      # to talk CDP), but its downloaded browser binaries are huge (~300 MB)
+      # and unused because BROWSER_MODE=cdp + channel="chrome" launches the
+      # user's real Chrome.
+      - "!node_modules/playwright-core/.local-browsers/**"
+      - "!node_modules/playwright/.local-browsers/**"
+      # ─── Sharp prebuilt libvips for OTHER platforms (cross-build hygiene) ─
+      - "!node_modules/@img/sharp-win32-ia32/**"
+      - "!node_modules/@img/sharp-win32-x64/**"
+      - "!node_modules/@img/sharp-darwin-x64/**"
+      - "!node_modules/@img/sharp-darwin-arm64/**"
+      - "!node_modules/@img/sharp-linux-arm/**"
+      - "!node_modules/@img/sharp-linux-arm64/**"
+      - "!node_modules/@img/sharp-libvips-linux-arm/**"
+      - "!node_modules/@img/sharp-libvips-linux-arm64/**"
+      # ─── Dev-only node_modules subtrees ──────────────────────────────────
+      - "!node_modules/@playwright/test/**"
+      - "!node_modules/madge/**"
+      - "!node_modules/.cache/**"
+      - "!node_modules/.bin/**"
+      # ─── Top-level docs / repo metadata not needed at runtime ────────────
+      - "!*.md"
+      - "!CHECKLIST.md"
+      - "!DIAGNOSTICS.md"
+      - "!PIPELINES_OVERHAUL.md"
+      - "!FIXES.md"
+      - "!runing.txt"
+      - "!linkedin.js.diff"
+      - "!profile.html"
 
 directories:
   output: dist
@@ -94,6 +152,12 @@ linux:
   description: GTSS Growth Engine is a local-first desktop application that helps founders discover, qualify, and reach out to potential clients across LinkedIn, X (Twitter), Facebook, and Instagram — without paid SaaS or cloud servers.
 
 deb:
+  # Electron's own shared-library dependencies (libnss3, libatk, etc.) plus
+  # `libvips` (needed by sharp at runtime when the prebuilt sharp-libvips
+  # package isn't bundled — we exclude it from extraResources for platforms
+  # other than the build target, so on a Linux build the Linux libvips .so
+  # IS bundled, but we keep libvips42 as a safety net in case the bundled
+  # one fails to dlopen on older glibc).
   depends:
     - libnss3
     - libatk1.0-0
@@ -108,6 +172,13 @@ deb:
     - libpango-1.0-0
     - libcairo2
     - libasound2
+    - libvips42
+  # Recommend (not strictly require) Google Chrome — the app's CDP mode
+  # needs Chrome installed. Using `recommends` rather than `depends` so
+  # `apt install ./xxx.deb` doesn't fail on systems without Chrome configured
+  # in apt (Chrome is typically installed from Google's .deb, not a repo).
+  recommends:
+    - google-chrome-stable | chromium-browser | chromium
 
 rpm:
   depends:
@@ -124,6 +195,11 @@ rpm:
     - pango
     - cairo
     - alsa-lib
+    - libvips
+  # Note: rpm doesn't support a `recommends` field via electron-builder's
+  # schema. Chrome is similarly required for CDP mode on rpm-based distros;
+  # the launcher's CdpManager.locateChrome() will detect its absence and
+  # show a clear error telling the user to install Chrome.
 
 appImage:
   artifactName: GTSS-Growth-Engine-${version}-${arch}.AppImage

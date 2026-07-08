@@ -4,100 +4,66 @@
  *
  * ─── Runtime strategy ──────────────────────────────────────────────────────
  *
- * The server's `node_modules/` (especially `better-sqlite3`) are compiled
- * against the user's SYSTEM Node.js ABI. If we spawn the server using
- * Electron's bundled Node.js, the ABI won't match and `better-sqlite3` will
- * throw `NODE_MODULE_VERSION mismatch`.
+ * The server ALWAYS runs under Electron's bundled Node.js (via
+ * `ELECTRON_RUN_AS_NODE=1`), NOT the user's system Node. This is a change
+ * from the previous design which preferred system Node and fell back to
+ * Electron's Node only when system Node wasn't on PATH.
  *
- * Solution: detect and use the system `node` binary. The user already has
- * Node.js installed (they ran `npm install` in gtss-growth-engine/ — that's
- * the only way `node_modules/` could exist).
+ * Why the change:
  *
- * Fallback: if for some reason system Node isn't on PATH (rare), we fall back
- * to `ELECTRON_RUN_AS_NODE=1` using Electron's bundled Node, and emit a
- * warning. In that case `better-sqlite3` may fail to load — the user will
- * see a clear error card in the UI telling them to run `npm rebuild`.
+ *  1. End users don't have Node.js installed. The previous design assumed
+ *     "the user already has Node.js installed (they ran `npm install` in
+ *     gtss-growth-engine/)". That assumption is true in DEVELOPMENT (the
+ *     developer ran npm install) but NEVER true for end users installing
+ *     the .deb / .exe / .dmg — they have no Node.js, no npm, no git clone.
+ *
+ *  2. Native modules (better-sqlite3, sharp) inside the bundled
+ *     gtss-growth-engine/node_modules/ are rebuilt against ELECTRON's ABI
+ *     by the build scripts (scripts/build-*.sh). They will ONLY load under
+ *     a runtime with that ABI — i.e., this app's Electron binary. If we
+ *     spawned the server with the user's system Node (even if it existed),
+ *     `better-sqlite3` would throw `NODE_MODULE_VERSION mismatch` on
+ *     require().
+ *
+ *  3. Using a single, deterministic runtime (Electron's bundled Node)
+ *     eliminates a whole class of "works on my machine" bugs caused by
+ *     different Node versions on different users' machines.
+ *
+ * The previous system-Node path is gone. If a power-user genuinely wants
+ * to run the server under their own Node (e.g., for debugging with
+ * node --inspect), they can clone the repo and run `npm start` inside
+ * gtss-growth-engine/ directly.
  *
  * ─── Other design notes ────────────────────────────────────────────────────
  *
- *  - The server's cwd is the gtss-growth-engine source root, so all of the
- *    server's `path.join(__dirname, "..", "public")` references resolve.
+ *  - The server's cwd is the gtss-growth-engine source root (read-only
+ *    when packaged), so all of the server's `path.join(__dirname, "..",
+ *    "public")` references resolve to the bundled static frontend files.
+ *    Writable state (uploads, media, DB, sessions, .env) is pointed into
+ *    userData via env vars — see EnvBootstrap.getRuntimeEnvOverrides().
  *
- *  - The .env file we wrote into DATA_ROOT is loaded by the server's existing
- *    `require('dotenv').config()` call. We point at it via DOTENV_CONFIG_PATH.
+ *  - The .env file we wrote into DATA_ROOT is loaded by the server's
+ *    existing `require('dotenv').config()` call. We point at it via
+ *    DOTENV_CONFIG_PATH.
  *
- *  - Logs are piped into LogStream. The server already logs structured output
- *    to stdout, so we get everything for free.
+ *  - Logs are piped into LogStream. The server already logs structured
+ *    output to stdout, so we get everything for free.
  *
- *  - Health check: poll the TCP port until it accepts connections. The server
- *    doesn't expose /api/health, but a successful TCP connect means Express
- *    has finished booting.
+ *  - Health check: poll the TCP port until it accepts connections. The
+ *    server doesn't expose /api/health, but a successful TCP connect
+ *    means Express has finished booting.
  *
- *  - Crash diagnostics: when the server exits with a non-zero code, we scan
- *    the last N stderr lines for known error signatures (ABI mismatch,
- *    missing module, port in use) and produce a friendly, actionable
- *    `lastError` the UI can render as an error card.
+ *  - Crash diagnostics: when the server exits with a non-zero code, we
+ *    scan the last N stderr lines for known error signatures (ABI
+ *    mismatch, missing module, port in use) and produce a friendly,
+ *    actionable `lastError` the UI can render as an error card.
  */
 
-const { spawn, spawnSync } = require("child_process");
+const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const net = require("net");
-
-// ─── System Node detection ─────────────────────────────────────────────────
-
-let _cachedSystemNode = undefined;
-
-function findSystemNode() {
-  if (_cachedSystemNode !== undefined) return _cachedSystemNode;
-
-  // Try `node` from PATH.
-  try {
-    const result = spawnSync("node", ["--version"], {
-      encoding: "utf-8",
-      shell: process.platform === "win32",
-      timeout: 3000,
-    });
-    if (result.status === 0) {
-      const version = result.stdout.trim(); // e.g. "v20.18.3"
-      const major = parseInt(version.replace(/^v/, "").split(".")[0], 10);
-      if (major >= 18) {
-        _cachedSystemNode = { binary: "node", version, major };
-        return _cachedSystemNode;
-      }
-    }
-  } catch (_) {
-    // `node` not on PATH — fall through.
-  }
-
-  // Try common absolute paths as a last resort.
-  const candidates =
-    process.platform === "win32"
-      ? [
-          path.join(process.env.ProgramFiles || "C:\\Program Files", "nodejs", "node.exe"),
-          path.join(process.env.LOCALAPPDATA || "", "Programs", "nodejs", "node.exe"),
-        ]
-      : ["/usr/bin/node", "/usr/local/bin/node", "/opt/homebrew/bin/node"];
-  for (const c of candidates) {
-    if (c && fs.existsSync(c)) {
-      try {
-        const result = spawnSync(c, ["--version"], { encoding: "utf-8", timeout: 3000 });
-        if (result.status === 0) {
-          const version = result.stdout.trim();
-          const major = parseInt(version.replace(/^v/, "").split(".")[0], 10);
-          if (major >= 18) {
-            _cachedSystemNode = { binary: c, version, major };
-            return _cachedSystemNode;
-          }
-        }
-      } catch (_) {}
-    }
-  }
-
-  _cachedSystemNode = null;
-  return _cachedSystemNode;
-}
 
 // ─── Error signature matcher ───────────────────────────────────────────────
 //
@@ -150,10 +116,14 @@ function diagnoseCrash(recentStderr) {
 // ─── ServerManager ─────────────────────────────────────────────────────────
 
 class ServerManager {
-  constructor({ serverRoot, dataRoot, logStream }) {
+  constructor({ serverRoot, dataRoot, logStream, envBootstrap }) {
     this.serverRoot = serverRoot;
     this.dataRoot = dataRoot;
     this.logStream = logStream;
+    // EnvBootstrap is needed so we can pull in the writable-path env
+    // overrides (UPLOADS_DIR, MEDIA_DIR, CDP_PROFILE_DIR) when spawning
+    // the server. Optional only for unit tests.
+    this.envBootstrap = envBootstrap || null;
     this.child = null;
     this.state = "stopped"; // stopped | starting | running | stopping | crashed
     this.startedAt = null;
@@ -205,31 +175,16 @@ class ServerManager {
       throw new Error(this.lastError);
     }
 
-    // ─── Pick a Node.js runtime ────────────────────────────────────────────
-    const sysNode = findSystemNode();
-    let binary;
-    let useElectronNode = false;
+    // ─── Pick the Node.js runtime ────────────────────────────────────────
+    //
+    // ALWAYS use Electron's bundled Node (process.execPath) with
+    // ELECTRON_RUN_AS_NODE=1. See the file-level comment for why we no
+    // longer detect / prefer system Node.
+    const binary = process.execPath;
     const childEnv = { ...process.env };
-
-    if (sysNode) {
-      binary = sysNode.binary;
-      this.nodeRuntime = `system Node ${sysNode.version}`;
-      this.logStream.append("server", `Using ${this.nodeRuntime}`);
-      // Don't set ELECTRON_RUN_AS_NODE — we're using system Node, not Electron.
-      delete childEnv.ELECTRON_RUN_AS_NODE;
-    } else {
-      // Fallback: Electron's bundled Node. This may cause ABI mismatches with
-      // native modules like better-sqlite3. Emit a clear warning.
-      binary = process.execPath;
-      useElectronNode = true;
-      childEnv.ELECTRON_RUN_AS_NODE = "1";
-      this.nodeRuntime = "Electron bundled Node (fallback)";
-      this.logStream.append(
-        "server:stderr",
-        "WARNING: System Node.js not found on PATH. Falling back to Electron's bundled Node. " +
-          "If better-sqlite3 fails to load, install Node.js 18+ from https://nodejs.org/ and restart.",
-      );
-    }
+    childEnv.ELECTRON_RUN_AS_NODE = "1";
+    this.nodeRuntime = `Electron bundled Node (ELECTRON_RUN_AS_NODE=1)`;
+    this.logStream.append("server", `Using ${this.nodeRuntime}`);
 
     // ─── Build env for the child ──────────────────────────────────────────
     //
@@ -255,6 +210,18 @@ class ServerManager {
     childEnv.AUTOMATION_ARTIFACTS_DIR = path.join(this.dataRoot, "artifacts", "automation");
     childEnv.GEMINI_IMAGE_SAVE_DIR = path.join(this.dataRoot, "artifacts", "gemini-images");
     childEnv.AUTOMATION_LOCKS_DIR = path.join(this.dataRoot, "data", "browser-locks");
+    // Writable paths for uploads / media / CDP profile. Without these the
+    // server would try to write into the read-only <resources>/server/
+    // directory and crash on the first write (mkdir EROFS).
+    if (this.envBootstrap && typeof this.envBootstrap.getRuntimeEnvOverrides === "function") {
+      Object.assign(childEnv, this.envBootstrap.getRuntimeEnvOverrides());
+    } else {
+      // Defensive fallback (shouldn't happen in normal operation).
+      childEnv.UPLOADS_DIR = path.join(this.dataRoot, "public", "uploads");
+      childEnv.MEDIA_DIR = path.join(this.dataRoot, "media");
+      childEnv.CDP_PROFILE_DIR = path.join(this.dataRoot, "chrome-cdp-profile");
+      childEnv.PROFILES_DIR = path.join(this.dataRoot, "profiles");
+    }
 
     this.child = spawn(binary, [serverEntry], {
       cwd: this.serverRoot,

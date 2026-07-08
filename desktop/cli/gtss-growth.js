@@ -30,8 +30,11 @@ const { execSync } = require("child_process");
 
 const PACKAGE = require("../package.json");
 const VERSION = PACKAGE.version;
-const GITHUB_OWNER = "gtss";
-const GITHUB_REPO = "growth-automation";
+// Match the repo configured in install.sh, install.ps1, and
+// electron-builder.yml — these were previously hardcoded as "gtss" /
+// "growth-automation" which would have pointed at a non-existent repo.
+const GITHUB_OWNER = "Elvinoacer";
+const GITHUB_REPO = "gtss_growth_automation";
 
 const PLATFORM = process.platform;
 const ARCH = process.arch;

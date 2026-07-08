@@ -24,7 +24,14 @@ const router = express.Router();
 // Media upload setup
 // ---------------------------------------------------------------------------
 
-const UPLOADS_DIR = path.join(__dirname, "..", "..", "public", "uploads");
+// Resolve the writable uploads directory. The desktop launcher sets
+// UPLOADS_DIR=<userData>/public/uploads (writable); in standalone dev mode
+// (running `npm start` inside gtss-growth-engine/), UPLOADS_DIR is unset
+// and we fall back to the bundled <serverRoot>/public/uploads (writable
+// in dev). See src/routes/assets.js for the same pattern.
+const UPLOADS_DIR = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.join(__dirname, "..", "..", "public", "uploads");
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
@@ -104,10 +111,15 @@ function normalizeSingleMediaPath(trimmed) {
   if (path.isAbsolute(trimmed)) {
     candidates.push(path.resolve(trimmed));
   } else if (trimmed.startsWith("/uploads/")) {
+    // Try the WRITABLE UPLOADS_DIR first (desktop app), then the bundled
+    // public/ dir (dev mode fallback).
+    candidates.push(path.resolve(UPLOADS_DIR, `.${trimmed}`));
+    candidates.push(path.resolve(UPLOADS_DIR, trimmed));
     candidates.push(
       path.resolve(__dirname, "..", "..", "public", `.${trimmed}`),
     );
   } else if (trimmed.startsWith("uploads/")) {
+    candidates.push(path.resolve(UPLOADS_DIR, trimmed));
     candidates.push(path.resolve(__dirname, "..", "..", "public", trimmed));
   } else {
     candidates.push(path.resolve(trimmed));

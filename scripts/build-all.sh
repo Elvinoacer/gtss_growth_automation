@@ -17,7 +17,6 @@
 #
 # Prerequisites:
 #   - Node.js 20+ and npm
-#   - The desktop/ directory has node_modules installed (npm install)
 #   - For cross-platform builds: a CI runner on each target OS. electron-builder
 #     cannot cross-compile Windows .exe from Linux or vice versa without
 #     Docker/Wine.
@@ -29,17 +28,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 DESKTOP_DIR="${REPO_ROOT}/desktop"
 
+# shellcheck source=build-common.sh
+source "${SCRIPT_DIR}/build-common.sh"
+prepare_build_environment "$REPO_ROOT"
+
 cd "$DESKTOP_DIR"
-
-# Ensure dependencies are installed.
-if [ ! -d "node_modules" ]; then
-  echo ">> Installing desktop dependencies..."
-  npm install
-fi
-
-# Rebuild native modules (better-sqlite3) for Electron's ABI.
-echo ">> Rebuilding native modules for Electron..."
-npx electron-rebuild -f -w better-sqlite3
 
 # Build for current platform by default.
 case "$(uname -s)" in

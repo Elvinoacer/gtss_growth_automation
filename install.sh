@@ -219,11 +219,20 @@ run_native_installer() {
           ok "  mkdir -p ~/Applications && mv '${dest}' ~/Applications/"
           ;;
         *.deb)
+          # Make the downloaded .deb world-readable before invoking apt /
+          # dpkg. Otherwise apt prints a noisy warning:
+          #   "N: Download is performed unsandboxed as root as file
+          #    '...' couldn't be accessed by user '_apt'. - pkgAcquire::Run
+          #    (13: Permission denied)"
+          # The warning is harmless functionally, but it makes the install
+          # look broken to a non-technical user. Chmodding the file to 0644
+          # before apt reads it silences the warning.
+          chmod 0644 "$dest" 2>/dev/null || true
           if [ "$(id -u)" = "0" ]; then
-            dpkg -i "$dest"
+            apt-get install -y "$dest"
           else
             warn "Installing .deb requires sudo. Running:"
-            sudo dpkg -i "$dest"
+            sudo apt-get install -y "$dest"
           fi
           ok "Installed. Find GTSS Growth Engine in your Applications menu."
           ;;

@@ -49,10 +49,15 @@ if ! git rev-parse "$TAG" >/dev/null 2>&1; then
 fi
 
 # Build + publish.
-cd desktop
-if [ ! -d node_modules ]; then npm install; fi
-npx electron-rebuild -f -w better-sqlite3
+# Use build-all.sh so the engine's node_modules are installed and its
+# native modules are rebuilt against Electron's ABI before packaging.
+# (build-all.sh sources scripts/build-common.sh which handles both.)
+echo ">> Preparing build environment (installing deps + rebuilding native modules)..."
+# shellcheck source=build-common.sh
+source "${SCRIPT_DIR}/build-common.sh"
+prepare_build_environment "$REPO_ROOT"
 
+cd desktop
 echo ">> Publishing to GitHub Releases..."
 npx electron-builder --win nsis msi --linux deb rpm AppImage --mac dmg --publish always
 

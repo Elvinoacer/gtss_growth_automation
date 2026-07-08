@@ -75,20 +75,55 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: desktop/package-lock.json
+          cache-dependency-path: |
+            desktop/package-lock.json
+            gtss-growth-engine/package-lock.json
 
+      # ── Install desktop/ dependencies (Electron, electron-builder) ──────
       - name: Install desktop dependencies
         working-directory: desktop
         # `npm ci` is faster and deterministic. Falls back to `npm install`
         # only if package-lock.json is somehow out of sync.
         run: npm ci || npm install
 
-      - name: Rebuild native modules for Electron (better-sqlite3)
+      # ── Install gtss-growth-engine/ dependencies ────────────────────────
+      # CRITICAL: the engine's node_modules (express, better-sqlite3, sharp,
+      # playwright, etc.) MUST be installed before electron-builder runs,
+      # because they get bundled into the .deb / .exe / .dmg as extraResources
+      # (see desktop/electron-builder.yml). Without this step, the bundled
+      # installer would contain the engine source but no dependencies — and
+      # the server would crash on first launch with "Cannot find module
+      # 'express'" (the bug that caused installs on real machines to fail).
+      #
+      # We skip Playwright's browser-binary download (~300 MB) because the
+      # desktop launcher uses the user's installed Chrome via CDP, not
+      # Playwright's bundled Chromium.
+      - name: Install engine dependencies
+        working-directory: gtss-growth-engine
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci || npm install
+
+      # ── Rebuild engine native modules for Electron's ABI ────────────────
+      # The server runs under ELECTRON_RUN_AS_NODE=1 (Electron's bundled
+      # Node), so native modules in gtss-growth-engine/node_modules/ MUST
+      # be rebuilt against Electron's NODE_MODULE_VERSION — otherwise they
+      # throw "NODE_MODULE_VERSION mismatch" on require().
+      #
+      # The previous workflow ran `npx electron-rebuild -f -w better-sqlite3`
+      # from desktop/ — but better-sqlite3 isn't a desktop/ dependency, so
+      # the rebuild was a no-op. We now point --module-dir at the engine.
+      - name: Rebuild native modules for Electron (better-sqlite3, sharp)
         working-directory: desktop
-        # Use @electron/rebuild (the package declared in devDependencies).
-        # `npx electron-rebuild` is the legacy binary name and may pull a
-        # different version than the one pinned in package.json.
-        run: npx electron-rebuild -f -w better-sqlite3
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: |
+          npx electron-rebuild -f \
+            --module-dir "${{ github.workspace }}/gtss-growth-engine" \
+            --which better-sqlite3 \
+            --which sharp \
+            || npx electron-rebuild -f \
+              --module-dir "${{ github.workspace }}/gtss-growth-engine"
 
       # ── macOS only: enable notarization when APPLE_TEAM_ID is set ───────────
       # We don't touch electron-builder.yml directly. Instead we set the env

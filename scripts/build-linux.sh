@@ -4,9 +4,11 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-cd "${REPO_ROOT}/desktop"
 
-if [ ! -d node_modules ]; then npm install; fi
-npx electron-rebuild -f -w better-sqlite3
+# shellcheck source=build-common.sh
+source "${SCRIPT_DIR}/build-common.sh"
+prepare_build_environment "$REPO_ROOT"
+
+cd "${REPO_ROOT}/desktop"
 npx electron-builder --linux deb rpm AppImage
 ls -lh dist/ | grep -E '\.(deb|rpm|AppImage)$'

@@ -82,7 +82,14 @@ const POST_CHAR_LIMITS = {
   instagram: 2200,
 };
 
-const UPLOADS_DIR = path.resolve(__dirname, "..", "..", "public", "uploads");
+// Resolve the writable uploads directory. The desktop launcher sets
+// UPLOADS_DIR=<userData>/public/uploads (writable); in standalone dev mode
+// (running `npm start` inside gtss-growth-engine/), UPLOADS_DIR is unset
+// and we fall back to the bundled <serverRoot>/public/uploads (writable
+// in dev). See src/routes/assets.js for the same pattern.
+const UPLOADS_DIR = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.resolve(__dirname, "..", "..", "public", "uploads");
 const AUTOMATION_ARTIFACT_DIR = path.resolve(
   __dirname,
   "..",
@@ -694,8 +701,11 @@ function resolveMediaFilePath(mediaPath) {
     candidates.push(path.resolve(mediaPath));
     // Some legacy posts may have stored an absolute-looking "/uploads/..."
     // URL (which on Linux is path.isAbsolute()===true). For those, also
-    // try resolving against the public/ dir.
+    // try resolving against the WRITABLE UPLOADS_DIR (set by the desktop
+    // launcher) — falling back to the bundled public/ dir for dev mode.
     if (mediaPath.startsWith("/uploads/") || mediaPath.startsWith("/uploads")) {
+      candidates.push(path.resolve(UPLOADS_DIR, `.${mediaPath}`));
+      candidates.push(path.resolve(UPLOADS_DIR, mediaPath));
       candidates.push(
         path.resolve(__dirname, "..", "..", "public", `.${mediaPath}`),
       );
@@ -705,7 +715,10 @@ function resolveMediaFilePath(mediaPath) {
     }
   } else if (mediaPath.startsWith("/uploads/")) {
     // Relative URL like "/uploads/library/foo.jpg" — resolve against
-    // the server's public/ dir.
+    // the WRITABLE UPLOADS_DIR first (desktop app), then the bundled
+    // public/ dir (dev mode).
+    candidates.push(path.resolve(UPLOADS_DIR, `.${mediaPath}`));
+    candidates.push(path.resolve(UPLOADS_DIR, mediaPath));
     candidates.push(
       path.resolve(__dirname, "..", "..", "public", `.${mediaPath}`),
     );
@@ -713,6 +726,7 @@ function resolveMediaFilePath(mediaPath) {
       path.resolve(__dirname, "..", "..", "public", mediaPath),
     );
   } else if (mediaPath.startsWith("uploads/")) {
+    candidates.push(path.resolve(UPLOADS_DIR, mediaPath));
     candidates.push(path.resolve(__dirname, "..", "..", "public", mediaPath));
   } else {
     // Bare filename or unknown shape — try a few reasonable spots.

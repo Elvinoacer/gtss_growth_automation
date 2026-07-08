@@ -527,7 +527,11 @@ async function startBackgroundJobs() {
   const fs = require("fs");
   const path = require("path");
   cron.schedule("0 3 * * *", () => {
-    const dir = path.join(__dirname, "../../public/uploads");
+    // Use the writable UPLOADS_DIR (set by the desktop launcher) so we
+    // don't try to readdir the read-only <resources>/server/public/uploads.
+    const dir = process.env.UPLOADS_DIR
+      ? path.resolve(process.env.UPLOADS_DIR)
+      : path.join(__dirname, "../../public/uploads");
     if (!fs.existsSync(dir)) return;
     const db = getDb();
     const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;

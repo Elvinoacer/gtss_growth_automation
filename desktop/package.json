@@ -19,7 +19,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "rebuild": "electron-rebuild -f --module-dir ../gtss-growth-engine --which better-sqlite3 --which sharp",
     "dist:win": "electron-builder --win nsis msi",
     "dist:linux": "electron-builder --linux deb rpm AppImage",
     "dist:mac": "electron-builder --mac dmg",

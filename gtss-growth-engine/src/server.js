@@ -18,7 +18,28 @@ const packageJson = require("../package.json");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// STATIC frontend files (HTML/CSS/JS, pages, partials) live in the bundled
+// <serverRoot>/public/ directory. This is read-only when packaged — that's
+// fine, we only READ from it via express.static.
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
+
+// WRITABLE paths for user-uploaded files and generated media. These MUST
+// point into the writable userData dir (set by the desktop launcher via
+// env vars), NOT into the bundled <serverRoot>/ — which is read-only on
+// Linux (.deb installs to /opt/) and macOS (.app bundle).
+//
+// When running the server standalone (i.e., `npm start` inside
+// gtss-growth-engine/), the env vars are typically unset and we fall back
+// to the legacy relative paths, which resolve to <cwd>/public/uploads and
+// <cwd>/media — writable in development.
+const UPLOADS_DIR = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.resolve(__dirname, "../../public/uploads");
+const MEDIA_DIR = process.env.MEDIA_DIR
+  ? path.resolve(process.env.MEDIA_DIR)
+  : path.resolve("./media");
+
 const BACKGROUND_JOBS_WORKER = path.join(
   __dirname,
   "jobs",
@@ -33,8 +54,6 @@ let backgroundJobsProcess = null;
 function performStartupChecks() {
   const dbPath = process.env.DB_PATH || "./data/gtss.db";
   const sessionDir = path.resolve(process.env.SESSION_DIR || "./sessions");
-  const mediaDir = path.resolve("./media");
-  const uploadsDir = path.resolve("./public/uploads");
 
   // 1. Check DB file readability/writability
   try {
@@ -65,12 +84,34 @@ function performStartupChecks() {
     fs.mkdirSync(sessionDir, { recursive: true });
   }
 
-  // 4. Check/Create media & uploads directory
-  if (!fs.existsSync(mediaDir)) {
-    fs.mkdirSync(mediaDir, { recursive: true });
+  // 4. Check/Create media & uploads directory — these MUST be writable.
+  // The desktop launcher sets UPLOADS_DIR / MEDIA_DIR env vars to point at
+  // the writable userData dir; if they're unset (dev mode), we fall back
+  // to the legacy relative paths. Either way, we create the dir if it
+  // doesn't yet exist.
+  if (!fs.existsSync(MEDIA_DIR)) {
+    logger.info("SERVER", `Creating media directory: ${MEDIA_DIR}`);
+    fs.mkdirSync(MEDIA_DIR, { recursive: true });
   }
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
+  if (!fs.existsSync(UPLOADS_DIR)) {
+    logger.info("SERVER", `Creating uploads directory: ${UPLOADS_DIR}`);
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  }
+  // Sanity-check that the uploads dir is actually writable — if the env
+  // var pointed at a read-only location (the classic bug when the desktop
+  // launcher didn't set UPLOADS_DIR and the server's cwd was the read-only
+  // <resources>/server/), the server would crash later when multer tried
+  // to write uploaded files. Fail fast with a clear error instead.
+  try {
+    const probe = path.join(UPLOADS_DIR, `.gtss-write-probe-${Date.now()}`);
+    fs.writeFileSync(probe, "ok");
+    fs.unlinkSync(probe);
+  } catch (error) {
+    console.error(
+      `STARTUP ERROR: Uploads directory is not writable at ${UPLOADS_DIR}: ${error.message}. ` +
+        `Set UPLOADS_DIR to a writable path (the desktop launcher does this automatically).`,
+    );
+    process.exit(1);
   }
 }
 
@@ -121,6 +162,26 @@ app.use(
 );
 
 app.use(express.static(PUBLIC_DIR));
+
+// Serve uploaded files (user-uploaded media, asset library, scheduler
+// previews) from the WRITABLE UPLOADS_DIR. The bundled PUBLIC_DIR is
+// read-only when packaged, so uploaded files live in the userData dir
+// (set via the UPLOADS_DIR env var by the desktop launcher). We mount
+// /uploads/ separately so requests for /uploads/library/foo.jpg resolve
+// to ${UPLOADS_DIR}/library/foo.jpg (NOT ${PUBLIC_DIR}/uploads/library/...).
+//
+// This MUST be registered BEFORE the catch-all page routes (which mount
+// after the authMiddleware below) so it isn't shadowed by them.
+app.use(
+  "/uploads",
+  express.static(UPLOADS_DIR, {
+    fallthrough: true,
+    setHeaders: (res) => {
+      // Uploaded media is typically cached briefly by the browser.
+      res.setHeader("Cache-Control", "private, max-age=300");
+    },
+  }),
+);
 
 // Public Routes
 app.use("/", require("./routes/auth"));

@@ -2400,18 +2400,19 @@ async function postCarousel(
     const path = require("path");
     const { prepareForFeed } = require("../utils/imageValidator");
 
-    // We can resolve relative paths if they were not resolved by pre-flight
-    const UPLOADS_DIR = path.resolve(
-      __dirname,
-      "..",
-      "..",
-      "public",
-      "uploads",
-    );
+    // We can resolve relative paths if they were not resolved by pre-flight.
+    // Prefer the WRITABLE UPLOADS_DIR (set by the desktop launcher to point
+    // at the writable userData dir); fall back to the bundled public/
+    // dir for dev mode.
+    const UPLOADS_DIR = process.env.UPLOADS_DIR
+      ? path.resolve(process.env.UPLOADS_DIR)
+      : path.resolve(__dirname, "..", "..", "public", "uploads");
     const resolvePath = (p) => {
       if (path.isAbsolute(p) && fs.existsSync(p)) return p;
       const candidates = [
         path.resolve(p),
+        path.resolve(UPLOADS_DIR, `.${p}`),
+        path.resolve(UPLOADS_DIR, p),
         path.resolve(__dirname, "..", "..", "public", `.${p}`),
         path.resolve(__dirname, "..", "..", "public", p),
         path.resolve(UPLOADS_DIR, path.basename(p)),

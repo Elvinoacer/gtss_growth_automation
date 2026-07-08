@@ -527,11 +527,24 @@ function getBrowserMode(platform, options = {}) {
 }
 
 function getProfileDir(platform, options = {}) {
+  // Priority:
+  //   1. Per-call options.userDataDir
+  //   2. Per-platform USER_DATA_DIR_<PLATFORM> env var
+  //   3. Global PROFILES_DIR env var (set by the desktop launcher to point
+  //      at the writable userData/profiles directory)
+  //   4. <cwd>/profiles/<platform> (legacy dev-mode fallback)
+  //
+  // The legacy fallback resolves to <serverRoot>/profiles/<platform> when
+  // the server is bundled inside the desktop app — that path is READ-ONLY
+  // on Linux (.deb installs to /opt) and macOS (.app bundle). The desktop
+  // launcher sets PROFILES_DIR=<userData>/profiles to avoid this.
   const configured =
     options.userDataDir || getPlatformEnv(platform, "USER_DATA_DIR");
-  return path.resolve(
-    configured || path.join(process.cwd(), "profiles", platform),
-  );
+  const base =
+    configured ||
+    process.env.PROFILES_DIR ||
+    path.join(process.cwd(), "profiles");
+  return path.resolve(base, configured ? "" : platform);
 }
 
 function getArtifactsDir() {

@@ -90,14 +90,21 @@ app.whenReady().then(async () => {
 
   // 2. Wire up managers.
   logStream = new LogStream({ maxLines: 5000 });
-  const serverManager = new ServerManager({ serverRoot: envBootstrap.resolvedServerRoot, dataRoot: DATA_ROOT, logStream });
-  // Pass `serverRoot` so the CDP profile directory lives INSIDE the
-  // engine source tree — the same path used by
-  // gtss-growth-engine/scripts/launch-chrome.sh. Without this, the desktop
-  // launcher and the engine's bash fallback would use DIFFERENT profile
-  // directories, and the fallback Chrome would launch with no sessions
-  // (the regression the user reported).
-  const cdpManager = new CdpManager({ dataRoot: DATA_ROOT, logStream, serverRoot: envBootstrap.resolvedServerRoot });
+  const serverManager = new ServerManager({
+    serverRoot: envBootstrap.resolvedServerRoot,
+    dataRoot: DATA_ROOT,
+    logStream,
+    envBootstrap,
+  });
+  // Pass `dataRoot` so the CDP profile directory lives in the WRITABLE
+  // userData dir, not the read-only <resources>/server/ dir. The previous
+  // design passed `serverRoot` so the CDP profile matched the path used by
+  // gtss-growth-engine/scripts/launch-chrome.sh — but when packaged, the
+  // server root is read-only, so the desktop's CdpManager would fail to
+  // create the profile dir there. The engine's bash fallback now reads
+  // the CDP_PROFILE_DIR env var (set by EnvBootstrap) so both code paths
+  // agree on the same writable location.
+  const cdpManager = new CdpManager({ dataRoot: DATA_ROOT, logStream });
   lifecycle = new Lifecycle({ serverManager, cdpManager, envBootstrap, logStream });
 
   firstRun = new FirstRun({ envBootstrap });

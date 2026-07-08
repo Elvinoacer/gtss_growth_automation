@@ -25,6 +25,22 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
+// All writable per-user state lives in DATA_ROOT. The bundled
+// <resources>/server/ directory is READ-ONLY on Linux (.deb installs to
+// /opt/GTSS Growth Engine/resources/server/, owned by root) and inside an
+// .app bundle on macOS — so EVERY path the server writes to at runtime
+// must point into DATA_ROOT, never into the bundled server tree.
+//
+// We expose these writable paths to the server as env vars so the server's
+// source code can resolve them at startup:
+//
+//   UPLOADS_DIR        — user-uploaded media (asset library, scheduler)
+//   MEDIA_DIR          — generated/scheduled media files
+//   CDP_PROFILE_DIR    — Chrome user-data-dir for CDP automation
+//
+// DB_PATH / SESSION_DIR / AUTOMATION_ARTIFACTS_DIR / etc. were already
+// overridden correctly; this file extends the same treatment to the
+// remaining writable paths.
 const REQUIRED_DIRS = [
   "data",
   "data/browser-locks",
@@ -33,12 +49,22 @@ const REQUIRED_DIRS = [
   "artifacts/automation",
   "artifacts/gemini-images",
   "media",
+  // public/uploads lives under DATA_ROOT so the server can write to it.
+  // The bundled <resources>/server/public/ directory contains the app's
+  // STATIC frontend files (HTML/CSS/JS) and remains read-only; uploaded
+  // files are served from DATA_ROOT/public/uploads via a separate
+  // express.static mount (see src/server.js).
   "public/uploads",
+  "public/uploads/library",
+  // Chrome's --user-data-dir for CDP. Lives under DATA_ROOT so it
+  // survives app updates and is writable on every platform.
+  "chrome-cdp-profile",
 ];
 
 class EnvBootstrap {
   /**
    * @param {string} serverRoot  Absolute path to the gtss-growth-engine source.
+   *                             Read-only when packaged.
    * @param {string} dataRoot    Writable per-user data directory (appData).
    */
   constructor(serverRoot, dataRoot) {
@@ -76,6 +102,27 @@ class EnvBootstrap {
     }
   }
 
+  /**
+   * Return the env-var overrides the ServerManager should pass to the
+   * spawned server process. These point the server's writable paths at
+   * DATA_ROOT so the server never tries to write to the read-only
+   * <resources>/server/ directory.
+   *
+   * We return these as a fresh object on every call so the ServerManager
+   * can merge them into its childEnv without worrying about mutation.
+   */
+  getRuntimeEnvOverrides() {
+    return {
+      UPLOADS_DIR: path.join(this.dataRoot, "public", "uploads"),
+      MEDIA_DIR: path.join(this.dataRoot, "media"),
+      CDP_PROFILE_DIR: path.join(this.dataRoot, "chrome-cdp-profile"),
+      // Per-platform persistent browser profile dir (used only when CDP
+      // mode is unavailable and the engine falls back to Playwright's
+      // launchPersistentContext). Points into the writable userData dir.
+      PROFILES_DIR: path.join(this.dataRoot, "profiles"),
+    };
+  }
+
   async writeInitialEnv() {
     const env = {
       SESSION_SECRET: crypto.randomBytes(32).toString("hex"),
@@ -86,6 +133,15 @@ class EnvBootstrap {
       AUTOMATION_ARTIFACTS_DIR: path.join(this.dataRoot, "artifacts", "automation"),
       GEMINI_IMAGE_SAVE_DIR: path.join(this.dataRoot, "artifacts", "gemini-images"),
       AUTOMATION_LOCKS_DIR: path.join(this.dataRoot, "data", "browser-locks"),
+      // Writable paths for uploads / media / CDP profile / persistent
+      // browser profiles. The server reads these env vars at startup
+      // (see src/server.js, src/routes/assets.js, src/pipeline/
+      // contentPipeline.js, src/jobs/backgroundJobs.js) and the desktop's
+      // CdpManager reads CDP_PROFILE_DIR directly.
+      UPLOADS_DIR: path.join(this.dataRoot, "public", "uploads"),
+      MEDIA_DIR: path.join(this.dataRoot, "media"),
+      CDP_PROFILE_DIR: path.join(this.dataRoot, "chrome-cdp-profile"),
+      PROFILES_DIR: path.join(this.dataRoot, "profiles"),
       // CDP is the default browser mode. The launcher starts a CDP Chrome
       // (the user's real Chrome with --remote-debugging-port and a copied
       // profile) and opens the web app inside it. This way the web app and
@@ -157,6 +213,22 @@ class EnvBootstrap {
       additions.push(
         `PIPELINE_DISCOVERY_KEYWORDS_FILE=${path.join(this.serverRoot, "src", "config", "keywords.json")}`,
       );
+    }
+    // Backfill the new writable-path env vars for users upgrading from a
+    // pre-fix installation. Without these, the server would fall back to
+    // its old relative-path logic and try to write into the read-only
+    // <resources>/server/ directory.
+    if (!have.has("UPLOADS_DIR")) {
+      additions.push(`UPLOADS_DIR=${path.join(this.dataRoot, "public", "uploads")}`);
+    }
+    if (!have.has("MEDIA_DIR")) {
+      additions.push(`MEDIA_DIR=${path.join(this.dataRoot, "media")}`);
+    }
+    if (!have.has("CDP_PROFILE_DIR")) {
+      additions.push(`CDP_PROFILE_DIR=${path.join(this.dataRoot, "chrome-cdp-profile")}`);
+    }
+    if (!have.has("PROFILES_DIR")) {
+      additions.push(`PROFILES_DIR=${path.join(this.dataRoot, "profiles")}`);
     }
 
     if (additions.length > 0) {
