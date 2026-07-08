@@ -98,6 +98,7 @@ jobs:
       # electron-builder skips notarization automatically.
       - name: Build + publish (${{ matrix.targets }})
         working-directory: desktop
+        shell: bash
         run: |
           if [ -n "$WIN_CSC_LINK_RAW" ]; then export WIN_CSC_LINK="$WIN_CSC_LINK_RAW"; fi
           if [ -n "$WIN_CSC_KEY_PASSWORD_RAW" ]; then export WIN_CSC_KEY_PASSWORD="$WIN_CSC_KEY_PASSWORD_RAW"; fi
