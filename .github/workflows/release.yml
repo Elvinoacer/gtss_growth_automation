@@ -7,8 +7,19 @@
 # Builds native installers on each target OS in parallel and publishes them
 # all to the SAME GitHub Release (defined by the git tag):
 #   - ubuntu-latest  → .deb + .rpm + .AppImage + latest-linux.yml
-#   - windows-latest → NSIS .exe + .msi         + latest.yml
+#   - windows-2022   → NSIS .exe + .msi         + latest.yml
 #   - macos-latest   → .dmg (x64 + arm64)       + latest-mac.yml
+#
+# NOTE on the Windows runner pin: `windows-latest` currently points at a
+# runner image that has Visual Studio 18 (Preview) installed, which
+# node-gyp <= 10.x does NOT recognise (it only knows up to VS 17 = 2022).
+# If any native module's prebuilt binary is missing and node-gyp falls back
+# to source compilation, the build dies with "could not find a version of
+# Visual Studio 2017 or newer to use". Pinning to `windows-2022` keeps VS
+# 17 on the runner so the fallback path works. We also use `--ignore-scripts`
+# on the engine install (see below) so node-gyp is never invoked for
+# better-sqlite3 in the first place — the Electron prebuilt is installed by
+# the subsequent `electron-rebuild` step.
 #
 # electron-builder cannot cross-compile (no Windows .exe from Linux, no macOS
 # .dmg from Windows), so a matrix is mandatory.
@@ -53,7 +64,7 @@ jobs:
           - os: ubuntu-latest
             targets: --linux deb rpm AppImage
             artifact_glob: 'desktop/dist/*.{deb,rpm,AppImage,yml}'
-          - os: windows-latest
+          - os: windows-2022
             targets: --win nsis msi
             artifact_glob: 'desktop/dist/*.{exe,msi,blockmap,yml}'
           - os: macos-latest
@@ -98,17 +109,43 @@ jobs:
       # We skip Playwright's browser-binary download (~300 MB) because the
       # desktop launcher uses the user's installed Chrome via CDP, not
       # Playwright's bundled Chromium.
+      #
+      # ── Why --ignore-scripts ───────────────────────────────────────────
+      # `better-sqlite3`'s install script runs `prebuild-install || node-gyp
+      # rebuild`. On the Windows runner, `prebuild-install` finds no prebuilt
+      # binary for the runner's exact Node patch version (e.g. 20.20.2),
+      # falls back to `node-gyp rebuild`, and dies because `windows-latest`
+      # has VS 18 (Preview) which node-gyp 10.x doesn't recognise.
+      #
+      # We don't actually WANT the Node-compatible native binary at all —
+      # the server runs under Electron's bundled Node
+      # (ELECTRON_RUN_AS_NODE=1), so the binary must be built against
+      # ELECTRON's ABI. The next step (`electron-rebuild`) downloads the
+      # Electron-compatible prebuilt from better-sqlite3's GitHub Releases
+      # — no compilation, no Visual Studio, no node-gyp. `--ignore-scripts`
+      # here just prevents the doomed Node-target build from running first.
+      #
+      # The same logic applies to `sharp`: its install script downloads the
+      # prebuilt libvips binary, but the `@img/sharp-<platform>-<arch>` npm
+      # packages (installed as optional deps by `npm ci`) already contain
+      # the binary — so skipping the install script is safe.
       - name: Install engine dependencies
         working-directory: gtss-growth-engine
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
-        run: npm ci || npm install
+        run: npm ci --ignore-scripts || npm install --ignore-scripts
 
       # ── Rebuild engine native modules for Electron's ABI ────────────────
       # The server runs under ELECTRON_RUN_AS_NODE=1 (Electron's bundled
       # Node), so native modules in gtss-growth-engine/node_modules/ MUST
       # be rebuilt against Electron's NODE_MODULE_VERSION — otherwise they
       # throw "NODE_MODULE_VERSION mismatch" on require().
+      #
+      # `electron-rebuild` calls `prebuild-install --runtime=electron
+      # --target=<electron-version>`, which downloads the prebuilt binary
+      # from better-sqlite3's GitHub Releases. No compilation needed on
+      # any platform — this works on Linux, Windows, and macOS without
+      # Visual Studio / Xcode / build-essential.
       #
       # The previous workflow ran `npx electron-rebuild -f -w better-sqlite3`
       # from desktop/ — but better-sqlite3 isn't a desktop/ dependency, so
@@ -202,6 +239,8 @@ jobs:
           echo "| OS | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|----|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| ubuntu-latest  | ${{ needs.release.result == 'success' && 'success' || needs.release.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| windows-2022   | ${{ needs.release.result == 'success' && 'success' || needs.release.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| macos-latest   | ${{ needs.release.result == 'success' && 'success' || needs.release.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "If all three rows show **success**, your release is now at:" >> $GITHUB_STEP_SUMMARY
           echo "https://github.com/Elvinoacer/gtss_growth_automation/releases/tag/${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY

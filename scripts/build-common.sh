@@ -67,13 +67,36 @@ prepare_build_environment() {
   # can bundle them into the .deb / .exe / .dmg. Without this, the previous
   # build config excluded node_modules from the package and the server would
   # crash with "Cannot find module 'express'" on first launch.
-  echo ">> Installing gtss-growth-engine/ dependencies (PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1)..."
+  #
+  # ── Why --ignore-scripts ───────────────────────────────────────────────
+  # `better-sqlite3`'s install script runs `prebuild-install || node-gyp
+  # rebuild`. On Windows, `prebuild-install` often finds no prebuilt binary
+  # for the exact Node patch version in use, falls back to `node-gyp
+  # rebuild`, and dies because:
+  #   - `windows-latest` has Visual Studio 18 (Preview) which node-gyp
+  #     10.x doesn't recognise, OR
+  #   - the user's machine doesn't have Visual Studio's "Desktop
+  #     development with C++" workload installed at all.
+  #
+  # We don't actually WANT the Node-compatible native binary — the server
+  # runs under Electron's bundled Node (ELECTRON_RUN_AS_NODE=1), so the
+  # binary must be built against ELECTRON's ABI. Step 3 below
+  # (`electron-rebuild`) downloads the Electron-compatible prebuilt from
+  # better-sqlite3's GitHub Releases — no compilation, no Visual Studio,
+  # no node-gyp. `--ignore-scripts` here just prevents the doomed
+  # Node-target build from running first and failing the whole pipeline.
+  #
+  # The same logic applies to `sharp`: its install script downloads the
+  # prebuilt libvips binary, but the `@img/sharp-<platform>-<arch>` npm
+  # packages (installed as optional deps by `npm ci`) already contain
+  # the binary — so skipping the install script is safe.
+  echo ">> Installing gtss-growth-engine/ dependencies (--ignore-scripts, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1)..."
   (
     cd "$engine_dir"
     if [ -f package-lock.json ]; then
-      npm ci || npm install
+      npm ci --ignore-scripts || npm install --ignore-scripts
     else
-      npm install
+      npm install --ignore-scripts
     fi
   )
 
@@ -82,6 +105,12 @@ prepare_build_environment() {
   # so native modules in gtss-growth-engine/node_modules/ MUST be rebuilt
   # against Electron's NODE_MODULE_VERSION — otherwise they throw
   # "NODE_MODULE_VERSION mismatch" on require().
+  #
+  # `electron-rebuild` calls `prebuild-install --runtime=electron
+  # --target=<electron-version>`, which downloads the prebuilt binary
+  # from better-sqlite3's GitHub Releases. No compilation needed on any
+  # platform — this works on Linux, Windows, and macOS without Visual
+  # Studio / Xcode / build-essential.
   #
   # We use --module-dir to point at the engine's node_modules. The
   # --which flag limits the rebuild to specific packages (faster than
