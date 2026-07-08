@@ -128,7 +128,7 @@ rpm:
     - cairo
     - alsa-lib
 
-AppImage:
+appImage:
   artifactName: GTSS-Growth-Engine-${version}-${arch}.AppImage
   license: LICENSE
 
