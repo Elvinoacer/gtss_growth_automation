@@ -130,7 +130,7 @@ rpm:
 
 appImage:
   artifactName: GTSS-Growth-Engine-${version}-${arch}.AppImage
-  license: LICENSE
+  # license: LICENSE  # re-enable once a LICENSE file exists at repo root
 
 # ─── macOS ───────────────────────────────────────────────────────────────────
 mac:

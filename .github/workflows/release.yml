@@ -109,8 +109,15 @@ jobs:
           # repo Settings → Secrets and variables → Actions to sign the
           # .exe and .msi. Leave unset to ship unsigned (SmartScreen will
           # show a one-time "unrecognized app" warning).
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          #
+          # NOTE: `secrets.X` resolves to `""` (not "unset") when the secret
+          # doesn't exist, and electron-builder treats an empty-but-present
+          # CSC_LINK/CSC_KEY_PASSWORD as "a cert was given" rather than
+          # skipping signing. The `|| null` ternary below makes the env var
+          # genuinely absent from the job when the secret is empty, so
+          # electron-builder falls back to its normal unsigned path.
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK != '' && secrets.WIN_CSC_LINK || null }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD != '' && secrets.WIN_CSC_KEY_PASSWORD || null }}
 
           # ── macOS code signing + notarization (optional) ───────────────────
           # CSC_LINK = base64 of Developer ID Application .p12
@@ -118,11 +125,12 @@ jobs:
           # APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID = for
           # notarization (creates a notarization ticket with Apple's servers
           # so Gatekeeper accepts the .dmg on first launch).
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Same empty-string-vs-unset issue as WIN_CSC_LINK above.
+          CSC_LINK: ${{ secrets.CSC_LINK != '' && secrets.CSC_LINK || null }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD != '' && secrets.CSC_KEY_PASSWORD || null }}
+          APPLE_ID: ${{ secrets.APPLE_ID != '' && secrets.APPLE_ID || null }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD || null }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' && secrets.APPLE_TEAM_ID || null }}
 
       # ── Upload the artifacts to the workflow run too (not just the release)
       # This makes debugging a failed release much easier — you can download
