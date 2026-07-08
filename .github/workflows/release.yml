@@ -154,13 +154,7 @@ jobs:
         working-directory: desktop
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
-        run: |
-          npx electron-rebuild -f \
-            --module-dir "${{ github.workspace }}/gtss-growth-engine" \
-            --which better-sqlite3 \
-            --which sharp \
-            || npx electron-rebuild -f \
-              --module-dir "${{ github.workspace }}/gtss-growth-engine"
+        run: npx electron-rebuild -f --module-dir "${{ github.workspace }}/gtss-growth-engine" --which better-sqlite3 --which sharp || npx electron-rebuild -f --module-dir "${{ github.workspace }}/gtss-growth-engine"
 
       # ── macOS only: enable notarization when APPLE_TEAM_ID is set ───────────
       # We don't touch electron-builder.yml directly. Instead we set the env
