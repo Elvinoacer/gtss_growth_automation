@@ -91,10 +91,7 @@ linux:
   maintainer: founder@growthtoscalesocial.systems
   vendor: GTSS
   synopsis: Social-media growth and outreach automation for SMEs.
-  description: |
-    GTSS Growth Engine is a local-first desktop application that helps founders
-    discover, qualify, and reach out to potential clients across LinkedIn,
-    X (Twitter), Facebook, and Instagram — without paid SaaS or cloud servers.
+  description: GTSS Growth Engine is a local-first desktop application that helps founders discover, qualify, and reach out to potential clients across LinkedIn, X (Twitter), Facebook, and Instagram — without paid SaaS or cloud servers.
 
 deb:
   depends:
