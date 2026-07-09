@@ -151,6 +151,18 @@ class EnvBootstrap {
       BROWSER_CHANNEL: "chrome",
       CDP_ENDPOINT: "http://127.0.0.1:9222",
       CDP_PORT: "9222",
+      // Whether the CDP Chrome runs VISIBLY or in the BACKGROUND (headless)
+      // on normal Starts. Default: "false" (background) — the user doesn't
+      // want a Chrome window they didn't ask for during everyday automation.
+      // The FIRST Start always runs visibly (first-time sign-in flow) until
+      // the user completes sign-in and the `.signin-completed` sentinel is
+      // written. After that, this setting controls visibility. The user can
+      // change it in the web app's Settings → Automation Browser.
+      CDP_VISIBLE_DEFAULT: "false",
+      // Port for the localhost-only bridge HTTP server that lets the web
+      // app control the CDP Chrome (start it visibly, open login tabs,
+      // check sessions, read/write this setting). See desktop/main/bridge-server.js.
+      GTSS_BRIDGE_PORT: "9224",
       PLAYWRIGHT_TRACE: "true",
       ALLOW_HEADLESS_SOCIAL: "false",
       SESSION_MAX_AGE_HOURS: "720",
@@ -229,6 +241,18 @@ class EnvBootstrap {
     }
     if (!have.has("PROFILES_DIR")) {
       additions.push(`PROFILES_DIR=${path.join(this.dataRoot, "profiles")}`);
+    }
+    // Backfill the browser-visibility + bridge-port settings for users
+    // upgrading from a version that didn't have them. Without
+    // CDP_VISIBLE_DEFAULT, the normal-flow Start would treat undefined as
+    // "false" (background) which is the intended default anyway — but
+    // writing it explicitly keeps the .env self-documenting and lets the
+    // Settings page read/write it cleanly.
+    if (!have.has("CDP_VISIBLE_DEFAULT")) {
+      additions.push("CDP_VISIBLE_DEFAULT=false");
+    }
+    if (!have.has("GTSS_BRIDGE_PORT")) {
+      additions.push("GTSS_BRIDGE_PORT=9224");
     }
 
     if (additions.length > 0) {

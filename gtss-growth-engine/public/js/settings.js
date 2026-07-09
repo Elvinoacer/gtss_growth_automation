@@ -304,6 +304,31 @@ function bindEvents() {
   document.getElementById("test-gemini").addEventListener("click", testGemini);
   document.getElementById("save-gmail").addEventListener("click", saveGmail);
   document.getElementById("test-email").addEventListener("click", testEmail);
+
+  // ─── Automation Browser visibility setting ───────────────────────────
+  //
+  // Reads/writes CDP_VISIBLE_DEFAULT via the bridge HTTP server
+  // (desktop/main/bridge-server.js, port 9224). The setting controls
+  // whether the CDP Chrome runs visibly or in the background on normal
+  // Starts. Takes effect on the next Start — we don't restart Chrome
+  // immediately when the user changes it.
+  const saveBrowserModeBtn = document.getElementById("save-browser-mode");
+  if (saveBrowserModeBtn) {
+    saveBrowserModeBtn.addEventListener("click", saveBrowserMode);
+  }
+  const reopenLink = document.getElementById("reopen-signin-modal-link");
+  if (reopenLink) {
+    reopenLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      // Navigate to the dashboard — the sign-in modal auto-shows there
+      // if sessions are missing, and window.gtss.openSigninModal() is
+      // available once signin-modal.js has loaded.
+      window.location.href = "/";
+    });
+  }
+  // Load the current mode from the bridge (if reachable) so the radio
+  // reflects the persisted state.
+  loadBrowserMode();
   document
     .getElementById("reset-limits")
     .addEventListener("click", () => renderLimits(settingsState.loadedLimits));
@@ -408,6 +433,103 @@ async function testGemini() {
     result.valid ? "✓ Valid" : `✗ Invalid: ${result.error}`,
     result.valid ? "success" : "error",
   );
+}
+
+// ─── Automation Browser visibility (bridge) ──────────────────────────────
+//
+// The bridge HTTP server (desktop/main/bridge-server.js) lets the web app
+// read/write the CDP_VISIBLE_DEFAULT setting that lives in .env. We probe
+// ports 9224–9227 (the bridge auto-increments if 9224 is taken) and use
+// the first one that answers /api/bridge/health.
+const BRIDGE_PORTS = [9224, 9225, 9226, 9227];
+
+async function findBridgeBase() {
+  for (const port of BRIDGE_PORTS) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/bridge/health`);
+      if (res.ok) return `http://127.0.0.1:${port}`;
+    } catch (_) {
+      // try next
+    }
+  }
+  return null;
+}
+
+async function loadBrowserMode() {
+  const bgRadio = document.getElementById("browser-mode-background");
+  const visRadio = document.getElementById("browser-mode-visible");
+  const resultEl = document.getElementById("browser-mode-result");
+  if (!bgRadio || !visRadio) return;
+  try {
+    const base = await findBridgeBase();
+    if (!base) {
+      // Bridge not running (standalone server). Disable the controls and
+      // explain — the user needs the GTSS launcher for this setting.
+      bgRadio.disabled = true;
+      visRadio.disabled = true;
+      const saveBtn = document.getElementById("save-browser-mode");
+      if (saveBtn) saveBtn.disabled = true;
+      if (resultEl) {
+        setInline(
+          "browser-mode-result",
+          "Launcher not running — start the GTSS app to configure this.",
+          "warning",
+        );
+      }
+      return;
+    }
+    const res = await fetch(`${base}/api/bridge/settings/browser-mode`);
+    const data = await res.json();
+    if (data && data.mode === "visible") {
+      visRadio.checked = true;
+    } else {
+      bgRadio.checked = true;
+    }
+  } catch (_) {
+    // Leave default (background) checked.
+  }
+}
+
+async function saveBrowserMode() {
+  const visRadio = document.getElementById("browser-mode-visible");
+  const mode = visRadio && visRadio.checked ? "visible" : "background";
+  try {
+    const base = await findBridgeBase();
+    if (!base) {
+      window.gtss.showToast(
+        "Launcher not running — start the GTSS app to change this setting.",
+        "error",
+      );
+      return;
+    }
+    const res = await fetch(`${base}/api/bridge/settings/browser-mode`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    const data = await res.json();
+    if (data && data.ok) {
+      setInline(
+        "browser-mode-result",
+        mode === "visible"
+          ? "✓ Chrome will run visibly on next Start"
+          : "✓ Chrome will run in the background on next Start",
+        "success",
+      );
+      window.gtss.showToast(
+        `Browser mode: ${mode}. Applies on next Start.`,
+        "success",
+      );
+    } else {
+      setInline(
+        "browser-mode-result",
+        `✗ ${data.error || "Could not save"}`,
+        "error",
+      );
+    }
+  } catch (err) {
+    setInline("browser-mode-result", `✗ ${err.message}`, "error");
+  }
 }
 
 async function saveGmail() {

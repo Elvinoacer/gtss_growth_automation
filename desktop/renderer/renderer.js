@@ -7,301 +7,99 @@
  *
  * Talks to the main process entirely through window.gtss.* (the preload
  * bridge). No Node access, no filesystem access, no direct IPC.
+ *
+ * ─── Where sign-in happens now ─────────────────────────────────────────────
+ *
+ * The sign-in modal used to live HERE (inside the launcher). It has moved
+ * to the web app's root page ("/"). Reasons:
+ *
+ *   1. The web app is where the user spends their time — surfacing the
+ *      sign-in prompt there (instead of in a separate Electron window)
+ *      is the right UX.
+ *
+ *   2. Sign-in now happens INSIDE the CDP Chrome (the automation
+ *      browser), not the user's default browser. When the user clicks a
+ *      platform on the web app's sign-in modal, the web app calls the
+ *      bridge server (desktop/main/bridge-server.js) which opens the
+ *      login page in a new tab of the CDP Chrome. Cookies land in the
+ *      right profile immediately — no profile-clone round-trip needed.
+ *
+ * The launcher still polls CDP sessions so it can show a lightweight
+ * "X/N connected" badge in the topbar + a "Sign in…" hint in the Control
+ * tab when sessions are missing. Clicking either opens the web app
+ * (where the full modal lives).
  */
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
-// ─── Sessions health (missing-session detection) ────────────────────────────
+// ─── Sessions health (lightweight badge + hint card) ──────────────────────
 //
-// ─── Authentication in the user's default browser (not inside Electron) ────
+// We poll the CDP Chrome's cookies to see which platforms (LinkedIn, X,
+// Instagram, Facebook, Google/Gemini) the automation browser is signed
+// into. The result drives:
 //
-// After the server + CDP Chrome come up, we poll the CDP cookies to see
-// which platforms (LinkedIn, Facebook, Instagram, Google Gemini) the
-// automation browser is signed into. If any required sessions are
-// missing, we surface a banner in the Control tab; clicking "Sign in…"
-// opens a modal with an "Open ↗" button for each platform.
+//   - A topbar badge ("X/N connected") — green/yellow/red at a glance.
+//   - A small hint card in the Control tab that appears when sessions
+//     are missing, with a "Sign in…" button that opens the web app
+//     (where the full sign-in modal lives and can drive logins inside
+//     the CDP Chrome via the bridge server).
 //
-// IMPORTANT: The "Open ↗" buttons now open each platform's login page in
-// the user's DEFAULT browser (via window.gtss.openExternal, which calls
-// shell.openExternal in the main process) — NOT in the CDP Chrome that
-// Electron spawned. This is the key change for "authentication in the
-// browser, not inside Electron".
-//
-// Trade-off: because the user signs into a different browser than the
-// CDP Chrome, fresh cookies set during that sign-in don't transfer to
-// the automation browser automatically. The CDP profile clone (which
-// runs on first launch and on "Restart CDP") is what carries cookies
-// from the user's real Chrome into the CDP Chrome. So the flow is:
-//
-//   1. User clicks "Open ↗" on LinkedIn → LinkedIn opens in their default
-//      browser (which is Chrome for most users).
-//   2. User signs into LinkedIn in their default browser.
-//   3. The next time the launcher starts (or the user clicks "Restart
-//      CDP"), the CDP profile clone picks up the fresh LinkedIn cookies
-//      from the user's real Chrome profile and copies them into the
-//      CDP Chrome.
-//   4. Subsequent automation runs are authenticated.
-//
-// We surface this clearly in the modal's intro text so the user
-// understands why the green checkmark doesn't appear instantly after
-// they sign in (the way it did when sign-in happened inside the CDP
-// Chrome).
-//
-// The live polling of CDP cookies is RETAINED — it's still useful for
-// detecting sessions that were ALREADY present (carried over from a
-// previous clone). It just won't detect brand-new sign-ins until the
-// next profile clone.
+// The launcher does NOT render the full sign-in modal anymore. That
+// moved to the web app so logins happen in the right browser.
 
-const MODAL_SESSION_PLATFORMS = [
-  {
-    key: "google",
-    label: "Google / Gemini",
-    required: true,
-    icon: "G",
-    loginUrl: "https://gemini.google.com/",
-    loginHint: "Open Gemini and sign in with your Google account",
-  },
-  {
-    key: "linkedin",
-    label: "LinkedIn",
-    required: true,
-    icon: "in",
-    loginUrl: "https://www.linkedin.com/",
-    loginHint: "Open LinkedIn and sign in",
-  },
-  {
-    key: "facebook",
-    label: "Facebook",
-    required: false,
-    icon: "f",
-    loginUrl: "https://www.facebook.com/",
-    loginHint: "Open Facebook and sign in",
-  },
-  {
-    key: "x",
-    label: "X (Twitter)",
-    required: false,
-    icon: "𝕏",
-    loginUrl: "https://x.com/",
-    loginHint: "Open X and sign in",
-  },
-  {
-    key: "instagram",
-    label: "Instagram",
-    required: false,
-    icon: "IG",
-    loginUrl: "https://www.instagram.com/",
-    loginHint: "Open Instagram and sign in",
-  },
+const SESSION_PLATFORMS = [
+  { key: "google",    label: "Google / Gemini", required: true },
+  { key: "linkedin",  label: "LinkedIn",        required: true },
+  { key: "facebook",  label: "Facebook",        required: false },
+  { key: "x",         label: "X (Twitter)",     required: false },
+  { key: "instagram", label: "Instagram",       required: false },
 ];
 
-let modalSessionState = {};
-let modalPollTimer = null;
-let modalDismissedForThisRun = false;
-// ─── Per-platform skip (NEW) ────────────────────────────────────────────────
-//
-// Previously the sessions modal was all-or-nothing: a single "Later" /
-// "All set" gate for every platform at once. On a completely fresh
-// machine (no cloned profile, no cookies for ANY platform), the modal
-// would push the user to log into all 5 things at once — overwhelming.
-//
-// Now the user can dismiss individual platform cards via a "Skip" button
-// (per card). A skipped platform:
-//   - Is excluded from the "missing sessions" count in the health card.
-//   - Won't re-trigger the auto-open modal on subsequent Start clicks
-//     (until the user explicitly re-shows skipped platforms — currently
-//     via re-opening the modal from the health card).
-//   - Remains skip-able until the user signs in (then it auto-unskips
-//     because polling detects the session and re-renders the card as
-//     "Logged in" with the Skip button hidden).
-//
-// Skipped state is in-memory only — it does NOT persist across launcher
-// restarts. That's deliberate: if the user relaunches the app, we want
-// a fresh opportunity to detect sessions (e.g. after a profile clone)
-// without the user having to remember they skipped something.
-const modalSkippedPlatforms = new Set();
+let sessionState = {};
+let sessionPollTimer = null;
 
-function renderSessionsModalGrid() {
-  const grid = $("#sessions-modal-grid");
-  if (!grid) return;
-  grid.innerHTML = MODAL_SESSION_PLATFORMS.map((p) => {
-    const state = modalSessionState[p.key] || { loggedIn: false };
-    const loggedIn = Boolean(state.loggedIn);
-    // A platform is "skipped" only while it's still not signed in. Once
-    // polling detects a session, we drop the skip flag so the card
-    // renders as "Logged in" with the Skip button hidden.
-    const skipped = !loggedIn && modalSkippedPlatforms.has(p.key);
-    const cardCls = [
-      "session-card",
-      p.required ? "required" : "",
-      loggedIn ? "logged-in" : "",
-      skipped ? "skipped" : "",
-    ].filter(Boolean).join(" ");
-    const stateText = loggedIn
-      ? "Logged in"
-      : skipped
-        ? "Skipped for now"
-        : "Not signed in yet";
-    const stateCls = loggedIn
-      ? "logged-in"
-      : skipped
-        ? "skipped"
-        : "not-logged-in";
-    const check = loggedIn ? "✓" : skipped ? "—" : "○";
-    // Hide the Skip button when the platform is already signed in —
-    // there's nothing to skip at that point.
-    const skipBtn = loggedIn
-      ? ""
-      : `<button class="btn btn-mini btn-tertiary session-skip-btn"
-                data-platform-key="${p.key}"
-                title="Dismiss this platform for now — you can sign in later">
-          Skip
-        </button>`;
-    return `
-      <div class="${cardCls}" data-session-key="${p.key}">
-        <div class="session-logo ${p.key}">${p.icon}</div>
-        <div class="session-info">
-          <div class="session-name">
-            ${p.label}
-            ${p.required ? '<span class="session-required-pill">Required</span>' : ""}
-          </div>
-          <div class="session-state ${stateCls}">${stateText}</div>
-        </div>
-        <button class="btn btn-mini btn-secondary session-open-btn"
-                data-platform-key="${p.key}"
-                title="${p.loginHint}">
-          Open ↗
-        </button>
-        ${skipBtn}
-        <div class="session-check">${check}</div>
-      </div>
-    `;
-  }).join("");
+function updateSessionsHealthBadge() {
+  const badge = $("#sessions-health-badge");
+  if (!badge) return;
+  const total = SESSION_PLATFORMS.length;
+  const connected = SESSION_PLATFORMS.filter(
+    (p) => sessionState[p.key] && sessionState[p.key].loggedIn,
+  ).length;
+  const required = SESSION_PLATFORMS.filter((p) => p.required);
+  const requiredConnected = required.filter(
+    (p) => sessionState[p.key] && sessionState[p.key].loggedIn,
+  ).length;
 
-  // Wire up Open buttons — each opens the platform's login URL in the
-  // user's DEFAULT browser (via window.gtss.openExternal → shell.openExternal).
-  // Previously these called window.gtss.cdp.openUrlInCdp() which opened
-  // the login page inside the CDP Chrome that Electron spawned. That
-  // tied authentication to the Electron-controlled browser — which is
-  // what we're explicitly moving away from ("authentication in the
-  // browser, not inside Electron").
-  //
-  // The user signs in inside their normal browser. If that browser is
-  // Chrome (the common case), the fresh cookies will be picked up by
-  // the next CDP profile clone (run on next launcher start or on
-  // "Restart CDP"). If the user's default browser is Firefox/Safari/
-  // Edge, the cookies won't transfer automatically — the user would
-  // need to also sign in inside Chrome for automation to work. We
-  // surface this in the modal's intro text.
-  grid.querySelectorAll(".session-open-btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const key = btn.dataset.platformKey;
-      const platform = MODAL_SESSION_PLATFORMS.find((p) => p.key === key);
-      if (!platform || !platform.loginUrl) return;
-      const original = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = "Opening...";
-      try {
-        const res = await window.gtss.openExternal(platform.loginUrl);
-        if (res.ok) {
-          toast(`${platform.label} opened in your default browser — sign in there.`, "info");
-          // Note: we do NOT kick off an immediate poll here anymore.
-          // Cookies signed into the default browser won't appear in the
-          // CDP Chrome until the next profile clone. The user can click
-          // "Refresh" manually after re-cloning, or just dismiss the
-          // modal — the green checkmarks will populate on the next
-          // launcher start.
-        } else {
-          toast(`Could not open ${platform.label}: ${res.error || "unknown error"}`, "error");
-        }
-      } finally {
-        btn.textContent = original;
-        const state = modalSessionState[key];
-        if (!state || !state.loggedIn) btn.disabled = false;
-      }
-    });
-  });
-
-  // ─── Wire up per-card Skip buttons (NEW) ─────────────────────────────
-  //
-  // Each card has its own Skip button. Clicking it adds the platform
-  // to modalSkippedPlatforms and re-renders the grid so the card
-  // immediately shows "Skipped for now" + the checkmark turns into
-  // an em-dash. The skip is in-memory only; signing in (detected by
-  // polling) auto-clears the skip on the next render.
-  grid.querySelectorAll(".session-skip-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const key = btn.dataset.platformKey;
-      if (!key) return;
-      modalSkippedPlatforms.add(key);
-      const platform = MODAL_SESSION_PLATFORMS.find((p) => p.key === key);
-      renderSessionsModalGrid();
-      updateSessionsModalDoneButton();
-      updateSessionsHealthCard();
-      updateSessionsHealthBadge();
-      if (platform) {
-        toast(`${platform.label} skipped — you can sign in later from the Control tab.`, "info");
-      }
-    });
-  });
-}
-
-function updateSessionsModalDoneButton() {
-  const btn = $("#sessions-modal-done");
-  if (!btn) return;
-  // Previously the "All set" button was DISABLED until every required
-  // platform session was detected via CDP cookie polling. That worked
-  // when sign-in happened INSIDE the CDP Chrome (cookies appeared
-  // instantly). Now that sign-in happens in the user's DEFAULT browser,
-  // fresh cookies don't reach the CDP Chrome until the next profile
-  // clone — so gating the button on live detection would trap the user
-  // in a modal they can never dismiss.
-  //
-  // The button is now ALWAYS enabled. The user clicks it when they've
-  // finished signing in to whatever platforms they care about. The
-  // green checkmarks in the grid still update from CDP polling, so any
-  // sessions ALREADY present (carried over from a previous clone) will
-  // show as ✓ — but the user isn't forced to wait for fresh sign-ins
-  // to be detected (they won't be, until the next clone).
-  //
-  // ─── Per-platform skip (NEW) ─────────────────────────────────────────
-  //
-  // Skipped platforms are excluded from the "still missing" hint that
-  // appears in the button's tooltip — the user has explicitly deferred
-  // them, so we don't nag.
-  btn.disabled = false;
-  const requiredMissing = MODAL_SESSION_PLATFORMS.filter(
-    (p) =>
-      p.required &&
-      !(modalSessionState[p.key] && modalSessionState[p.key].loggedIn) &&
-      !modalSkippedPlatforms.has(p.key),
-  );
-  if (requiredMissing.length === 0) {
-    btn.title = "All required sessions detected (or skipped)";
+  badge.classList.remove("ok", "warn", "error");
+  let label;
+  if (connected === total) {
+    badge.classList.add("ok");
+    label = `${connected}/${total} connected`;
+    badge.title = "All platforms are connected.";
+  } else if (requiredConnected === required.length) {
+    badge.classList.add("ok");
+    label = `${connected}/${total} connected`;
+    badge.title = "All required platforms connected. Optional ones can be signed in later from the web app.";
+  } else if (connected === 0) {
+    badge.classList.add("error");
+    label = `0/${total} connected`;
+    badge.title = "No platforms connected. Click to open the web app and sign in.";
   } else {
-    btn.title =
-      `Still missing in the automation browser: ${requiredMissing.map((p) => p.label).join(", ")}. ` +
-      `If you just signed in to one of these in your default browser, the session will be detected after the next CDP profile clone (run "Restart CDP" or relaunch the app).`;
+    badge.classList.add("warn");
+    label = `${connected}/${total} connected`;
+    badge.title = `${total - connected} platform${total - connected === 1 ? "" : "s"} still need sign-in. Click to open the web app.`;
   }
+  const labelEl = badge.querySelector(".sessions-badge-label");
+  if (labelEl) labelEl.textContent = label;
+  badge.classList.remove("hidden");
 }
 
 function updateSessionsHealthCard() {
   const card = $("#sessions-health");
   if (!card) return;
-  if (modalDismissedForThisRun) {
-    card.classList.add("hidden");
-    return;
-  }
-  // ─── Per-platform skip (NEW) ─────────────────────────────────────────
-  //
-  // Skipped platforms are NOT counted as "missing" — the user has
-  // explicitly deferred them. So if every required platform is either
-  // signed in OR skipped, the health card flips to the OK state.
-  const missing = MODAL_SESSION_PLATFORMS.filter(
-    (p) =>
-      !(modalSessionState[p.key] && modalSessionState[p.key].loggedIn) &&
-      !modalSkippedPlatforms.has(p.key),
+  const missing = SESSION_PLATFORMS.filter(
+    (p) => !(sessionState[p.key] && sessionState[p.key].loggedIn),
   );
   if (missing.length === 0) {
     card.classList.add("ok");
@@ -318,98 +116,29 @@ function updateSessionsHealthCard() {
     const requiredMissing = missing.filter((p) => p.required);
     const label = requiredMissing.length > 0 ? requiredMissing : missing;
     $("#sessions-health-meta").textContent =
-      `Sign in to: ${label.map((p) => p.label).join(", ")}. Click to open the login modal.`;
+      `Sign in to: ${label.map((p) => p.label).join(", ")}. Click to open the web app — the sign-in modal there opens each login inside the automation Chrome.`;
     $("#sessions-health-open").textContent = "Sign in…";
   }
 }
 
-// ─── Persistent connection-health badge (FIX 1d, NEW) ──────────────────────
-//
-// Always-visible badge in the topbar that shows "X/N platforms connected"
-// — green when all are connected, yellow when some are missing, red when
-// no required platforms are connected. Removes a click: the user can see
-// at a glance whether they need to sign in to anything without opening
-// the modal or the Settings page.
-//
-// Counting rules:
-//   - Skipped platforms count as "connected" for badge purposes (the
-//     user has explicitly deferred them — they shouldn't drag the badge
-//     to red).
-//   - "N" is MODAL_SESSION_PLATFORMS.length (5 — Google/LinkedIn/Facebook/
-//     X/Instagram).
-//   - "X" is the number of platforms that are either signed in OR skipped.
-//   - Color thresholds:
-//       X === N            → green  ("All connected")
-//       X >= requiredCount → green  (all REQUIRED platforms are signed in
-//                                    or skipped; optional ones are nice-to-have)
-//       X > 0              → yellow ("X of N connected")
-//       X === 0            → red    ("No platforms connected")
-function updateSessionsHealthBadge() {
-  const badge = $("#sessions-health-badge");
-  if (!badge) return;
-  const total = MODAL_SESSION_PLATFORMS.length;
-  const connected = MODAL_SESSION_PLATFORMS.filter(
-    (p) =>
-      (modalSessionState[p.key] && modalSessionState[p.key].loggedIn) ||
-      modalSkippedPlatforms.has(p.key),
-  ).length;
-  const required = MODAL_SESSION_PLATFORMS.filter((p) => p.required);
-  const requiredConnected = required.filter(
-    (p) =>
-      (modalSessionState[p.key] && modalSessionState[p.key].loggedIn) ||
-      modalSkippedPlatforms.has(p.key),
-  ).length;
-
-  badge.classList.remove("ok", "warn", "error");
-  let label;
-  if (connected === total) {
-    badge.classList.add("ok");
-    label = `${connected}/${total} connected`;
-    badge.title = "All platforms are connected.";
-  } else if (requiredConnected === required.length) {
-    // All required platforms are signed in (or skipped); only optional
-    // ones are missing. Show green — the user can run automation.
-    badge.classList.add("ok");
-    label = `${connected}/${total} connected`;
-    badge.title = "All required platforms connected. Optional ones can be signed in later.";
-  } else if (connected === 0) {
-    badge.classList.add("error");
-    label = `0/${total} connected`;
-    badge.title = "No platforms connected. Click the badge to sign in.";
-  } else {
-    badge.classList.add("warn");
-    label = `${connected}/${total} connected`;
-    badge.title = `${total - connected} platform${total - connected === 1 ? "" : "s"} still need sign-in. Click to open the modal.`;
-  }
-  const labelEl = badge.querySelector(".sessions-badge-label");
-  if (labelEl) labelEl.textContent = label;
-  badge.classList.remove("hidden");
-}
-
-async function pollModalSessionsOnce() {
+async function pollSessionsOnce() {
   try {
     const res = await window.gtss.cdp.checkSessions();
     if (!res || !res.ok || !res.sessions) return;
     // Preserve previously-detected logins (avoid flicker on transient failures).
     const next = {};
-    for (const p of MODAL_SESSION_PLATFORMS) {
+    for (const p of SESSION_PLATFORMS) {
       const fresh = res.sessions[p.key];
-      const prev = modalSessionState[p.key];
+      const prev = sessionState[p.key];
       if (fresh && fresh.loggedIn) {
         next[p.key] = fresh;
-        // Auto-clear the skip flag if the platform is now signed in —
-        // a freshly-detected session is more authoritative than the
-        // user's earlier "skip" intent.
-        modalSkippedPlatforms.delete(p.key);
       } else if (prev && prev.loggedIn) {
         next[p.key] = prev;
       } else if (fresh) {
         next[p.key] = fresh;
       }
     }
-    modalSessionState = next;
-    renderSessionsModalGrid();
-    updateSessionsModalDoneButton();
+    sessionState = next;
     updateSessionsHealthCard();
     updateSessionsHealthBadge();
   } catch (_) {
@@ -417,150 +146,43 @@ async function pollModalSessionsOnce() {
   }
 }
 
-function startModalSessionPolling() {
-  if (modalPollTimer) clearInterval(modalPollTimer);
-  pollModalSessionsOnce();
-  modalPollTimer = setInterval(pollModalSessionsOnce, 4000);
+function startSessionPolling() {
+  if (sessionPollTimer) clearInterval(sessionPollTimer);
+  pollSessionsOnce();
+  sessionPollTimer = setInterval(pollSessionsOnce, 10000);
 }
 
-function stopModalSessionPolling() {
-  if (modalPollTimer) {
-    clearInterval(modalPollTimer);
-    modalPollTimer = null;
+function stopSessionPolling() {
+  if (sessionPollTimer) {
+    clearInterval(sessionPollTimer);
+    sessionPollTimer = null;
   }
 }
 
-function openSessionsModal() {
-  $("#sessions-modal-backdrop").classList.remove("hidden");
-  $("#sessions-modal-backdrop").setAttribute("aria-hidden", "false");
-  // If CDP isn't running yet, prompt the user to start the app first.
-  const cdpStateEl = $("#sessions-modal-cdp-state");
-  if (cdpStateEl) {
-    cdpStateEl.textContent = "Chrome: checking...";
-  }
-  renderSessionsModalGrid();
-  updateSessionsModalDoneButton();
-  // Run an immediate check + start polling while the modal is open.
-  pollModalSessionsOnce();
-  startModalSessionPolling();
-  // Also poll the CDP running state.
-  window.gtss.cdp.state().then((s) => {
-    if (cdpStateEl) {
-      cdpStateEl.textContent = s && s.state === "running"
-        ? `Chrome: running (port ${s.port})`
-        : "Chrome: not running — click Start on the Control tab first.";
-    }
-  }).catch(() => {});
-}
+// The Control-tab hint card + the topbar badge both open the web app
+// when clicked. The full sign-in modal lives there (on the root page)
+// and can drive logins inside the CDP Chrome via the bridge server.
+$("#sessions-health-open")?.addEventListener("click", async () => {
+  // If the server is running, open the web app in the user's default
+  // browser (or inside the CDP Chrome if that's where they already are).
+  // The sign-in modal will auto-show on the root page if sessions are
+  // missing.
+  await window.gtss.openInBrowser();
+});
+$("#sessions-health-badge")?.addEventListener("click", async () => {
+  await window.gtss.openInBrowser();
+});
 
-function closeSessionsModal() {
-  $("#sessions-modal-backdrop").classList.add("hidden");
-  $("#sessions-modal-backdrop").setAttribute("aria-hidden", "true");
-  // Keep polling for a few more seconds so the health card stays fresh
-  // after the user dismisses the modal — they may have just signed in and
-  // we want the card to update. Stop after 30s to avoid leaking a timer.
-  setTimeout(stopModalSessionPolling, 30000);
-}
-
-$("#sessions-health-open")?.addEventListener("click", openSessionsModal);
-// Topbar badge click → open the same sessions modal (FIX 1d).
-$("#sessions-health-badge")?.addEventListener("click", () => {
-  // Re-show the modal even if the user previously dismissed it via
-  // "Later" — clicking the badge is an explicit re-open gesture.
-  modalDismissedForThisRun = false;
-  updateSessionsHealthCard();
-  openSessionsModal();
-});
-$("#sessions-modal-close")?.addEventListener("click", () => {
-  modalDismissedForThisRun = true;
-  updateSessionsHealthCard();
-  closeSessionsModal();
-});
-$("#sessions-modal-dismiss")?.addEventListener("click", () => {
-  modalDismissedForThisRun = true;
-  updateSessionsHealthCard();
-  closeSessionsModal();
-});
-$("#sessions-modal-done")?.addEventListener("click", () => {
-  closeSessionsModal();
-  toast("Sessions look good. You can re-open this any time from the Control tab.", "success");
-});
-$("#sessions-modal-refresh")?.addEventListener("click", pollModalSessionsOnce);
-
-// When the Start button finishes launching the server + CDP Chrome, kick
-// off session polling so the health card populates as soon as logins are
-// detected. We hook the existing Start handler by wrapping it.
-//
-// ─── Auto-open the missing-sessions modal ─────────────────────────────
-//
-// Per project requirements: the FIRST thing that happens after the user
-// clicks Start (post-onboarding) is — once the server + CDP Chrome have
-// come up — we check the CDP profile for LinkedIn, X, Instagram,
-// Facebook, and Google/Gemini sessions. If ANY are missing, we
-// AUTOMATICALLY pop up the sign-in modal (not just the passive
-// health-card banner). The modal's "Open ↗" buttons open each
-// platform's login page in the user's DEFAULT browser (via
-// shell.openExternal — never inside the CDP Chrome that Electron
-// spawned). Live polling of CDP cookies detects sessions that were
-// already present from a previous profile clone — but it won't detect
-// brand-new sign-ins until the next clone runs (the user can click
-// "Restart CDP" or relaunch the app to trigger a fresh clone).
-const _originalStartHandler = $("#start-btn").onclick;
-let _autoModalCheckAfterStart = null;
+// After Start, give the server + CDP a moment to come up, then poll
+// sessions and start the slow background poll so the badge stays fresh.
+let _postStartPoll = null;
 $("#start-btn").addEventListener("click", () => {
-  // Reset the "dismissed" flag on a fresh Start so the banner can reappear
-  // and the auto-modal can re-trigger if sessions are still missing after
-  // the new launch.
-  modalDismissedForThisRun = false;
-  // Note: we deliberately do NOT clear modalSkippedPlatforms here. A
-  // fresh Start may run a fresh CDP profile clone (which could pick up
-  // sessions the user signed into since the last launch), but the
-  // user's "I'll deal with Instagram later" intent should persist
-  // within a launcher session. The skip set is only cleared by:
-  //   - polling detecting a session for that platform (auto-clear)
-  //   - launcher restart (in-memory only)
-  if (_autoModalCheckAfterStart) {
-    clearTimeout(_autoModalCheckAfterStart);
-    _autoModalCheckAfterStart = null;
-  }
-  // Update the badge immediately so it doesn't flash stale state while
-  // the server boots. Once sessions are polled, pollModalSessionsOnce()
-  // will refresh it.
   updateSessionsHealthBadge();
-  // Give the server + CDP ~6s to come up (the server boots first, then
-  // CDP Chrome). After that we poll sessions and auto-open the modal if
-  // anything required is missing.
-  _autoModalCheckAfterStart = setTimeout(async () => {
-    _autoModalCheckAfterStart = null;
-    await pollModalSessionsOnce();
-    // Auto-open the modal if any session is missing AND the user hasn't
-    // dismissed it for this run AND the missing platform hasn't been
-    // explicitly skipped. We DON'T auto-open if every required platform
-    // is already signed in or skipped (e.g., the user re-ran Start
-    // after completing sign-in — no need to nag them).
-    const missing = MODAL_SESSION_PLATFORMS.filter(
-      (p) =>
-        !(modalSessionState[p.key] && modalSessionState[p.key].loggedIn) &&
-        !modalSkippedPlatforms.has(p.key),
-    );
-    if (missing.length > 0 && !modalDismissedForThisRun) {
-      const backdrop = $("#sessions-modal-backdrop");
-      if (backdrop && backdrop.classList.contains("hidden")) {
-        openSessionsModal();
-        toast(
-          `Missing sessions detected: ${missing.map((p) => p.label).join(", ")}. Click "Open ↗" to sign in inside your default browser, or "Skip" to defer a platform.`,
-          "warning",
-          7000,
-        );
-      }
-    }
-    // Start a slow background poll (every 10s) that keeps the health card
-    // and the topbar badge up to date while the user is using the app,
-    // even after the modal is closed. The polling is cheap (one CDP
-    // WebSocket round-trip).
-    if (!modalPollTimer) {
-      modalPollTimer = setInterval(pollModalSessionsOnce, 10000);
-    }
+  if (_postStartPoll) clearTimeout(_postStartPoll);
+  _postStartPoll = setTimeout(async () => {
+    _postStartPoll = null;
+    await pollSessionsOnce();
+    startSessionPolling();
   }, 6000);
 });
 
@@ -910,8 +532,8 @@ loadAboutData();
 // from a previous session and the sessions are already detectable).
 // The poll is async and silent on failure — no UI disruption if CDP
 // isn't up yet.
-pollModalSessionsOnce().catch(() => {});
+pollSessionsOnce().catch(() => {});
 // Render the badge in its initial "—" state immediately so it doesn't
 // flash empty before the first poll resolves. updateSessionsHealthBadge()
-// will replace it as soon as pollModalSessionsOnce returns.
+// will replace it as soon as pollSessionsOnce returns.
 updateSessionsHealthBadge();

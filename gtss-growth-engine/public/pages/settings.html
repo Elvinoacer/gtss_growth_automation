@@ -823,6 +823,54 @@
           </div>
         </section>
 
+        <!-- ─── Automation Browser ───
+             Controls whether the CDP Chrome (the automation browser at
+             port 9222) runs visibly or in the background on normal
+             Starts. The FIRST Start always runs visibly so the user can
+             sign in; after that, this setting applies.
+
+             Background (default) — Chrome runs headless. No window
+             appears. Outreach works immediately; the user manages the
+             app from their default browser.
+
+             Visible — Chrome opens a window on every Start. Useful if
+             you want to watch automation happen, or if you need to
+             re-authenticate a platform frequently.
+
+             This setting is read by the Electron launcher's
+             lifecycle:start handler (see
+             desktop/main/ipc-handlers.js) and persisted in .env as
+             CDP_VISIBLE_DEFAULT. It takes effect on the next Start —
+             changing it does not restart Chrome immediately. -->
+        <section class="settings-section gtss-card" id="automation-browser">
+          <div class="section-head">
+            <h2>Automation Browser</h2>
+            <span id="browser-mode-result" class="inline-result"></span>
+          </div>
+          <p class="muted" style="margin: 0 0 14px; font-size: 13px;">
+            Choose whether the automation Chrome (port 9222) runs in the
+            background or visibly when you press Start. The first launch
+            always runs visibly so you can sign in — this setting applies
+            afterwards. Takes effect on the next Start.
+          </p>
+          <div class="form-row" style="gap: 16px; align-items: center;">
+            <label class="field" style="flex-direction: row; align-items: center; gap: 8px;">
+              <input id="browser-mode-background" name="browser-mode" type="radio" value="background" checked />
+              <span>Background (recommended) — Chrome runs headless</span>
+            </label>
+            <label class="field" style="flex-direction: row; align-items: center; gap: 8px;">
+              <input id="browser-mode-visible" name="browser-mode" type="radio" value="visible" />
+              <span>Visible — show the Chrome window on every Start</span>
+            </label>
+            <button id="save-browser-mode" class="primary-button" type="button">Save</button>
+          </div>
+          <p class="muted" style="margin: 14px 0 0; font-size: 12px;">
+            Need to sign in to a platform again? Open the dashboard and
+            click the sign-in prompt, or use
+            <a href="#" id="reopen-signin-modal-link">Re-open the sign-in modal</a>.
+          </p>
+        </section>
+
         <section class="settings-section gtss-card" id="daily-action-limits">
           <div class="section-head">
             <h2>Daily Action Limits</h2>

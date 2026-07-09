@@ -86,11 +86,15 @@
         </div>
 
         <p class="hint-text">
-          Click Start to launch the server and open the web app in your default
-          browser. The automation browser (Chrome with CDP) runs in the
-          background — outreach works immediately once your platform sessions
-          are detected. All settings (platforms, AI, outreach, scheduling) live
-          inside the web app at <code>http://localhost:3000</code>.
+          Click Start to launch the server and open the web app. On the
+          <strong>first run</strong>, Chrome opens visibly with the web app
+          inside it so you can sign in to your platforms (LinkedIn, X,
+          Facebook, Instagram, Google/Gemini) — the sign-in modal on the
+          dashboard opens each login inside the automation Chrome, so
+          cookies land in the right place. On subsequent runs, Chrome runs
+          in the background by default (change this in the web app's
+          Settings). All settings live inside the web app at
+          <code>http://localhost:3000</code>.
         </p>
 
         <!-- Sessions health indicator — surfaces missing platform logins. -->
@@ -210,60 +214,17 @@
     <!-- Toast container for transient notifications -->
     <div id="toast-container" class="toast-container"></div>
 
-    <!-- ───────── Missing sessions modal ─────────
-         Shown — AUTOMATICALLY — when the launcher detects that the current
-         CDP profile is missing one or more browser sessions required for
-         automation: LinkedIn, X, Instagram, Facebook, AND Google/Gemini.
-         The modal auto-pops after the user clicks Start and the server +
-         CDP Chrome have come up. Each platform gets an "Open ↗" button
-         that opens its login page in the user's DEFAULT browser (via
-         shell.openExternal) — NOT inside the CDP Chrome that Electron
-         spawned. This is the key change for "authentication in the
-         browser, not inside Electron": the user signs in where they're
-         already comfortable, and the fresh cookies are picked up by the
-         next CDP profile clone (run on "Restart CDP" or on the next
-         launcher start). -->
-    <div id="sessions-modal-backdrop" class="modal-backdrop hidden" aria-hidden="true">
-      <div class="modal sessions-modal" role="dialog" aria-labelledby="sessions-modal-title">
-        <div class="modal-head">
-          <h2 id="sessions-modal-title">Sign in to your accounts</h2>
-          <button type="button" id="sessions-modal-close" class="modal-close" aria-label="Close">×</button>
-        </div>
-        <div class="modal-body">
-          <p class="modal-intro">
-            Some browser sessions required for automation are missing. Click each
-            <strong>Open ↗</strong> button to sign in inside your <strong>default
-            browser</strong> — not inside this app. If your default browser is Chrome
-            (the common case), the fresh sessions will be picked up the next time
-            the launcher clones your Chrome profile (click <em>Restart CDP</em> in
-            Advanced controls, or simply relaunch the app). Sessions already
-            present from a previous clone show a green ✓ below.
-          </p>
-
-          <div id="sessions-modal-status" class="sessions-modal-status">
-            <span id="sessions-modal-cdp-state">Chrome: checking...</span>
-            <button type="button" id="sessions-modal-refresh" class="btn btn-secondary btn-mini">Refresh</button>
-          </div>
-
-          <div id="sessions-modal-grid" class="sessions-grid">
-            <!-- cards rendered dynamically -->
-          </div>
-
-          <div class="sessions-modal-note">
-            <strong>Google / Gemini:</strong> there is no dedicated login endpoint.
-            Click <em>Open ↗</em> on the Google / Gemini card to open the Gemini
-            app in your default browser, then sign in with your personal Google
-            account. The session becomes available to automation after the next
-            CDP profile clone (Gemini will not operate in a copied CDP profile
-            without an active Google login).
-          </div>
-        </div>
-        <div class="modal-foot">
-          <button type="button" id="sessions-modal-dismiss" class="btn btn-secondary">Later</button>
-          <button type="button" id="sessions-modal-done" class="btn btn-primary">All set</button>
-        </div>
-      </div>
-    </div>
+    <!-- ───────── Sign-in nudge (lightweight) ─────────
+         The full sign-in modal now lives on the web app's root page ("/"),
+         NOT here. The launcher is intentionally minimal — it just starts
+         and stops the server. When the launcher detects that platform
+         sessions are missing (via CDP cookie polling), it shows a small
+         "Sign in…" button in the Control tab that opens the web app —
+         where the sign-in modal can drive logins inside the CDP Chrome
+         itself (so cookies land in the automation browser's profile,
+         not the user's default browser). See the bridge server in
+         desktop/main/bridge-server.js for the channel the web app uses
+         to ask Electron to open login tabs. -->
 
     <script src="renderer.js"></script>
   </body>

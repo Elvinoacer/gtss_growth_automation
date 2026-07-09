@@ -146,8 +146,17 @@ class Lifecycle {
    * DEFAULT browser via shell.openExternal. During onboarding this is
    * false (no surprise browser windows); from the launcher Start it's
    * true (the user pressed Start, they want to use the app).
+   *
+   * `openInCdp` controls whether the web app URL is opened INSIDE the CDP
+   * Chrome (via cdpManager.openTab) instead of the user's default browser.
+   * Used for the first-time sign-in flow: the user needs to be IN the CDP
+   * Chrome so that when they click a platform sign-in button on the web
+   * app's root page, the login tab opens in the SAME browser that
+   * automation uses — cookies land in the right profile immediately, no
+   * profile-clone round-trip needed. When `openInCdp` is true, `openBrowser`
+   * is ignored (we open in CDP, not the default browser).
    */
-  async startAll({ openBrowser = true, visible = true, onProgress } = {}) {
+  async startAll({ openBrowser = true, visible = true, openInCdp = false, openUrl: overrideUrl, onProgress } = {}) {
     const progress = (stage, message) => {
       try {
         this.log.append("lifecycle", message);
@@ -196,19 +205,22 @@ class Lifecycle {
       if (!this.cdp.isRunning()) {
         // ─── No CDP running: spawn fresh with requested visibility ──────
         //
-        // visible: false → headless Chrome (onboarding background work).
-        // visible: true  → visible Chrome (launcher Start / tray Quick
-        //   Start). This is the first legitimate moment a visible browser
-        //   window is expected and welcome.
+        // visible: false → headless Chrome (onboarding background work,
+        //   or the normal post-setup flow when CDP_VISIBLE_DEFAULT is
+        //   "false").
+        // visible: true  → visible Chrome (first-time sign-in flow, or
+        //   when the user explicitly chose "Run visibly" in Settings).
         //
-        // NOTE: We deliberately do NOT pass openUrl here. The web app is
-        // opened in the user's DEFAULT browser (step 4 below) — not in
-        // the CDP Chrome — so platform authentication happens where the
-        // user is already comfortable. `openUrl` is opt-in per the
-        // Launch Sequence UX Strategy guardrails.
+        // openUrl is passed ONLY when openInCdp is true — i.e., the
+        // first-time sign-in flow where the web app must open INSIDE the
+        // CDP Chrome so the sign-in modal on its root page can drive
+        // logins in the same browser that automation uses. In the normal
+        // flow we omit openUrl (the web app opens in the user's default
+        // browser in step 4 below).
         progress("browser", "Initializing browser...");
         await this.cdp.start({
           visible,
+          openUrl: openInCdp ? webAppUrl : undefined,
           onProgress: (stage, message) => {
             // Map CDP stage names to our high-level stages so the
             // onboarding wizard's progress UI can highlight the right step.
@@ -246,10 +258,15 @@ class Lifecycle {
         // user's action. The --user-data-dir is unchanged, so the profile
         // cloned during onboarding (with all the user's logins) is
         // preserved across the restart.
+        //
+        // When openInCdp is true, we also pass openUrl so the freshly
+        // visible Chrome opens straight onto the web app's root page
+        // (where the sign-in modal now lives).
         progress("browser", "Bringing Chrome to the foreground...");
         await this.cdp.stop("visibility-change");
         await this.cdp.start({
           visible: true,
+          openUrl: openInCdp ? webAppUrl : undefined,
           onProgress: (stage, message) => {
             if (stage === "ready") {
               progress("browser", "Browser ready (visible).");
@@ -261,6 +278,15 @@ class Lifecycle {
         cdpActive = true;
       } else {
         progress("browser", "CDP Chrome already running — reusing it.");
+        // If CDP is already running (e.g. attached to an external Chrome)
+        // and the caller wants the web app inside it, open a tab now — we
+        // can't pass openUrl retroactively to a Chrome we didn't spawn.
+        if (openInCdp) {
+          const ok = await this.cdp.openTab(webAppUrl);
+          if (!ok) {
+            this.log.append("lifecycle:stderr", `Could not open ${webAppUrl} in the running CDP Chrome — open it manually.`);
+          }
+        }
         cdpActive = true;
       }
 
@@ -298,21 +324,44 @@ class Lifecycle {
       this.env.upsert("CDP_ENDPOINT", "");
     }
 
-    // ─── 3. Open the web app in the user's DEFAULT browser ─────────────
+    // ─── 3. Open the web app ─────────────────────────────────────────────
     //
-    // This is the key change for "authentication in the browser, not
-    // inside Electron". Previously, the web app was opened as a tab
-    // inside the CDP Chrome that Electron spawned — which meant the user
-    // signed into the web app and signed into Google/Gemini inside a
-    // Chrome window that Electron controlled. That felt embedded and
-    // caused issues with session transfer (Google's trusted-device state
-    // doesn't carry over to a copied profile).
+    // Two modes:
     //
-    // Now the web app opens in the user's default browser (Firefox,
-    // Safari, Edge, or their normal Chrome) via shell.openExternal. The
-    // CDP Chrome still runs in the background for automation — it just
-    // doesn't host the web app UI.
-    if (openBrowser) {
+    //   openInCdp: true → open the web app INSIDE the CDP Chrome (a new
+    //     tab via the DevTools HTTP API). This is the first-time sign-in
+    //     flow: the user needs to be in the CDP Chrome so the sign-in
+    //     modal on the web app's root page can open login tabs in the
+    //     SAME browser that automation uses. Cookies land in the right
+    //     profile immediately.
+    //
+    //   openBrowser: true (and openInCdp: false) → open the web app in
+    //     the user's DEFAULT browser via shell.openExternal. This is the
+    //     normal post-setup flow: the user manages the app from their
+    //     everyday browser, and the CDP Chrome runs in the background
+    //     (headless or visible per the Settings preference) for
+    //     automation only.
+    //
+    //   Both false → onboarding path. No browser window opens; the
+    //     progress screen narrates background readiness only.
+    if (openInCdp && cdpActive) {
+      // The web app URL was already passed as openUrl to cdp.start() (or
+      // opened via openTab in the "already running" branch), so the tab
+      // is up. We just log the ready banner.
+      progress("open-webapp", `Web app opened inside the CDP Chrome at ${webAppUrl}.`);
+      progress("ready", "Ready. Sign in to your accounts in the Chrome window — the modal on the dashboard guides you.");
+    } else if (openInCdp && !cdpActive) {
+      // CDP failed (Chrome not installed) — fall back to the default
+      // browser so the user can at least see the web app, even though
+      // sign-in inside it won't carry cookies to the automation browser.
+      progress("open-webapp", `CDP unavailable — opening ${webAppUrl} in your default browser as a fallback.`);
+      try {
+        await shell.openExternal(webAppUrl);
+      } catch (err) {
+        progress("open-webapp:error", `Couldn't open the web app: ${err.message}. Open ${webAppUrl} manually.`);
+      }
+      progress("ready", "Ready (fallback). Install Google Chrome for the full sign-in flow.");
+    } else if (openBrowser) {
       progress("open-webapp", `Opening ${webAppUrl} in your default browser...`);
       try {
         await shell.openExternal(webAppUrl);

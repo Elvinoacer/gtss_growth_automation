@@ -24,6 +24,7 @@ const { FirstRun } = require("./first-run");
 const { AutoUpdater } = require("./auto-updater");
 const { EnvBootstrap } = require("./env-bootstrap");
 const { registerIpcHandlers } = require("./ipc-handlers");
+const { BridgeServer } = require("./bridge-server");
 
 const DEV = process.argv.includes("--dev");
 
@@ -49,6 +50,7 @@ let logStream = null;
 let envBootstrap = null;
 let firstRun = null;
 let updater = null;
+let bridgeServer = null;
 
 // Single-instance lock — prevent two copies of the app from running.
 const gotLock = app.requestSingleInstanceLock();
@@ -109,6 +111,28 @@ app.whenReady().then(async () => {
 
   firstRun = new FirstRun({ envBootstrap });
   updater = new AutoUpdater({ logStream });
+
+  // ─── Bridge HTTP server ─────────────────────────────────────────────
+  //
+  // A tiny localhost-only HTTP server (default port 9224) that lets the
+  // web app (localhost:3000) control the CDP Chrome: start it visibly,
+  // open login tabs, check sessions, and read/write the browser-mode
+  // setting. This is what enables the sign-in modal to live on the web
+  // app's root page instead of inside the Electron launcher — the modal
+  // calls the bridge to ask Electron to bring up Chrome and navigate to
+  // the platform login URL.
+  bridgeServer = new BridgeServer({
+    lifecycle,
+    cdpManager,
+    envBootstrap,
+    firstRun,
+    logStream,
+  });
+  try {
+    await bridgeServer.start();
+  } catch (err) {
+    logStream.append("lifecycle:stderr", `Bridge server failed to start: ${err.message}`);
+  }
 
   // 3. Register IPC handlers — these are what the renderer calls.
   registerIpcHandlers({
