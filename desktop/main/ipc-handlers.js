@@ -113,20 +113,27 @@ function registerIpcHandlers({
     }
   });
 
-  // ─── CDP session checking (onboarding "Sign in to your accounts") ──────
+  // ─── CDP session checking (post-Start "missing sessions" modal) ───────
   //
-  // These channels support the new onboarding step that gates "Continue"
-  // on the user being logged into Google (required for Gemini) plus the
-  // other social platforms. We expose:
-  //   - cdp:start-standalone: launch CDP Chrome WITHOUT cloning the user's
-  //     profile (skipProfileCopy: true) and WITHOUT the web app URL (the
-  //     server isn't up yet during onboarding). The user signs in inside
-  //     this fresh Chrome; cookies are stored in the CDP profile and become
-  //     available to automation once the server boots.
-  //     The (potentially slow) profile clone is deferred to lifecycle.startAll()
-  //     which runs after onboarding completes — see lifecycle.js for the
-  //     progress feedback ("Initializing browser...", "Cloning browser
-  //     profile...", etc.) emitted during that deferred clone.
+  // These channels support the launcher's post-Start "missing sessions"
+  // modal — which auto-pops after the user clicks Start, the server boots,
+  // and the web app URL has loaded in the CDP Chrome. The modal lists each
+  // platform (LinkedIn, X, Instagram, Facebook, Google/Gemini) with an
+  // "Open ↗" button that opens its login page IN the already-running CDP
+  // Chrome — never a new browser instance. Live polling detects each
+  // login as it happens, reusing the same UX pattern as the web app's
+  // /settings → Platform Sessions.
+  //
+  // We expose:
+  //   - cdp:start-standalone: legacy channel. Launches CDP Chrome WITHOUT
+  //     a URL and (by default) WITHOUT cloning the user's profile. This
+  //     used to be called from onboarding step 3, but onboarding no longer
+  //     touches Chrome (sign-in was moved to the post-Start modal — see
+  //     renderer.js). The channel is retained for backwards compat and
+  //     for callers that need a "just get Chrome up" path. With the
+  //     strengthened try-first-then-clone pattern, startStandalone() will
+  //     also ATTACH to an existing CDP endpoint if one is alive, so it
+  //     never spawns a second Chrome.
   //   - cdp:open-login-tabs: open each platform's login page in the CDP
   //     Chrome so the user can sign in.
   //   - cdp:open-url-in-cdp: open an ARBITRARY url (e.g. the Gemini
@@ -135,27 +142,30 @@ function registerIpcHandlers({
   //     logins always reuse the existing browser, never spawn a new one.
   //   - cdp:check-sessions: poll cookies via CDP and return a map of
   //     platform -> { loggedIn, cookies, label }.
-  //   - cdp:state: lightweight poll for the CDP state (used by onboarding
-  //     to know when Chrome is up).
+  //   - cdp:state: lightweight poll for the CDP state.
 
   ipcMain.handle("cdp:start-standalone", async () => {
     try {
       if (!cdpManager.isRunning()) {
-        // Start CDP Chrome WITHOUT a URL and WITHOUT cloning the user's
-        // profile. We just need a fresh browser up so the user can sign in.
-        // openLoginTabs() will open the actual login pages in new tabs.
+        // Legacy "just get Chrome up" channel. Originally called from
+        // onboarding step 3, but onboarding no longer touches Chrome
+        // (sign-in was moved to the post-Start "missing sessions" modal
+        // — see renderer.js). Retained for any caller that needs to bring
+        // up CDP Chrome without a URL.
         //
-        // skipProfileCopy: true is the key change that makes the onboarding
-        // wizard fast — the (potentially 10–60s) profile clone no longer
-        // happens here. It's deferred to lifecycle.startAll() which runs
-        // after the user clicks Finish, with live progress feedback in the
-        // launcher UI.
+        // With the strengthened try-first-then-clone pattern, start()
+        // first ATTACHES to any Chrome already listening on the CDP port
+        // — so this never spawns a second Chrome. If no endpoint is
+        // alive, we spawn one WITHOUT cloning the user's profile
+        // (skipProfileCopy: true) — the slow clone is deferred to
+        // lifecycle.startAll() which runs with live progress feedback in
+        // the launcher UI.
         await cdpManager.start({
           skipProfileCopy: true,
           onProgress: (_stage, message) => {
             // The CdpManager already appends to logStream, but we also
             // surface a high-level lifecycle banner so the launcher's Logs
-            // tab shows the onboarding browser startup clearly.
+            // tab shows the browser startup clearly.
             logStream.append("lifecycle", message);
           },
         });

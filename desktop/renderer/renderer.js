@@ -266,21 +266,62 @@ $("#sessions-modal-refresh")?.addEventListener("click", pollModalSessionsOnce);
 // When the Start button finishes launching the server + CDP Chrome, kick
 // off session polling so the health card populates as soon as logins are
 // detected. We hook the existing Start handler by wrapping it.
+//
+// ─── Auto-open the missing-sessions modal ─────────────────────────────
+//
+// Per project requirements: the FIRST thing that happens after the user
+// clicks Start (post-onboarding) is — once the web app URL has loaded in
+// the CDP Chrome — we check sessions for LinkedIn, X, Instagram, Facebook,
+// and Google/Gemini. If ANY are missing, we AUTOMATICALLY pop up the
+// sign-in modal (not just the passive health-card banner). The modal's
+// "Open ↗" buttons open each platform's login page IN the already-running
+// CDP Chrome (never a new browser), and live polling detects each login
+// as it happens — reusing the same UX pattern as the web app's
+// /settings → Platform Sessions.
 const _originalStartHandler = $("#start-btn").onclick;
+let _autoModalCheckAfterStart = null;
 $("#start-btn").addEventListener("click", () => {
   // Reset the "dismissed" flag on a fresh Start so the banner can reappear
-  // if sessions are still missing after the new launch.
+  // and the auto-modal can re-trigger if sessions are still missing after
+  // the new launch.
   modalDismissedForThisRun = false;
-  // Give the server + CDP ~5s to come up before we start polling.
-  setTimeout(() => {
-    pollModalSessionsOnce();
+  // Cancel any previous auto-modal timer (e.g., user clicked Start twice).
+  if (_autoModalCheckAfterStart) {
+    clearTimeout(_autoModalCheckAfterStart);
+    _autoModalCheckAfterStart = null;
+  }
+  // Give the server + CDP ~6s to come up (the server boots first, then
+  // CDP Chrome, then the web app URL is opened in a new tab). After that
+  // we poll sessions and auto-open the modal if anything required is
+  // missing.
+  _autoModalCheckAfterStart = setTimeout(async () => {
+    _autoModalCheckAfterStart = null;
+    await pollModalSessionsOnce();
+    // Auto-open the modal if any session is missing AND the user hasn't
+    // dismissed it for this run. We DON'T auto-open if every required
+    // platform is already signed in (e.g., the user re-ran Start after
+    // completing sign-in — no need to nag them).
+    const missing = MODAL_SESSION_PLATFORMS.filter(
+      (p) => !(modalSessionState[p.key] && modalSessionState[p.key].loggedIn),
+    );
+    if (missing.length > 0 && !modalDismissedForThisRun) {
+      const backdrop = $("#sessions-modal-backdrop");
+      if (backdrop && backdrop.classList.contains("hidden")) {
+        openSessionsModal();
+        toast(
+          `Missing sessions detected: ${missing.map((p) => p.label).join(", ")}. Sign in inside the CDP Chrome.`,
+          "warning",
+          6000,
+        );
+      }
+    }
     // Start a slow background poll (every 10s) that keeps the health card
     // up to date while the user is using the app, even after the modal is
     // closed. The polling is cheap (one CDP WebSocket round-trip).
     if (!modalPollTimer) {
       modalPollTimer = setInterval(pollModalSessionsOnce, 10000);
     }
-  }, 5000);
+  }, 6000);
 });
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────

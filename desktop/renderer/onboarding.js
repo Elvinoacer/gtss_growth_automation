@@ -1,7 +1,7 @@
 /**
  * onboarding.js — first-launch wizard logic.
  *
- * Four steps:
+ * Three steps (was four — platform sign-in was removed from the wizard):
  *   1. Set encryption passphrase (required).
  *      - Live show/hide toggle on both passphrase fields.
  *      - Real-time match indicator (✅ / ❌) below the confirm field.
@@ -10,91 +10,45 @@
  *        user sees ✅ "API key is valid" or ❌ "Invalid API key" before
  *        they click Continue. Quota errors (429) are treated as VALID —
  *        we only care whether the key itself is genuine.
- *   3. Sign in to your accounts (launch CDP Chrome WITHOUT cloning the
- *      profile — the slow clone is deferred to server startup so the
- *      wizard stays snappy — sign in to Google/Gemini, LinkedIn,
- *      Facebook, X, Instagram). Gated on Google login because Gemini
- *      will not operate in a copied CDP profile without an active
- *      Google session.
- *      - Live progress strip ("Initializing browser...", "Preparing CDP
- *        endpoint...", "Almost ready...") so the user always knows what
- *        the app is doing.
- *   4. Finish — main.js then auto-starts the server (with deferred
- *      browser cloning + live progress feedback) and opens the web app.
+ *   3. Finish — main.js then auto-starts the server (with the deferred
+ *      browser clone + live progress feedback) and opens the web app.
  *
- * Platform logins can ALSO be redone later from the web app's Settings →
- * Platform Sessions, which uses the project's existing Playwright-based
- * login flow. This onboarding step just makes sure the user lands on a
- * working setup the first time.
+ * ─── Where did platform sign-in go? ─────────────────────────────────────
+ *
+ * Previously step 3 ("Sign in to your accounts") launched CDP Chrome
+ * during setup so the user could sign in to Google/Gemini, LinkedIn,
+ * Facebook, X, and Instagram. That caused problems:
+ *
+ *   - It launched Chrome during SETUP, which fails when the user has no
+ *     Chrome profile yet (or the profile is locked because their real
+ *     Chrome is open) and confuses first-time users.
+ *   - It duplicated the session-management UX that already lives in the
+ *     web app's Settings → Platform Sessions.
+ *   - It violated the project's "Chrome is launched ONCE, in the launch
+ *     phase, never in setup" rule.
+ *
+ * Now platform sign-in happens AFTER the user clicks Finish: the launcher
+ * starts the server, opens the web app in the CDP Chrome, and the
+ * launcher window automatically pops up a "missing sessions" modal if any
+ * of LinkedIn / X / Instagram / Facebook / Google(Gemini) aren't signed
+ * in. The modal's "Open ↗" buttons open each platform's login page IN
+ * that same CDP Chrome, and live polling detects each login. See
+ * desktop/renderer/renderer.js for the modal logic.
+ *
+ * The web app's Settings → Platform Sessions still works as before for
+ * re-authenticating or clearing individual platform sessions later.
  */
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
 let currentStep = 1;
-const totalSteps = 4;
+const totalSteps = 3;
 const collected = {
   passphrase: null,
   geminiKey: null,
   geminiKeyValid: false,
 };
-
-// ─── Platform definitions for the "Sign in to your accounts" step ──────────
-// `required: true` means onboarding gates "Continue" on it. Google is
-// required because Gemini web refuses to operate in a copied CDP profile
-// until at least one Google account is signed in inside that profile.
-// The social platforms are recommended but the user can skip them — they
-// can complete login later from the web app's Settings → Platform Sessions.
-//
-// `loginUrl` is opened inside the already-running CDP Chrome when the user
-// clicks a platform card. For Gemini there is no dedicated login endpoint —
-// users simply navigate to https://gemini.google.com/ and sign in normally.
-const SESSION_PLATFORMS = [
-  {
-    key: "google",
-    label: "Google / Gemini",
-    required: true,
-    icon: "G",
-    loginUrl: "https://gemini.google.com/",
-    loginHint: "Open Gemini and sign in with your Google account",
-  },
-  {
-    key: "linkedin",
-    label: "LinkedIn",
-    required: false,
-    icon: "in",
-    loginUrl: "https://www.linkedin.com/",
-    loginHint: "Open LinkedIn and sign in",
-  },
-  {
-    key: "facebook",
-    label: "Facebook",
-    required: false,
-    icon: "f",
-    loginUrl: "https://www.facebook.com/",
-    loginHint: "Open Facebook and sign in",
-  },
-  {
-    key: "x",
-    label: "X (Twitter)",
-    required: false,
-    icon: "𝕏",
-    loginUrl: "https://x.com/",
-    loginHint: "Open X and sign in",
-  },
-  {
-    key: "instagram",
-    label: "Instagram",
-    required: false,
-    icon: "IG",
-    loginUrl: "https://www.instagram.com/",
-    loginHint: "Open Instagram and sign in",
-  },
-];
-
-let sessionState = {};      // platformKey -> { loggedIn, cookies, label }
-let sessionPollTimer = null;
-let sessionsAutoLaunched = false;
 
 function showStep(n) {
   currentStep = n;
@@ -308,304 +262,9 @@ $("#onboard-step2-next").addEventListener("click", () => {
   }
   collected.geminiKey = skip ? null : key;
   showStep(3);
-  // Kick off the CDP Chrome + session polling automatically when the
-  // user lands on step 3 — they shouldn't have to click another button
-  // to get Chrome started.
-  autoStartCdpForSessions();
 });
 
-// ─── Step 3: Sign in to your accounts ────────────────────────────────────────
-
-function renderSessionsGrid() {
-  const grid = $("#sessions-grid");
-  if (!grid) return;
-  grid.innerHTML = SESSION_PLATFORMS.map((p) => {
-    const state = sessionState[p.key] || { loggedIn: false };
-    const loggedIn = Boolean(state.loggedIn);
-    const cardCls = [
-      "session-card",
-      p.required ? "required" : "",
-      loggedIn ? "logged-in" : "",
-    ].filter(Boolean).join(" ");
-    const stateText = loggedIn
-      ? `Logged in${state.cookies && state.cookies.length ? ` (${state.cookies[0]}${state.cookies.length > 1 ? ` +${state.cookies.length - 1}` : ""})` : ""}`
-      : "Not signed in yet";
-    const stateCls = loggedIn ? "logged-in" : "not-logged-in";
-    const check = loggedIn ? "✓" : "○";
-    const openBtnDisabled = loggedIn ? "disabled" : "";
-    return `
-      <div class="${cardCls}" data-session-key="${p.key}">
-        <div class="session-logo ${p.key}">${p.icon}</div>
-        <div class="session-info">
-          <div class="session-name">
-            ${p.label}
-            ${p.required ? '<span class="session-required-pill">Required</span>' : ""}
-          </div>
-          <div class="session-state ${stateCls}">${stateText}</div>
-        </div>
-        <button class="btn btn-mini btn-secondary session-open-btn"
-                data-platform-key="${p.key}"
-                ${openBtnDisabled}
-                title="${p.loginHint}">
-          Open ↗
-        </button>
-        <div class="session-check">${check}</div>
-      </div>
-    `;
-  }).join("");
-
-  // Wire up the "Open ↗" buttons — each one opens the platform's login URL
-  // inside the already-running CDP Chrome. Never spawns a new browser.
-  grid.querySelectorAll(".session-open-btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const key = btn.dataset.platformKey;
-      const platform = SESSION_PLATFORMS.find((p) => p.key === key);
-      if (!platform || !platform.loginUrl) return;
-      btn.disabled = true;
-      const original = btn.textContent;
-      btn.textContent = "Opening...";
-      try {
-        const res = await window.gtss.cdp.openUrlInCdp(platform.loginUrl);
-        if (res.ok) {
-          toast(`${platform.label} opened in the CDP Chrome — sign in there.`, "info");
-        } else {
-          toast(`Could not open ${platform.label}: ${res.error || "unknown error"}`, "error");
-        }
-      } finally {
-        btn.textContent = original;
-        // Re-enable unless the session is already logged in.
-        const state = sessionState[key];
-        if (!state || !state.loggedIn) btn.disabled = false;
-      }
-    });
-  });
-}
-
-function updateSessionsContinueButton() {
-  const btn = $("#onboard-step3-next");
-  if (!btn) return;
-  // Gate "Continue" on Google being logged in (required). The other
-  // platforms are recommended but not strictly required — the user can
-  // complete them later from Settings → Platform Sessions in the web app.
-  const googleOk = Boolean(sessionState.google && sessionState.google.loggedIn);
-  btn.disabled = !googleOk;
-  if (googleOk) {
-    btn.title = "Continue to finish setup";
-  } else {
-    btn.title = "Sign in to Google / Gemini in the Chrome window first — Gemini won't operate in the copied profile without an active Google login.";
-  }
-}
-
-// Live progress strip for Chrome startup. The CdpManager emits progress
-// messages via the logStream — but here we surface the most recent lifecycle
-// log line as a friendly one-liner so the user sees continuous feedback
-// instead of a frozen "Chrome: starting…" label.
-const PROGRESS_STAGES = [
-  { match: /Initializing browser|Using Chrome at|setup mode/i, label: "Initializing browser..." },
-  { match: /Cloning browser profile|Copying profile|Profile copy/i, label: "Cloning browser profile..." },
-  { match: /Preparing CDP endpoint|Launching Chrome on port/i, label: "Preparing CDP endpoint..." },
-  { match: /Almost ready|CDP ready/i, label: "Almost ready..." },
-];
-const progressEl = $("#sessions-progress");
-const progressTextEl = $("#sessions-progress-text");
-
-function showSessionsProgress(message) {
-  if (!progressEl || !progressTextEl) return;
-  progressEl.hidden = false;
-  let label = message;
-  for (const stage of PROGRESS_STAGES) {
-    if (stage.match.test(message)) {
-      label = stage.label;
-      break;
-    }
-  }
-  progressTextEl.textContent = label;
-}
-
-function hideSessionsProgress() {
-  if (progressEl) progressEl.hidden = true;
-}
-
-async function autoStartCdpForSessions() {
-  if (sessionsAutoLaunched) return;
-  sessionsAutoLaunched = true;
-  await startCdpForSessions();
-}
-
-async function startCdpForSessions() {
-  const stateEl = $("#sessions-cdp-state");
-  const launchBtn = $("#sessions-launch-chrome");
-  const reopenBtn = $("#sessions-reopen-tabs");
-  const refreshBtn = $("#sessions-refresh");
-
-  if (stateEl) {
-    stateEl.textContent = "Chrome: starting…";
-    stateEl.className = "sessions-cdp-state starting";
-  }
-  if (launchBtn) launchBtn.disabled = true;
-  showSessionsProgress("Initializing browser...");
-
-  // Subscribe to live lifecycle log lines so we can update the progress
-  // strip in real time. unsubscribe() is called below once Chrome is up.
-  let unsubscribe = null;
-  if (window.gtss && window.gtss.logs && typeof window.gtss.logs.onLine === "function") {
-    unsubscribe = window.gtss.logs.onLine((entry) => {
-      if (!entry) return;
-      const src = entry.source || "";
-      if (src.startsWith("cdp") || src.startsWith("lifecycle")) {
-        showSessionsProgress(entry.line || "");
-      }
-    });
-  }
-
-  try {
-    const res = await window.gtss.cdp.startStandalone();
-    if (res && res.ok) {
-      if (stateEl) {
-        stateEl.textContent = "Chrome: running (CDP on port 9222)";
-        stateEl.className = "sessions-cdp-state running";
-      }
-      if (reopenBtn) reopenBtn.disabled = false;
-      if (refreshBtn) refreshBtn.disabled = false;
-      if (launchBtn) {
-        launchBtn.textContent = "Restart Chrome";
-        launchBtn.disabled = false;
-      }
-      hideSessionsProgress();
-      // Open login tabs (Google + the socials) so the user has a one-click
-      // path to each sign-in page inside the CDP Chrome.
-      await window.gtss.cdp.openLoginTabs(
-        SESSION_PLATFORMS.map((p) => p.key)
-      );
-      startSessionPolling();
-    } else {
-      const msg = (res && res.error) || "Failed to start Chrome.";
-      if (stateEl) {
-        stateEl.textContent = `Chrome: ${msg}`;
-        stateEl.className = "sessions-cdp-state error";
-      }
-      hideSessionsProgress();
-      if (launchBtn) {
-        launchBtn.textContent = "Launch Chrome";
-        launchBtn.disabled = false;
-      }
-      toast(msg, "error");
-    }
-  } catch (err) {
-    if (stateEl) {
-      stateEl.textContent = `Chrome: ${err.message}`;
-      stateEl.className = "sessions-cdp-state error";
-    }
-    hideSessionsProgress();
-    if (launchBtn) launchBtn.disabled = false;
-    toast(`Failed to start Chrome: ${err.message}`, "error");
-  } finally {
-    if (typeof unsubscribe === "function") {
-      try { unsubscribe(); } catch (_) {}
-    }
-  }
-}
-
-function startSessionPolling() {
-  if (sessionPollTimer) clearInterval(sessionPollTimer);
-  // Poll immediately, then every 3s. The CDP cookie check is cheap (one
-  // WebSocket round-trip to the running Chrome) so this doesn't burden
-  // the system.
-  pollSessionsOnce();
-  sessionPollTimer = setInterval(pollSessionsOnce, 3000);
-}
-
-function stopSessionPolling() {
-  if (sessionPollTimer) {
-    clearInterval(sessionPollTimer);
-    sessionPollTimer = null;
-  }
-}
-
-async function pollSessionsOnce() {
-  try {
-    const res = await window.gtss.cdp.checkSessions();
-    if (!res || !res.ok || !res.sessions) {
-      // CDP query failed (Chrome closed, or websocket hiccup). Don't
-      // reset existing state — just mark as "checking…".
-      return;
-    }
-    // Only update state for platforms we know about. Preserve any
-    // previously-detected login so a transient cookie read failure
-    // doesn't make a green checkmark flicker off.
-    const next = {};
-    for (const p of SESSION_PLATFORMS) {
-      const fresh = res.sessions[p.key];
-      const prev = sessionState[p.key];
-      if (fresh && fresh.loggedIn) {
-        next[p.key] = fresh;
-      } else if (prev && prev.loggedIn) {
-        next[p.key] = prev;
-      } else if (fresh) {
-        next[p.key] = fresh;
-      }
-    }
-    sessionState = next;
-    renderSessionsGrid();
-    updateSessionsContinueButton();
-  } catch (_) {
-    // Silent — polling failures are expected when Chrome is mid-startup
-    // or when the user closes Chrome mid-onboarding.
-  }
-}
-
-$("#sessions-launch-chrome")?.addEventListener("click", async () => {
-  await startCdpForSessions();
-});
-
-$("#sessions-reopen-tabs")?.addEventListener("click", async () => {
-  const btn = $("#sessions-reopen-tabs");
-  if (btn) btn.disabled = true;
-  try {
-    await window.gtss.cdp.openLoginTabs(
-      SESSION_PLATFORMS.map((p) => p.key)
-    );
-    toast("Reopened all login tabs in the Chrome window.", "info");
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-});
-
-$("#sessions-refresh")?.addEventListener("click", async () => {
-  await pollSessionsOnce();
-});
-
-$("#onboard-step3-back").addEventListener("click", () => {
-  stopSessionPolling();
-  showStep(2);
-});
-
-$("#onboard-step3-skip").addEventListener("click", () => {
-  stopSessionPolling();
-  toast(
-    "Skipped platform sign-in. Complete it later in the web app's Settings → Platform Sessions — automation won't work until you do.",
-    "warning",
-    9000,
-  );
-  showStep(4);
-});
-
-$("#onboard-step3-next").addEventListener("click", () => {
-  stopSessionPolling();
-  // If the user signed into some but not all platforms, warn them
-  // (but still allow continuing — they can finish in the web app).
-  const missingRecommended = SESSION_PLATFORMS.filter((p) => !p.required && !(sessionState[p.key] && sessionState[p.key].loggedIn));
-  if (missingRecommended.length > 0) {
-    toast(
-      `Heads up: ${missingRecommended.map((p) => p.label).join(", ")} not signed in. You can complete these later in Settings → Platform Sessions.`,
-      "warning",
-      8000,
-    );
-  }
-  showStep(4);
-});
-
-// ─── Step 4: Finish ──────────────────────────────────────────────────────────
+// ─── Step 3: Finish ──────────────────────────────────────────────────────────
 
 // Live progress checklist for the deferred browser clone + server startup.
 // We listen to lifecycle / cdp log lines and tick each step off as the
@@ -651,6 +310,15 @@ function startFinishProgressLogListener() {
     const src = entry.source || "";
     const text = entry.line;
     if (src.startsWith("lifecycle") || src.startsWith("cdp") || src.startsWith("server")) {
+      // If we attached to an existing Chrome, skip the clone stage entirely.
+      if (/Reusing existing Chrome/i.test(text)) {
+        markFinishStepDone("server");
+        markFinishStepDone("init");
+        markFinishStepDone("clone");
+        markFinishStepDone("endpoint");
+        markFinishStepActive("ready");
+        return;
+      }
       if (/Server starting|Booting the Node\.js server|Server ready/i.test(text)) {
         if (/Server ready/i.test(text)) markFinishStepDone("server");
         else markFinishStepActive("server");
@@ -737,11 +405,6 @@ function toast(message, kind = "info", durationMs = 4000) {
     setTimeout(() => el.remove(), 300);
   }, durationMs);
 }
-
-// Initialize the sessions grid immediately so the user sees the cards
-// (all grey) the moment they navigate to step 3.
-renderSessionsGrid();
-updateSessionsContinueButton();
 
 // Start at step 1.
 showStep(1);

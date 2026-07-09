@@ -31,11 +31,11 @@
  * ─── Deferred profile cloning ─────────────────────────────────────────────
  *
  * The (potentially slow) "clone the user's Chrome profile into the CDP
- * profile" step is NOT performed during the onboarding wizard — the wizard
- * calls `cdpManager.start({ skipProfileCopy: true })` so it stays snappy.
- * The clone happens HERE, inside `startAll()`, the first time the server
- * boots and no usable CDP profile exists yet. Every step of the clone is
- * surfaced via the logStream so the launcher UI can show:
+ * profile" step is NOT performed during onboarding — the wizard no longer
+ * touches Chrome at all. The clone happens HERE, inside `startAll()`, the
+ * first time the server boots and no usable CDP profile exists yet
+ * (and no existing CDP endpoint is alive to attach to). Every step of the
+ * clone is surfaced via the logStream so the launcher UI can show:
  *
  *   "Initializing browser..."
  *   "Cloning browser profile..."
@@ -45,6 +45,15 @@
  *
  * …instead of the app appearing frozen for 10–60 seconds while the copy
  * runs.
+ *
+ * ─── Try-first-then-clone (inviolable) ────────────────────────────────────
+ *
+ * Before spawning or cloning anything, CdpManager.start() probes the
+ * configured CDP port and ADOPTS any Chrome that's already listening
+ * there. So if `./scripts/launch-chrome.sh` is already running, or a
+ * previous desktop session left Chrome up, the launcher reuses that
+ * exact Chrome — no spawn, no clone. The project NEVER runs two CDP
+ * Chromes side-by-side.
  */
 
 const { shell } = require("electron");
@@ -118,6 +127,16 @@ class Lifecycle {
     await new Promise((r) => setTimeout(r, 400));
 
     // ─── 2. Start CDP Chrome (without a URL) ────────────────────────────
+    //
+    // CdpManager.start() first tries to ATTACH to an existing CDP endpoint
+    // on the configured port (the "try first" half of the project's
+    // inviolable pattern). If a Chrome is already up — e.g., the user ran
+    // `./scripts/launch-chrome.sh` first, or a previous desktop session
+    // left Chrome running — we adopt it and skip both the spawn and the
+    // profile clone. Only if no endpoint answers do we spawn a new Chrome
+    // (which in turn calls ensureCdpProfile() — the "clone if missing"
+    // half — to copy the user's Default profile into the CDP profile dir
+    // when no usable profile exists yet).
     let cdpActive = false;
     try {
       if (!this.cdp.isRunning()) {
@@ -129,6 +148,7 @@ class Lifecycle {
         // The (potentially slow) profile clone happens INSIDE cdp.start()
         // via ensureCdpProfile() — every step is broadcast to the logStream
         // so the launcher UI can show "Cloning browser profile..." etc.
+        // If cdp.start() attached to an existing Chrome, no clone runs.
         await this.cdp.start({
           onProgress: (stage, message) => {
             // The CdpManager already appends each message to the logStream,
@@ -138,7 +158,15 @@ class Lifecycle {
             if (stage === "clone") {
               this.log.append("lifecycle", message);
             } else if (stage === "ready") {
-              this.log.append("lifecycle", "Browser ready.");
+              // Distinguish "we attached to an existing Chrome" from
+              // "we spawned a fresh one" so the launcher UI can show the
+              // right messaging. The attach path logs "Reusing existing
+              // Chrome..." which we surface verbatim.
+              if (/Reusing existing Chrome/i.test(message)) {
+                this.log.append("lifecycle", "Reusing existing Chrome — no new browser spawned, no profile clone needed.");
+              } else {
+                this.log.append("lifecycle", "Browser ready.");
+              }
             }
           },
         });

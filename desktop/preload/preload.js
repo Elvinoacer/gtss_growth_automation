@@ -29,11 +29,15 @@ contextBridge.exposeInMainWorld("gtss", {
   cdp: {
     start: () => ipcRenderer.invoke("cdp:start"),
     stop: () => ipcRenderer.invoke("cdp:stop"),
-    // Onboarding-only: launch CDP Chrome WITHOUT the web app URL (the
-    // server isn't up yet) and WITHOUT cloning the user's profile (the
-    // slow clone is deferred to server startup so the wizard stays snappy).
-    // The user signs into each platform inside this Chrome; cookies are
-    // then available to automation once the server boots.
+    // Legacy "just get Chrome up" channel. Originally used by onboarding
+    // step 3 to launch CDP Chrome for in-wizard sign-in, but onboarding
+    // no longer touches Chrome — sign-in now happens via the post-Start
+    // "missing sessions" modal in renderer.js (which uses openUrlInCdp
+    // + checkSessions). Retained for callers that need a "just get Chrome
+    // up" path. Honours the try-first-then-clone pattern: attaches to an
+    // existing CDP endpoint if one is alive; otherwise spawns (without
+    // cloning the user's profile — the slow clone is deferred to
+    // lifecycle.startAll()).
     startStandalone: () => ipcRenderer.invoke("cdp:start-standalone"),
     // Open each platform's login page in the running CDP Chrome.
     openLoginTabs: (platforms) => ipcRenderer.invoke("cdp:open-login-tabs", platforms),

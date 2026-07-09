@@ -3,6 +3,184 @@
 This document summarises the edits made to the project in this pass. The
 `.git` directory is untouched.
 
+## A. CDP Chrome — try-first-then-clone pattern (inviolable, project-wide)
+
+**Problem:** The project's intended Chrome-handling pattern was "try if we
+have one [CDP endpoint / CDP profile]; if not, clone" — but this was only
+partially implemented and inconsistently applied. The desktop launcher's
+`CdpManager.start()` would spawn a new Chrome even when one was already
+alive on the CDP port (e.g., when the user had run
+`./scripts/launch-chrome.sh` first, or a previous desktop session had left
+Chrome running). The bash `launch-chrome.sh` script would likewise spawn
+a second Chrome without checking. And the onboarding wizard was launching
+Chrome during the setup phase — which fails when the user has no Chrome
+profile yet, and causes confusion by asking for platform sign-ins before
+the server is even up.
+
+**Fix — strengthened the pattern across every Chrome entry point:**
+
+### `desktop/main/cdp-manager.js`
+
+1. New `_tryAttachExisting(progress)` method, called at the very start of
+   `start()`. It hits `GET /json/version` on the configured CDP port. If
+   a Chrome answers, we **adopt it**: state flips to `"running"`,
+   `chromePath` is captured from the response, and `start()` returns
+   immediately — no spawn, no profile clone. We do NOT own the child
+   process in this case (so `stop()` won't kill it — that's intentional;
+   the user owns that Chrome).
+
+2. New `_getCdpVersionInfo()` HTTP helper used by `_tryAttachExisting()`.
+
+3. `stop()` updated to handle the attached case: when `this.child` is
+   null but state is `"running"`, we log "Detaching from external Chrome…"
+   and flip state to `"stopped"` — we never kill a Chrome we didn't
+   spawn.
+
+4. File-level comment rewritten to document the inviolable pattern.
+
+### `gtss-growth-engine/scripts/launch-chrome.sh`
+
+1. New `probe_cdp()` shell function — uses `curl` (preferred) with a
+   bash `/dev/tcp` fallback to check whether anything is listening on
+   `$PORT`.
+
+2. If a CDP endpoint is already alive, the script prints a friendly note
+   and exits 0 — no spawn, no clone. This makes `launch-chrome.sh` safe
+   to call when the desktop launcher is already running (or vice versa).
+
+3. The "clone if missing" check now requires BOTH `Default/` dir AND
+   `Default/Cookies` file — previously it only checked the dir, which
+   would short-circuit on an empty `Default/` left over from a crashed
+   mid-copy.
+
+4. Adds a fallback message when no source Chrome profile exists (so the
+   user knows they'll need to log in manually rather than wondering why
+   sessions are blank).
+
+### `desktop/main/lifecycle.js`
+
+1. `startAll()` now surfaces a distinct lifecycle log line for the
+   attach case ("Reusing existing Chrome — no new browser spawned, no
+   profile clone needed.") so the launcher UI's progress checklist can
+   short-circuit the clone stage visually.
+
+2. File-level comment expanded to document the pattern.
+
+## B. Chrome launch removed from onboarding (setup) phase
+
+**Problem:** Onboarding step 3 ("Sign in to your accounts") launched CDP
+Chrome during the **setup** phase and asked the user to sign in to
+Google/Gemini, LinkedIn, Facebook, X, and Instagram. This caused problems
+when the user had no Chrome profile yet (or the profile was locked
+because their real Chrome was open), and it duplicated the
+session-management UX that already lives in the web app's Settings →
+Platform Sessions.
+
+**Fix — moved platform sign-in to the post-Start "missing sessions"
+modal:**
+
+### `desktop/renderer/onboarding.html`
+
+1. Removed step 3 ("Sign in to your accounts") entirely — the
+   `sessions-status-bar`, `sessions-progress` strip, `sessions-grid`,
+   and `sessions-hint` are all gone.
+
+2. Renumbered the Done step from step 4 → step 3. The stepper now shows
+   3 steps (Passphrase → AI Key → Done) instead of 4.
+
+3. The Done step's copy now explains that platform sign-in happens
+   AFTER Finish — the launcher pops a modal automatically when sessions
+   are missing.
+
+### `desktop/renderer/onboarding.js`
+
+1. Removed all session-management logic: `SESSION_PLATFORMS`,
+   `sessionState`, `sessionPollTimer`, `sessionsAutoLaunched`,
+   `renderSessionsGrid()`, `updateSessionsContinueButton()`,
+   `autoStartCdpForSessions()`, `startCdpForSessions()`,
+   `startSessionPolling()`, `stopSessionPolling()`,
+   `pollSessionsOnce()`, the `PROGRESS_STAGES` strip, and all the
+   `sessions-launch-chrome` / `sessions-reopen-tabs` / `sessions-refresh`
+   / `onboard-step3-back` / `onboard-step3-skip` / `onboard-step3-next`
+   handlers.
+
+2. `totalSteps` reduced from 4 → 3.
+
+3. `onboard-step2-next` now goes directly to step 3 (Done) instead of
+   step 3 (Sign in) → step 4 (Done).
+
+4. The finish-progress log listener now recognises the "Reusing existing
+   Chrome" message and short-circuits the clone stage in the progress
+   checklist (so the user doesn't see a stuck "Cloning browser profile…"
+   step when we actually attached).
+
+### `desktop/main/ipc-handlers.js`
+
+1. `cdp:start-standalone` retained for backwards compat but its
+   docstring updated to reflect that onboarding no longer calls it. With
+   the strengthened pattern, it also attaches to an existing CDP
+   endpoint before spawning — so it never creates a second Chrome.
+
+### `desktop/preload/preload.js`
+
+1. `startStandalone` API docstring updated to reflect that onboarding
+   no longer uses it.
+
+## C. Post-Start "missing sessions" modal — auto-pop
+
+**Problem:** The launcher had a passive health-card banner that required
+the user to click "Sign in…" to open the modal. Per project
+requirements, the modal should AUTOMATICALLY pop up after the user clicks
+Start (post-onboarding), once the web app URL has loaded in the CDP
+Chrome, if any of LinkedIn, X, Instagram, Facebook, or Google/Gemini
+sessions are missing.
+
+**Fix — auto-open the modal after Start:**
+
+### `desktop/renderer/renderer.js`
+
+1. The Start button handler now schedules a 6-second post-Start check
+   (gives the server + CDP + web-app-tab time to come up).
+
+2. After the check, if ANY platform in `MODAL_SESSION_PLATFORMS` is
+   missing AND the user hasn't dismissed the modal for this run, the
+   modal is **automatically opened** (instead of just showing the
+   passive health-card banner). A warning toast also fires listing the
+   missing platforms.
+
+3. The background polling (every 10s) continues after the modal is
+   dismissed so the health card stays fresh.
+
+4. Re-running Start cancels any pending auto-modal timer and resets the
+   dismissed flag — so the modal can re-pop if sessions are still
+   missing after the new launch.
+
+### `desktop/renderer/index.html`
+
+1. The modal's HTML comment now documents that it auto-pops after Start.
+
+2. The modal intro text now references "Settings → Platform Sessions"
+   so the user knows where to manage sessions later from the web app.
+
+3. The Gemini note clarified: Gemini will not operate in a copied CDP
+   profile without an active Google login — making the "why" of the
+   Google requirement explicit.
+
+## D. What was NOT changed
+
+- The web app's `/settings → Platform Sessions` page is untouched. It
+  still uses the engine's Playwright-based `authenticatePlatform()` flow
+  for users who prefer to re-authenticate or clear individual platform
+  sessions from inside the web app.
+- The `.git` directory is fully intact and untouched. `git status` on
+  the unpacked project shows the working tree changes against the
+  existing `26f05b0` HEAD, with no rewrite of history.
+- The onboarding-sessions.css stylesheet is retained because the modal
+  in `renderer.js` reuses the same `.session-card` / `.session-logo` /
+  `.session-check` classes.
+
+---
+
 ## 0. Pipeline control buttons — robust & consistent across all pipelines
 
 **Problem:** The 7 pipeline control buttons (Start, Restart, Pause, Stop,

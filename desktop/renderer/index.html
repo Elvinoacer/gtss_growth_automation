@@ -197,11 +197,16 @@
     <div id="toast-container" class="toast-container"></div>
 
     <!-- ───────── Missing sessions modal ─────────
-         Shown when the launcher detects that the current CDP profile is
-         missing one or more required browser sessions (LinkedIn, Facebook,
-         Instagram, Google Gemini). Each platform gets a button that opens
-         the login page IN the already-running CDP Chrome — never spawns a
-         new browser instance. -->
+         Shown — AUTOMATICALLY — when the launcher detects that the current
+         CDP profile is missing one or more browser sessions required for
+         automation: LinkedIn, X, Instagram, Facebook, AND Google/Gemini.
+         The modal auto-pops after the user clicks Start and the web app
+         URL has loaded in the CDP Chrome. Each platform gets an "Open ↗"
+         button that opens its login page IN the already-running CDP
+         Chrome (the same Chrome that handles automation — never a new
+         browser instance). Live polling detects each login as it happens
+         and ticks the green checkmark. This reuses the same UX pattern
+         as the web app's /settings → Platform Sessions. -->
     <div id="sessions-modal-backdrop" class="modal-backdrop hidden" aria-hidden="true">
       <div class="modal sessions-modal" role="dialog" aria-labelledby="sessions-modal-title">
         <div class="modal-head">
@@ -212,7 +217,8 @@
           <p class="modal-intro">
             Some browser sessions required for automation are missing. Click each
             <strong>Open ↗</strong> button to sign in inside the already-running
-            Chrome — your sessions are detected automatically.
+            Chrome — your sessions are detected automatically. This is the same
+            flow as <strong>Settings → Platform Sessions</strong> in the web app.
           </p>
 
           <div id="sessions-modal-status" class="sessions-modal-status">
@@ -225,10 +231,12 @@
           </div>
 
           <div class="sessions-modal-note">
-            <strong>Google Gemini:</strong> there is no dedicated login endpoint.
-            Click <em>Open ↗</em> on the Gemini card to open the Gemini app in the
-            CDP Chrome, then sign in with your personal Google account. The
-            session becomes available automatically once you're signed in.
+            <strong>Google / Gemini:</strong> there is no dedicated login endpoint.
+            Click <em>Open ↗</em> on the Google / Gemini card to open the Gemini
+            app in the CDP Chrome, then sign in with your personal Google
+            account. The session becomes available automatically once you're
+            signed in — Gemini will not operate in a copied CDP profile without
+            an active Google login.
           </div>
         </div>
         <div class="modal-foot">

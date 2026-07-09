@@ -7,20 +7,36 @@
  * copies the user's Default profile on first launch so they stay logged
  * into LinkedIn, X, Facebook, and Instagram.
  *
- * Behaviour:
- *   - On first launch: locate Chrome, copy the Default profile (minus cache
- *     dirs) into <dataRoot>/chrome-cdp-profile, spawn Chrome.
- *   - On subsequent launches: reuse the existing CDP profile.
- *   - If no Chrome is installed: log an error and tell the user to install
- *     Google Chrome (we intentionally do NOT bundle Chrome to keep the
- *     installer small and respect Google's distribution terms).
+ * ─── Try-first-then-clone pattern (inviolable) ─────────────────────────────
+ *
+ * The project NEVER launches a second Chrome when one is already alive on
+ * the CDP port. The same Chrome that `scripts/launch-chrome.sh` launches,
+ * or that the desktop app launched on a previous run, or that the user
+ * launched manually for debugging, is reused across the entire project —
+ * web app, automation layer, and desktop launcher all share ONE Chrome.
+ *
+ *   1. start() first calls _tryAttachExisting() which hits /json/version
+ *      on the configured port. If a Chrome answers, we adopt it: state
+ *      flips to "running" with no spawn, no clone. (We do NOT own the
+ *      child process in this case, so stop() won't kill it — that's
+ *      intentional; the user owns it.)
+ *   2. If no endpoint is reachable, we spawn Chrome ourselves. Before
+ *      spawning, ensureCdpProfile() checks if the CDP profile dir already
+ *      has a populated Default/Cookies. If yes, reuse it (preserves
+ *      sessions from previous launches). If no, clone from the user's
+ *      real Chrome profile. This is the "clone if missing" half.
+ *
+ * Behaviour when no Chrome is installed: log an error and tell the user
+ * to install Google Chrome (we intentionally do NOT bundle Chrome to keep
+ * the installer small and respect Google's distribution terms).
  *
  * Session checking:
  *   - checkSessions() opens a transient CDP WebSocket to the running Chrome
  *     and calls Network.getAllCookies, then reports which platforms have
- *     active login cookies. Used by the onboarding wizard to gate "Continue"
- *     on the user being logged into Google (required for Gemini to work in
- *     a copied profile) plus LinkedIn / Facebook / X.
+ *     active login cookies. Used by the post-Start "missing sessions"
+ *     modal in the launcher to prompt the user to sign in to LinkedIn,
+ *     Facebook, X, Instagram, and Google (Gemini) — logins always happen
+ *     in the SAME Chrome that handles automation, never a new one.
  */
 
 const { spawn } = require("child_process");
@@ -156,6 +172,26 @@ class CdpManager {
   /**
    * Start the CDP Chrome.
    *
+   * ─── Try-first-then-clone pattern (strengthened) ─────────────────────────
+   *
+   * The project's inviolable rule for Chrome: NEVER spawn a second Chrome
+   * when one is already alive on the CDP port. The same Chrome that
+   * `gtss-growth-engine/scripts/launch-chrome.sh` launches (or that the
+   * desktop app launched on a previous run, or that the user launched
+   * manually for debugging) MUST be reused across the entire project.
+   *
+   * Sequence:
+   *   1. If we already spawned this child, throw (caller bug).
+   *   2. Try to ATTACH to an existing CDP endpoint on this.port by hitting
+   *      /json/version. If it answers, mark state=running, set chromePath
+   *      from the response, and short-circuit — no spawn, no clone. This is
+   *      the "try if we have one" half of the pattern.
+   *   3. Otherwise, we need a fresh Chrome. The "clone if missing" half:
+   *      ensureCdpProfile() checks whether the CDP profile dir already has
+   *      a populated Default/Cookies; if so, reuse it; if not, clone from
+   *      the user's real Chrome profile. Then spawn Chrome.
+   *   4. If `openUrl` was provided, Chrome will open it in a new tab.
+   *
    * @param {object} opts
    * @param {string} [opts.openUrl] — URL to open in a new tab when Chrome
    *   launches. This is how the launcher opens the web app INSIDE the CDP
@@ -163,9 +199,10 @@ class CdpManager {
    *   automation share the same Chrome instance.
    * @param {boolean} [opts.skipProfileCopy=false] — when true, do NOT attempt
    *   to clone the user's Chrome profile into the CDP profile dir before
-   *   spawning Chrome. Used by the onboarding wizard so the setup flow stays
-   *   fast and responsive — the (potentially slow) profile copy is deferred
-   *   until the server actually starts and no usable CDP profile exists yet.
+   *   spawning Chrome. Used by callers that know a clone isn't needed yet
+   *   (e.g., emergency "just get Chrome up" paths). The (potentially slow)
+   *   profile copy is normally deferred to server startup so the wizard
+   *   stays snappy.
    * @param {(stage: string, message: string) => void} [opts.onProgress] —
    *   optional callback invoked with human-readable progress messages during
    *   the multi-step startup sequence (locating Chrome, cloning profile,
@@ -185,6 +222,34 @@ class CdpManager {
         if (typeof onProgress === "function") onProgress(stage, message);
       } catch (_) {}
     };
+
+    // ─── 0. Try to attach to an existing CDP endpoint ─────────────────────
+    //
+    // Before we spawn anything, probe the configured port with a CDP
+    // /json/version request. If something answers, it's a Chrome already
+    // running with --remote-debugging-port (most commonly: the desktop app
+    // was relaunched while Chrome from the previous session is still open,
+    // OR a developer ran `./scripts/launch-chrome.sh` before opening the
+    // desktop app, OR the user manually launched Chrome with the right
+    // flags). We adopt that Chrome as our own — no spawn, no clone — so the
+    // project always shares ONE Chrome across the web app, the automation
+    // layer, and the desktop launcher.
+    //
+    // This is the "try first" half of the pattern the project enforces
+    // everywhere Chrome is touched.
+    const attached = await this._tryAttachExisting(progress);
+    if (attached) {
+      // We're done — Chrome is up, the endpoint is alive, and we did NOT
+      // have to spawn or clone anything. openUrl (if provided) is opened in
+      // a new tab of the existing Chrome.
+      if (openUrl) {
+        const ok = await this.openTab(openUrl);
+        if (!ok) {
+          this.logStream.append("cdp:stderr", `Could not open ${openUrl} in the attached Chrome — open it manually.`);
+        }
+      }
+      return;
+    }
 
     // 1. Locate Chrome.
     progress("init", "Initializing browser...");
@@ -289,6 +354,99 @@ class CdpManager {
       this.logStream.append("cdp:stderr", err.message);
       throw err;
     }
+  }
+
+  /**
+   * Internal: probe the configured CDP port and, if a Chrome is already
+   * listening there, adopt it instead of spawning a new one.
+   *
+   * This implements the project's "try first, clone if missing" pattern at
+   * the Chrome-process level: before we ever spawn Chrome or clone a
+   * profile, we ask "is Chrome already up on this port?" If yes, we use
+   * that one — period. The same Chrome that `launch-chrome.sh` started, or
+   * that a previous desktop session left running, or that the user opened
+   * manually with the right flags, becomes our automation target. This is
+   * what keeps the project on ONE Chrome across the web app, the
+   * automation layer, and the desktop launcher.
+   *
+   * Returns true if we successfully attached (state is now "running"),
+   * false if no endpoint was reachable and the caller should proceed to
+   * spawn.
+   *
+   * @private
+   */
+  async _tryAttachExisting(progress) {
+    try {
+      const info = await this._getCdpVersionInfo();
+      if (!info) return false;
+
+      // We got a valid /json/version response — Chrome is already up.
+      // Adopt it. We don't own the child process (so this.child stays
+      // null and stop() won't kill it), but isRunning() returns true and
+      // openTab()/checkSessions()/openLoginTabs() all work against the
+      // existing endpoint.
+      this.chromePath = info.Browser
+        ? String(info.Browser)
+        : this.chromePath;
+      this.state = "running";
+      this.startedAt = new Date().toISOString();
+      this.lastError = null;
+      const banner = info.Browser
+        ? `Reusing existing Chrome on port ${this.port} (${info.Browser}). No new browser spawned.`
+        : `Reusing existing Chrome on port ${this.port}. No new browser spawned.`;
+      this.logStream.append("cdp", banner);
+      if (typeof progress === "function") {
+        progress("ready", banner);
+      }
+      return true;
+    } catch (_) {
+      // Endpoint not reachable — fall through; caller will spawn.
+      return false;
+    }
+  }
+
+  /**
+   * Internal: GET /json/version from the CDP endpoint. Returns the parsed
+   * JSON object (containing Browser, webSocketDebuggerUrl, etc.) or null
+   * on any error. Used by _tryAttachExisting() to detect an already-running
+   * Chrome without spawning one.
+   *
+   * @private
+   */
+  _getCdpVersionInfo() {
+    return new Promise((resolve) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: this.port,
+          path: "/json/version",
+          method: "GET",
+          timeout: 1500,
+        },
+        (res) => {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk) => (body += chunk));
+          res.on("end", () => {
+            if (res.statusCode !== 200 || !body) {
+              resolve(null);
+              return;
+            }
+            try {
+              resolve(JSON.parse(body));
+            } catch (_) {
+              resolve(null);
+            }
+          });
+        },
+      );
+      req.on("error", () => resolve(null));
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(null);
+      });
+      req.end();
+    });
   }
 
   /**
@@ -539,7 +697,19 @@ class CdpManager {
 
 
   async stop(reason = "user") {
+    // If we attached to an externally-launched Chrome (via
+    // _tryAttachExisting), this.child is null but state is "running". We
+    // deliberately do NOT kill that Chrome — the user (or
+    // launch-chrome.sh) owns it. We just flip our state to "stopped" so
+    // the rest of the app knows we no longer have a CDP endpoint to talk
+    // to (until they restart Chrome or restart the launcher).
     if (!this.child) {
+      if (this.state === "running") {
+        this.logStream.append(
+          "cdp",
+          `Detaching from external Chrome (reason: ${reason}). The Chrome window stays open — close it manually if you want to.`,
+        );
+      }
       this.state = "stopped";
       return;
     }
