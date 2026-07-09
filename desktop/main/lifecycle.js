@@ -27,6 +27,24 @@
  *   - BROWSER_MODE=persistent (Playwright launches its own Chromium)
  *   - Open the web app in the user's default browser via shell.openExternal
  *   - Show a warning that automation will use an isolated browser
+ *
+ * ─── Deferred profile cloning ─────────────────────────────────────────────
+ *
+ * The (potentially slow) "clone the user's Chrome profile into the CDP
+ * profile" step is NOT performed during the onboarding wizard — the wizard
+ * calls `cdpManager.start({ skipProfileCopy: true })` so it stays snappy.
+ * The clone happens HERE, inside `startAll()`, the first time the server
+ * boots and no usable CDP profile exists yet. Every step of the clone is
+ * surfaced via the logStream so the launcher UI can show:
+ *
+ *   "Initializing browser..."
+ *   "Cloning browser profile..."
+ *   "Preparing CDP endpoint..."
+ *   "Almost ready..."
+ *   "Server starting..."
+ *
+ * …instead of the app appearing frozen for 10–60 seconds while the copy
+ * runs.
  */
 
 const { shell } = require("electron");
@@ -58,6 +76,8 @@ class Lifecycle {
    *   2. Once the server is ready, start CDP Chrome — but WITHOUT a URL
    *      argument (so Chrome doesn't open a tab too early). After Chrome is
    *      ready, we open the web app URL in a new tab via the CDP HTTP API.
+   *      This is also where the deferred profile clone runs (if needed) —
+   *      the launcher UI shows live "Cloning browser profile..." progress.
    *   3. Write BROWSER_MODE=cdp + CDP_ENDPOINT to .env so the server's
    *      automation layer picks them up on its next browser launch.
    *
@@ -76,6 +96,7 @@ class Lifecycle {
     // so the user saw a blank "This site can't be reached" page on every
     // launch. Now we block until the server's port accepts TCP connections.
     if (!this.server.isRunning()) {
+      this.log.append("lifecycle", "Server starting...");
       this.log.append("lifecycle", "Booting the Node.js server — waiting for the port to open...");
       try {
         await this.server.start({ port });
@@ -100,11 +121,27 @@ class Lifecycle {
     let cdpActive = false;
     try {
       if (!this.cdp.isRunning()) {
-        this.log.append("lifecycle", "Launching Chrome (with CDP enabled)...");
+        this.log.append("lifecycle", "Initializing browser...");
         // NOTE: We deliberately do NOT pass openUrl here. We open the URL
         // AFTER Chrome's CDP endpoint is up so the tab doesn't hit a
         // half-ready server.
-        await this.cdp.start({});
+        //
+        // The (potentially slow) profile clone happens INSIDE cdp.start()
+        // via ensureCdpProfile() — every step is broadcast to the logStream
+        // so the launcher UI can show "Cloning browser profile..." etc.
+        await this.cdp.start({
+          onProgress: (stage, message) => {
+            // The CdpManager already appends each message to the logStream,
+            // but we also surface a high-level lifecycle banner for the
+            // stages the user cares about so the launcher's status hero
+            // can show a friendly progress label.
+            if (stage === "clone") {
+              this.log.append("lifecycle", message);
+            } else if (stage === "ready") {
+              this.log.append("lifecycle", "Browser ready.");
+            }
+          },
+        });
         cdpActive = true;
       } else {
         this.log.append("lifecycle", "CDP Chrome already running — reusing it.");

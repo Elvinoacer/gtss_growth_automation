@@ -7,12 +7,20 @@
  *     Settings → Platform Sessions).
  *   - Added lifecycle:restart (used by the Advanced controls).
  *   - Added open:data-folder-info (read-only, for the About tab).
+ *   - Added gemini:validate-key (live Gemini API key validation during
+ *     onboarding and from Settings).
+ *   - Added cdp:open-url-in-cdp (open an arbitrary URL — e.g. the Gemini
+ *     homepage — inside the already-running CDP Chrome; used by the
+ *     "Sign in to your accounts" modal so login happens in the SAME
+ *     browser instance that handles automation, never a new one).
  *
  * Every user-visible action in the UI maps to exactly one IPC channel here.
  * The preload script re-exposes these as a clean `window.gtss.*` API to the
  * renderer, so the renderer never touches Node directly (sandbox: true,
  * contextIsolation: true).
  */
+
+const { validateGeminiApiKey } = require("./cdp-manager");
 
 function registerIpcHandlers({
   ipcMain,
@@ -110,11 +118,21 @@ function registerIpcHandlers({
   // These channels support the new onboarding step that gates "Continue"
   // on the user being logged into Google (required for Gemini) plus the
   // other social platforms. We expose:
-  //   - cdp:start-standalone: launch CDP Chrome WITHOUT the web app URL
-  //     (the web app isn't up yet during onboarding). Uses the copied
-  //     profile so existing logins carry over.
+  //   - cdp:start-standalone: launch CDP Chrome WITHOUT cloning the user's
+  //     profile (skipProfileCopy: true) and WITHOUT the web app URL (the
+  //     server isn't up yet during onboarding). The user signs in inside
+  //     this fresh Chrome; cookies are stored in the CDP profile and become
+  //     available to automation once the server boots.
+  //     The (potentially slow) profile clone is deferred to lifecycle.startAll()
+  //     which runs after onboarding completes — see lifecycle.js for the
+  //     progress feedback ("Initializing browser...", "Cloning browser
+  //     profile...", etc.) emitted during that deferred clone.
   //   - cdp:open-login-tabs: open each platform's login page in the CDP
   //     Chrome so the user can sign in.
+  //   - cdp:open-url-in-cdp: open an ARBITRARY url (e.g. the Gemini
+  //     homepage) in a new tab inside the already-running CDP Chrome.
+  //     Used by the "Missing sessions" modal in the main launcher window —
+  //     logins always reuse the existing browser, never spawn a new one.
   //   - cdp:check-sessions: poll cookies via CDP and return a map of
   //     platform -> { loggedIn, cookies, label }.
   //   - cdp:state: lightweight poll for the CDP state (used by onboarding
@@ -123,10 +141,24 @@ function registerIpcHandlers({
   ipcMain.handle("cdp:start-standalone", async () => {
     try {
       if (!cdpManager.isRunning()) {
-        // Start CDP Chrome WITHOUT a URL — we just need the browser up so
-        // the user can sign in. openLoginTabs() will open the actual login
-        // pages in new tabs.
-        await cdpManager.start({});
+        // Start CDP Chrome WITHOUT a URL and WITHOUT cloning the user's
+        // profile. We just need a fresh browser up so the user can sign in.
+        // openLoginTabs() will open the actual login pages in new tabs.
+        //
+        // skipProfileCopy: true is the key change that makes the onboarding
+        // wizard fast — the (potentially 10–60s) profile clone no longer
+        // happens here. It's deferred to lifecycle.startAll() which runs
+        // after the user clicks Finish, with live progress feedback in the
+        // launcher UI.
+        await cdpManager.start({
+          skipProfileCopy: true,
+          onProgress: (_stage, message) => {
+            // The CdpManager already appends to logStream, but we also
+            // surface a high-level lifecycle banner so the launcher's Logs
+            // tab shows the onboarding browser startup clearly.
+            logStream.append("lifecycle", message);
+          },
+        });
         // Persist the CDP endpoint into .env so when the server boots
         // later it picks up the same Chrome.
         envBootstrap.upsert("CDP_ENDPOINT", `http://127.0.0.1:${cdpManager.port}`);
@@ -147,6 +179,56 @@ function registerIpcHandlers({
       return { ok: true, ...result };
     } catch (err) {
       return { ok: false, error: err.message };
+    }
+  });
+
+  // Open a single arbitrary URL in the running CDP Chrome. Used by the
+  // "Missing sessions" modal in the main launcher window — each platform
+  // (LinkedIn, Facebook, Instagram, Google Gemini) gets a button that
+  // calls this with the platform's login URL. Always reuses the existing
+  // browser; never spawns a new instance.
+  ipcMain.handle("cdp:open-url-in-cdp", async (_event, url) => {
+    try {
+      if (!url || typeof url !== "string") {
+        return { ok: false, error: "No URL provided." };
+      }
+      // If CDP isn't running, start it (without cloning — the user is
+      // responding to a "missing sessions" prompt, so they're about to
+      // sign in anyway; no point cloning a profile they're going to
+      // overwrite with fresh logins).
+      if (!cdpManager.isRunning()) {
+        await cdpManager.start({
+          skipProfileCopy: true,
+          onProgress: (_stage, message) => logStream.append("lifecycle", message),
+        });
+        envBootstrap.upsert("CDP_ENDPOINT", `http://127.0.0.1:${cdpManager.port}`);
+        envBootstrap.upsert("BROWSER_MODE", "cdp");
+      }
+      const ok = await cdpManager.openTab(url);
+      if (!ok) {
+        return { ok: false, error: "Could not open a new tab in the CDP Chrome." };
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  // ─── Gemini API key validation ─────────────────────────────────────────
+  //
+  // Lightweight validation that an API key is genuinely a Google AI Studio
+  // key. Hits the list-models endpoint (cheap, no quota impact) and treats
+  // 429 (quota exceeded) as VALID — per requirements, we only care whether
+  // the key itself is valid, not whether the user has hit a rate limit.
+  // Returns { ok, valid, reason } so the renderer can show:
+  //   ✅ API key is valid
+  //   ❌ Invalid API key (HTTP 401)
+  ipcMain.handle("gemini:validate-key", async (_event, apiKey) => {
+    try {
+      const result = await validateGeminiApiKey(apiKey);
+      return result;
+    } catch (err) {
+      return { ok: false, valid: false, reason: err.message };
     }
   });
 

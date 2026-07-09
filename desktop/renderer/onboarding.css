@@ -193,6 +193,191 @@
   border-color: var(--accent);
 }
 
+/* ─── Password visibility toggle ────────────────────────────────────────
+   Wraps a password input + a Show/Hide button so they sit side-by-side.
+   The button toggles the input's `type` between "password" and "text". */
+.input-with-toggle,
+.input-with-validate {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.input-with-toggle input,
+.input-with-validate input {
+  flex: 1;
+  min-width: 0;
+}
+
+.toggle-visibility {
+  flex-shrink: 0;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  min-width: 64px;
+}
+
+.toggle-visibility:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.toggle-visibility .eye-hide { display: none; }
+.toggle-visibility.is-visible .eye-show { display: none; }
+.toggle-visibility.is-visible .eye-hide { display: inline; }
+
+/* ─── Passphrase match indicator ─────────────────────────────────────────
+   Real-time badge that appears below the confirm field while the user
+   types. Shows ✅ match / ❌ mismatch the moment both fields have content. */
+.match-indicator,
+.key-validation,
+.passphrase-strength {
+  font-size: 12px;
+  min-height: 16px;
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.match-indicator:empty,
+.key-validation:empty,
+.passphrase-strength:empty {
+  display: none;
+}
+
+.match-indicator.match {
+  color: var(--success);
+}
+
+.match-indicator.mismatch {
+  color: var(--danger);
+}
+
+.match-indicator.checking,
+.key-validation.checking,
+.passphrase-strength.checking {
+  color: var(--accent);
+}
+
+.key-validation.valid {
+  color: var(--success);
+}
+
+.key-validation.invalid {
+  color: var(--danger);
+}
+
+/* ─── Live progress strip (Chrome startup) ──────────────────────────────
+   Animated bar + text line shown while Chrome is starting up so the user
+   sees continuous feedback instead of a frozen "Chrome: starting…" label. */
+.sessions-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+
+.sessions-progress[hidden] { display: none; }
+
+.sessions-progress-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-elev-2);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.sessions-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 30%;
+  background: linear-gradient(90deg, var(--accent), #8b5cf6);
+  border-radius: 3px;
+  animation: progressShimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes progressShimmer {
+  0% { left: -30%; width: 30%; }
+  50% { left: 35%; width: 50%; }
+  100% { left: 100%; width: 30%; }
+}
+
+.sessions-progress-text {
+  color: var(--text-dim);
+  min-width: 200px;
+}
+
+/* ─── Finish-step progress checklist ────────────────────────────────────
+   Shown when the user clicks "Finish & start" — walks them through the
+   deferred browser clone + server startup so they know exactly what's
+   happening and the app doesn't appear frozen. */
+.finish-progress {
+  margin: 16px 0;
+  padding: 14px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.finish-progress[hidden] { display: none; }
+
+.finish-progress-step {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-left: 22px;
+  position: relative;
+  line-height: 1.6;
+}
+
+.finish-progress-step::before {
+  content: "○";
+  position: absolute;
+  left: 0;
+  color: var(--text-muted);
+}
+
+.finish-progress-step.active {
+  color: var(--accent);
+}
+
+.finish-progress-step.active::before {
+  content: "●";
+  color: var(--accent);
+  animation: pulse 1.1s ease-in-out infinite;
+}
+
+.finish-progress-step.done {
+  color: var(--success);
+}
+
+.finish-progress-step.done::before {
+  content: "✓";
+  color: var(--success);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
 .field-inline {
   display: flex;
   align-items: center;

@@ -12,6 +12,277 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
+// ─── Sessions health (missing-session detection) ────────────────────────────
+//
+// After the server + CDP Chrome come up, we poll the CDP cookies to see which
+// platforms (LinkedIn, Facebook, Instagram, Google Gemini) the user is
+// signed into. If any required sessions are missing, we surface a banner in
+// the Control tab; clicking "Sign in…" opens a modal that lets the user
+// open each platform's login page IN the already-running CDP Chrome — never
+// a new browser instance, never a new endpoint.
+
+const MODAL_SESSION_PLATFORMS = [
+  {
+    key: "google",
+    label: "Google / Gemini",
+    required: true,
+    icon: "G",
+    loginUrl: "https://gemini.google.com/",
+    loginHint: "Open Gemini and sign in with your Google account",
+  },
+  {
+    key: "linkedin",
+    label: "LinkedIn",
+    required: true,
+    icon: "in",
+    loginUrl: "https://www.linkedin.com/",
+    loginHint: "Open LinkedIn and sign in",
+  },
+  {
+    key: "facebook",
+    label: "Facebook",
+    required: false,
+    icon: "f",
+    loginUrl: "https://www.facebook.com/",
+    loginHint: "Open Facebook and sign in",
+  },
+  {
+    key: "x",
+    label: "X (Twitter)",
+    required: false,
+    icon: "𝕏",
+    loginUrl: "https://x.com/",
+    loginHint: "Open X and sign in",
+  },
+  {
+    key: "instagram",
+    label: "Instagram",
+    required: false,
+    icon: "IG",
+    loginUrl: "https://www.instagram.com/",
+    loginHint: "Open Instagram and sign in",
+  },
+];
+
+let modalSessionState = {};
+let modalPollTimer = null;
+let modalDismissedForThisRun = false;
+
+function renderSessionsModalGrid() {
+  const grid = $("#sessions-modal-grid");
+  if (!grid) return;
+  grid.innerHTML = MODAL_SESSION_PLATFORMS.map((p) => {
+    const state = modalSessionState[p.key] || { loggedIn: false };
+    const loggedIn = Boolean(state.loggedIn);
+    const cardCls = [
+      "session-card",
+      p.required ? "required" : "",
+      loggedIn ? "logged-in" : "",
+    ].filter(Boolean).join(" ");
+    const stateText = loggedIn
+      ? "Logged in"
+      : "Not signed in yet";
+    const stateCls = loggedIn ? "logged-in" : "not-logged-in";
+    const check = loggedIn ? "✓" : "○";
+    return `
+      <div class="${cardCls}" data-session-key="${p.key}">
+        <div class="session-logo ${p.key}">${p.icon}</div>
+        <div class="session-info">
+          <div class="session-name">
+            ${p.label}
+            ${p.required ? '<span class="session-required-pill">Required</span>' : ""}
+          </div>
+          <div class="session-state ${stateCls}">${stateText}</div>
+        </div>
+        <button class="btn btn-mini btn-secondary session-open-btn"
+                data-platform-key="${p.key}"
+                title="${p.loginHint}">
+          Open ↗
+        </button>
+        <div class="session-check">${check}</div>
+      </div>
+    `;
+  }).join("");
+
+  // Wire up Open buttons — each opens the platform's login URL inside the
+  // running CDP Chrome. Never spawns a new browser instance.
+  grid.querySelectorAll(".session-open-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const key = btn.dataset.platformKey;
+      const platform = MODAL_SESSION_PLATFORMS.find((p) => p.key === key);
+      if (!platform || !platform.loginUrl) return;
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Opening...";
+      try {
+        const res = await window.gtss.cdp.openUrlInCdp(platform.loginUrl);
+        if (res.ok) {
+          toast(`${platform.label} opened in the CDP Chrome — sign in there.`, "info");
+          // Kick off an immediate poll so the user sees the green checkmark
+          // appear as soon as they sign in.
+          pollModalSessionsOnce();
+        } else {
+          toast(`Could not open ${platform.label}: ${res.error || "unknown error"}`, "error");
+        }
+      } finally {
+        btn.textContent = original;
+        const state = modalSessionState[key];
+        if (!state || !state.loggedIn) btn.disabled = false;
+      }
+    });
+  });
+}
+
+function updateSessionsModalDoneButton() {
+  const btn = $("#sessions-modal-done");
+  if (!btn) return;
+  // "All set" is enabled only once every REQUIRED platform is logged in.
+  // (Recommended ones can be skipped.)
+  const requiredMissing = MODAL_SESSION_PLATFORMS.filter(
+    (p) => p.required && !(modalSessionState[p.key] && modalSessionState[p.key].loggedIn),
+  );
+  btn.disabled = requiredMissing.length > 0;
+  if (requiredMissing.length === 0) {
+    btn.title = "All required sessions detected";
+  } else {
+    btn.title = `Still missing: ${requiredMissing.map((p) => p.label).join(", ")}`;
+  }
+}
+
+function updateSessionsHealthCard() {
+  const card = $("#sessions-health");
+  if (!card) return;
+  if (modalDismissedForThisRun) {
+    card.classList.add("hidden");
+    return;
+  }
+  const missing = MODAL_SESSION_PLATFORMS.filter(
+    (p) => !(modalSessionState[p.key] && modalSessionState[p.key].loggedIn),
+  );
+  if (missing.length === 0) {
+    card.classList.add("ok");
+    card.classList.remove("hidden");
+    $("#sessions-health-icon").textContent = "✓";
+    $("#sessions-health-title").textContent = "All sessions detected";
+    $("#sessions-health-meta").textContent = "LinkedIn, Facebook, Instagram, and Google Gemini are signed in.";
+    $("#sessions-health-open").textContent = "View";
+  } else {
+    card.classList.remove("ok");
+    card.classList.remove("hidden");
+    $("#sessions-health-icon").textContent = "!";
+    $("#sessions-health-title").textContent = "Missing browser sessions";
+    const requiredMissing = missing.filter((p) => p.required);
+    const label = requiredMissing.length > 0 ? requiredMissing : missing;
+    $("#sessions-health-meta").textContent =
+      `Sign in to: ${label.map((p) => p.label).join(", ")}. Click to open the login modal.`;
+    $("#sessions-health-open").textContent = "Sign in…";
+  }
+}
+
+async function pollModalSessionsOnce() {
+  try {
+    const res = await window.gtss.cdp.checkSessions();
+    if (!res || !res.ok || !res.sessions) return;
+    // Preserve previously-detected logins (avoid flicker on transient failures).
+    const next = {};
+    for (const p of MODAL_SESSION_PLATFORMS) {
+      const fresh = res.sessions[p.key];
+      const prev = modalSessionState[p.key];
+      if (fresh && fresh.loggedIn) next[p.key] = fresh;
+      else if (prev && prev.loggedIn) next[p.key] = prev;
+      else if (fresh) next[p.key] = fresh;
+    }
+    modalSessionState = next;
+    renderSessionsModalGrid();
+    updateSessionsModalDoneButton();
+    updateSessionsHealthCard();
+  } catch (_) {
+    // Silent — polling failures are expected.
+  }
+}
+
+function startModalSessionPolling() {
+  if (modalPollTimer) clearInterval(modalPollTimer);
+  pollModalSessionsOnce();
+  modalPollTimer = setInterval(pollModalSessionsOnce, 4000);
+}
+
+function stopModalSessionPolling() {
+  if (modalPollTimer) {
+    clearInterval(modalPollTimer);
+    modalPollTimer = null;
+  }
+}
+
+function openSessionsModal() {
+  $("#sessions-modal-backdrop").classList.remove("hidden");
+  $("#sessions-modal-backdrop").setAttribute("aria-hidden", "false");
+  // If CDP isn't running yet, prompt the user to start the app first.
+  const cdpStateEl = $("#sessions-modal-cdp-state");
+  if (cdpStateEl) {
+    cdpStateEl.textContent = "Chrome: checking...";
+  }
+  renderSessionsModalGrid();
+  updateSessionsModalDoneButton();
+  // Run an immediate check + start polling while the modal is open.
+  pollModalSessionsOnce();
+  startModalSessionPolling();
+  // Also poll the CDP running state.
+  window.gtss.cdp.state().then((s) => {
+    if (cdpStateEl) {
+      cdpStateEl.textContent = s && s.state === "running"
+        ? `Chrome: running (port ${s.port})`
+        : "Chrome: not running — click Start on the Control tab first.";
+    }
+  }).catch(() => {});
+}
+
+function closeSessionsModal() {
+  $("#sessions-modal-backdrop").classList.add("hidden");
+  $("#sessions-modal-backdrop").setAttribute("aria-hidden", "true");
+  // Keep polling for a few more seconds so the health card stays fresh
+  // after the user dismisses the modal — they may have just signed in and
+  // we want the card to update. Stop after 30s to avoid leaking a timer.
+  setTimeout(stopModalSessionPolling, 30000);
+}
+
+$("#sessions-health-open")?.addEventListener("click", openSessionsModal);
+$("#sessions-modal-close")?.addEventListener("click", () => {
+  modalDismissedForThisRun = true;
+  updateSessionsHealthCard();
+  closeSessionsModal();
+});
+$("#sessions-modal-dismiss")?.addEventListener("click", () => {
+  modalDismissedForThisRun = true;
+  updateSessionsHealthCard();
+  closeSessionsModal();
+});
+$("#sessions-modal-done")?.addEventListener("click", () => {
+  closeSessionsModal();
+  toast("Sessions look good. You can re-open this any time from the Control tab.", "success");
+});
+$("#sessions-modal-refresh")?.addEventListener("click", pollModalSessionsOnce);
+
+// When the Start button finishes launching the server + CDP Chrome, kick
+// off session polling so the health card populates as soon as logins are
+// detected. We hook the existing Start handler by wrapping it.
+const _originalStartHandler = $("#start-btn").onclick;
+$("#start-btn").addEventListener("click", () => {
+  // Reset the "dismissed" flag on a fresh Start so the banner can reappear
+  // if sessions are still missing after the new launch.
+  modalDismissedForThisRun = false;
+  // Give the server + CDP ~5s to come up before we start polling.
+  setTimeout(() => {
+    pollModalSessionsOnce();
+    // Start a slow background poll (every 10s) that keeps the health card
+    // up to date while the user is using the app, even after the modal is
+    // closed. The polling is cheap (one CDP WebSocket round-trip).
+    if (!modalPollTimer) {
+      modalPollTimer = setInterval(pollModalSessionsOnce, 10000);
+    }
+  }, 5000);
+});
+
 // ─── Tabs ────────────────────────────────────────────────────────────────────
 
 $$(".tab").forEach((btn) => {

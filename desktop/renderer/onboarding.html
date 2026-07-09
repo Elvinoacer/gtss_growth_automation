@@ -44,11 +44,25 @@
         </p>
         <label class="field">
           <span>Passphrase</span>
-          <input type="password" id="onboard-passphrase" placeholder="At least 8 characters" autocomplete="new-password" />
+          <div class="input-with-toggle">
+            <input type="password" id="onboard-passphrase" placeholder="At least 8 characters" autocomplete="new-password" />
+            <button type="button" class="toggle-visibility" data-target="onboard-passphrase" aria-label="Show passphrase">
+              <span class="eye-show">Show</span>
+              <span class="eye-hide">Hide</span>
+            </button>
+          </div>
+          <div class="passphrase-strength" id="passphrase-strength" aria-live="polite"></div>
         </label>
         <label class="field">
           <span>Confirm passphrase</span>
-          <input type="password" id="onboard-passphrase2" placeholder="Re-enter your passphrase" autocomplete="new-password" />
+          <div class="input-with-toggle">
+            <input type="password" id="onboard-passphrase2" placeholder="Re-enter your passphrase" autocomplete="new-password" />
+            <button type="button" class="toggle-visibility" data-target="onboard-passphrase2" aria-label="Show confirmation passphrase">
+              <span class="eye-show">Show</span>
+              <span class="eye-hide">Hide</span>
+            </button>
+          </div>
+          <div class="match-indicator" id="passphrase-match" aria-live="polite"></div>
         </label>
         <div class="step-actions">
           <button class="btn btn-primary" id="onboard-step1-next">Continue →</button>
@@ -71,7 +85,11 @@
         </ol>
         <label class="field">
           <span>Gemini API key</span>
-          <input type="password" id="onboard-gemini-key" placeholder="AIza..." />
+          <div class="input-with-validate">
+            <input type="password" id="onboard-gemini-key" placeholder="AIza..." autocomplete="off" />
+            <button type="button" id="onboard-validate-key" class="btn btn-secondary btn-mini" disabled>Validate</button>
+          </div>
+          <div class="key-validation" id="gemini-key-validation" aria-live="polite"></div>
         </label>
         <label class="field-inline">
           <input type="checkbox" id="onboard-skip-gemini" />
@@ -87,7 +105,7 @@
       <section class="step-panel" id="step-3">
         <h2>Sign in to your accounts</h2>
         <p>
-          We'll launch Chrome (the same one automation will use) with your existing profile. Sign
+          We'll launch Chrome (the same one automation will use) with a fresh profile. Sign
           in to <strong>Google / Gemini</strong> (required — Gemini won't trust a copied profile
           without an active Google login) and the social platforms inside that Chrome window. We
           automatically detect logins as you complete them.
@@ -98,6 +116,12 @@
           <button type="button" id="sessions-launch-chrome" class="btn btn-primary btn-mini">Launch Chrome</button>
           <button type="button" id="sessions-reopen-tabs" class="btn btn-secondary btn-mini" disabled>Reopen login tabs</button>
           <button type="button" id="sessions-refresh" class="btn btn-secondary btn-mini" disabled>Refresh</button>
+        </div>
+
+        <!-- Live progress strip for Chrome startup -->
+        <div id="sessions-progress" class="sessions-progress" hidden>
+          <div class="sessions-progress-bar"><div class="sessions-progress-fill"></div></div>
+          <div class="sessions-progress-text" id="sessions-progress-text">Starting...</div>
         </div>
 
         <div id="sessions-grid" class="sessions-grid">
@@ -128,6 +152,14 @@
           <li>Connect your social platforms (LinkedIn, X, Facebook, Instagram) in Settings → Platform Sessions</li>
           <li>Start discovering and qualifying leads — automation runs in the same Chrome</li>
         </ul>
+        <div id="finish-progress" class="finish-progress" hidden>
+          <div class="finish-progress-step" data-stage="server">Server starting...</div>
+          <div class="finish-progress-step" data-stage="init">Initializing browser...</div>
+          <div class="finish-progress-step" data-stage="clone">Cloning browser profile...</div>
+          <div class="finish-progress-step" data-stage="endpoint">Preparing CDP endpoint...</div>
+          <div class="finish-progress-step" data-stage="almost-ready">Almost ready...</div>
+          <div class="finish-progress-step" data-stage="ready">Ready.</div>
+        </div>
         <div class="step-actions">
           <button class="btn btn-primary btn-big" id="onboard-finish">Finish &amp; start →</button>
         </div>

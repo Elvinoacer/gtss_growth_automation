@@ -77,8 +77,14 @@ const SESSION_COOKIE_SIGNATURES = {
 // plain homepage for each platform so that if the user is already logged in
 // (session copied from their real profile), they see their feed/homepage —
 // and if not, the page itself shows a login form.
+//
+// Gemini is special: there is no dedicated login endpoint. Users simply
+// navigate to https://gemini.google.com/ and sign in with their Google
+// account from inside the CDP Chrome. The session then becomes available
+// to the automation layer automatically.
 const PLATFORM_LOGIN_URLS = {
   google: "https://gemini.google.com/",
+  gemini: "https://gemini.google.com/",
   linkedin: "https://www.linkedin.com/",
   facebook: "https://www.facebook.com/",
   x: "https://x.com/",
@@ -155,15 +161,33 @@ class CdpManager {
    *   launches. This is how the launcher opens the web app INSIDE the CDP
    *   Chrome instead of the user's default browser — so the web app and the
    *   automation share the same Chrome instance.
+   * @param {boolean} [opts.skipProfileCopy=false] — when true, do NOT attempt
+   *   to clone the user's Chrome profile into the CDP profile dir before
+   *   spawning Chrome. Used by the onboarding wizard so the setup flow stays
+   *   fast and responsive — the (potentially slow) profile copy is deferred
+   *   until the server actually starts and no usable CDP profile exists yet.
+   * @param {(stage: string, message: string) => void} [opts.onProgress] —
+   *   optional callback invoked with human-readable progress messages during
+   *   the multi-step startup sequence (locating Chrome, cloning profile,
+   *   preparing endpoint, waiting for port). Every message is ALSO pushed
+   *   into the logStream so the launcher's Logs tab surfaces the same info.
    */
-  async start({ openUrl } = {}) {
+  async start({ openUrl, skipProfileCopy = false, onProgress } = {}) {
     if (this.child) {
       throw new Error(`CDP Chrome already running (pid ${this.child.pid})`);
     }
     this.state = "starting";
     this.lastError = null;
 
+    const progress = (stage, message) => {
+      try {
+        this.logStream.append("cdp", message);
+        if (typeof onProgress === "function") onProgress(stage, message);
+      } catch (_) {}
+    };
+
     // 1. Locate Chrome.
+    progress("init", "Initializing browser...");
     this.chromePath = locateChrome();
     if (!this.chromePath) {
       this.state = "crashed";
@@ -172,12 +196,24 @@ class CdpManager {
       this.logStream.append("cdp:stderr", this.lastError);
       throw new Error(this.lastError);
     }
-    this.logStream.append("cdp", `Using Chrome at ${this.chromePath}`);
+    progress("init", `Using Chrome at ${this.chromePath}`);
 
     // 2. Ensure the CDP profile dir exists. First-time: copy from user's profile.
-    await this.ensureCdpProfile();
+    //    Skipped entirely during onboarding setup so the wizard stays snappy —
+    //    the (potentially slow) profile clone is deferred to server startup.
+    if (skipProfileCopy) {
+      progress("init", "Launching browser without cloning profile (setup mode)...");
+      try {
+        fs.mkdirSync(this.cdpProfileDir, { recursive: true });
+      } catch (err) {
+        this.logStream.append("cdp:stderr", `Could not create CDP profile dir: ${err.message}`);
+      }
+    } else {
+      await this.ensureCdpProfile({ onProgress: progress });
+    }
 
     // 3. Spawn Chrome with remote debugging.
+    progress("endpoint", "Preparing CDP endpoint...");
     const args = [
       `--remote-debugging-port=${this.port}`,
       `--user-data-dir=${this.cdpProfileDir}`,
@@ -242,10 +278,11 @@ class CdpManager {
 
     // 4. Wait for the CDP port to start accepting connections.
     try {
+      progress("almost-ready", "Almost ready...");
       await this.waitForPort(this.port, 15000);
       this.state = "running";
       this.startedAt = new Date().toISOString();
-      this.logStream.append("cdp", `CDP ready at http://127.0.0.1:${this.port}`);
+      progress("ready", `CDP ready at http://127.0.0.1:${this.port}`);
     } catch (err) {
       this.state = "crashed";
       this.lastError = err.message;
@@ -548,7 +585,16 @@ class CdpManager {
 
   // ─── Profile management ──────────────────────────────────────────────────
 
-  async ensureCdpProfile() {
+  async ensureCdpProfile({ onProgress } = {}) {
+    // NOTE: we do NOT call this.logStream.append() here — the caller (start())
+    // already wraps onProgress in a function that logs to the logStream.
+    // Logging here too would double-emit every progress message.
+    const progress = (stage, message) => {
+      try {
+        if (typeof onProgress === "function") onProgress(stage, message);
+      } catch (_) {}
+    };
+
     // ─── Harden the "already initialized" check ───────────────────────────
     // Previously we only checked `fs.existsSync(<cdpProfileDir>/Default)`.
     // That check passes for an EMPTY Default dir — which is exactly what
@@ -573,6 +619,7 @@ class CdpManager {
       (fs.existsSync(cookiesFile) || fs.existsSync(loginDataFile));
     if (profileLooksPopulated) {
       // Profile already initialized on a previous launch.
+      progress("init", "CDP profile already initialized — reusing existing sessions.");
       return;
     }
 
@@ -580,10 +627,7 @@ class CdpManager {
     // below starts clean. Otherwise copyDirSelective would skip the mkdir
     // but still try to copy files into a half-populated dir.
     if (fs.existsSync(defaultProfile) && !profileLooksPopulated) {
-      this.logStream.append(
-        "cdp",
-        `Existing CDP profile at ${defaultProfile} looks empty (no Cookies/Login Data). Re-copying from your Chrome profile to restore sessions.`,
-      );
+      progress("clone", "Existing CDP profile looks empty — re-cloning from your Chrome profile to restore sessions.");
       try {
         fs.rmSync(defaultProfile, { recursive: true, force: true });
       } catch (err) {
@@ -593,21 +637,22 @@ class CdpManager {
 
     const source = locateUserChromeProfile();
     if (!source || !fs.existsSync(source)) {
-      this.logStream.append(
-        "cdp",
-        "No existing Chrome profile found — starting with a fresh profile. You'll need to log into LinkedIn/X/Facebook/Instagram manually.",
-      );
+      progress("init", "No existing Chrome profile found — starting with a fresh profile. You'll need to log into LinkedIn/X/Facebook/Instagram manually.");
       fs.mkdirSync(this.cdpProfileDir, { recursive: true });
       return;
     }
 
-    this.logStream.append("cdp", `Copying your Chrome profile from ${source} (first-time setup)...`);
+    progress("clone", "Cloning browser profile from your Chrome — this may take a moment...");
+    progress("clone", `Source: ${source}`);
     fs.mkdirSync(this.cdpProfileDir, { recursive: true });
 
     // Copy the Default profile dir.
     const sourceDefault = path.join(source, "Default");
     if (fs.existsSync(sourceDefault)) {
-      copyDirSelective(sourceDefault, defaultProfile, PROFILE_STRIP_DIRS);
+      progress("clone", "Copying Default profile (cookies, logins, preferences)...");
+      copyDirSelective(sourceDefault, defaultProfile, PROFILE_STRIP_DIRS, {
+        onProgress: (msg) => progress("clone", msg),
+      });
     } else {
       // Some Chrome installs use "Profile 1", "Profile 2", etc. instead of
       // "Default". As a fallback, copy the first "Profile *" dir we find.
@@ -616,11 +661,10 @@ class CdpManager {
         .map((e) => e.name);
       if (profileDirs.length > 0) {
         const sourceProfile = path.join(source, profileDirs[0]);
-        this.logStream.append(
-          "cdp",
-          `Default profile not found; copying ${profileDirs[0]} instead.`,
-        );
-        copyDirSelective(sourceProfile, defaultProfile, PROFILE_STRIP_DIRS);
+        progress("clone", `Default profile not found; copying ${profileDirs[0]} instead.`);
+        copyDirSelective(sourceProfile, defaultProfile, PROFILE_STRIP_DIRS, {
+          onProgress: (msg) => progress("clone", msg),
+        });
       }
     }
     // Copy "Local State" — needed for encrypted cookie decryption.
@@ -639,7 +683,7 @@ class CdpManager {
         "Profile copy did not produce a Cookies file. If Chrome is currently running, close it and click Restart Chrome so the profile (with your logins) can be copied cleanly.",
       );
     } else {
-      this.logStream.append("cdp", "Profile copy complete. Your existing logins are preserved.");
+      progress("clone", "Profile copy complete. Your existing logins are preserved.");
     }
   }
 
@@ -789,7 +833,20 @@ function profileHasCookies(userdataDir) {
 
 // Recursively copy a directory but skip the named subdirs (relative to the
 // source root). Used to strip Cache / Code Cache / etc.
-function copyDirSelective(src, dest, stripDirs) {
+//
+// `opts.onProgress` (optional) is invoked with a short human-readable message
+// every ~200 files copied so the UI can show "Copying profile... 800 files"
+// style progress during the (potentially slow) first-time clone.
+function copyDirSelective(src, dest, stripDirs, opts = {}) {
+  const onProgress = typeof opts.onProgress === "function" ? opts.onProgress : null;
+  const state = { files: 0, dirs: 0, lastReportAt: Date.now() };
+  _copyDirInner(src, dest, stripDirs, state, onProgress);
+  if (onProgress && state.files > 0) {
+    onProgress(`Profile copy finished — ${state.files} files in ${state.dirs} directories.`);
+  }
+}
+
+function _copyDirInner(src, dest, stripDirs, state, onProgress) {
   fs.mkdirSync(dest, { recursive: true });
   const entries = fs.readdirSync(src, { withFileTypes: true });
   for (const entry of entries) {
@@ -805,12 +862,19 @@ function copyDirSelective(src, dest, stripDirs) {
         continue;
       }
       if (entry.isDirectory()) {
-        copyDirSelective(srcPath, destPath, stripDirs);
+        state.dirs += 1;
+        _copyDirInner(srcPath, destPath, stripDirs, state, onProgress);
       } else if (entry.isFile()) {
         // Skip files > 50MB (probably media caches).
         const stat = fs.statSync(srcPath);
         if (stat.size > 50 * 1024 * 1024) continue;
         fs.copyFileSync(srcPath, destPath);
+        state.files += 1;
+        // Report progress at most every ~250ms so we don't flood the log.
+        if (onProgress && Date.now() - state.lastReportAt > 250) {
+          state.lastReportAt = Date.now();
+          onProgress(`Copying profile... ${state.files} files copied`);
+        }
       }
     } catch (err) {
       // Skip files we can't read (locked, permission-denied).
@@ -818,4 +882,96 @@ function copyDirSelective(src, dest, stripDirs) {
   }
 }
 
-module.exports = { CdpManager };
+module.exports = { CdpManager, validateGeminiApiKey };
+
+// ─── Gemini API key validation ─────────────────────────────────────────────
+//
+// Lightweight validation that an API key is genuinely a Google AI Studio key
+// (not just a string starting with "AIza"). We hit the list-models endpoint
+// which is:
+//   - cheap (returns a small JSON list),
+//   - doesn't consume quota,
+//   - returns 400 for malformed keys, 401/403 for invalid keys, 200 for valid.
+//
+// We treat 429 (quota exceeded) as VALID — the key itself is fine, the user
+// just hit their rate limit. We treat network errors as "unknown" rather than
+// "invalid" so a flaky connection doesn't falsely reject a good key.
+//
+// This is invoked from the renderer during onboarding (and from the Settings
+// page later) so the user gets immediate ✅/❌ feedback rather than having
+// to start the server and trigger a real Gemini call to find out.
+async function validateGeminiApiKey(apiKey) {
+  if (!apiKey || typeof apiKey !== "string") {
+    return { ok: false, valid: false, reason: "API key is empty." };
+  }
+  const key = apiKey.trim();
+  if (!key) {
+    return { ok: false, valid: false, reason: "API key is empty." };
+  }
+  // Quick sanity check — every real AI Studio key starts with "AIza".
+  if (!key.startsWith("AIza")) {
+    return {
+      ok: true,
+      valid: false,
+      reason: "That doesn't look like a Gemini API key (should start with 'AIza').",
+    };
+  }
+  if (key.length < 30) {
+    return {
+      ok: true,
+      valid: false,
+      reason: "API key is too short — Gemini keys are usually ~39 characters.",
+    };
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+
+    if (res.status === 200) {
+      return { ok: true, valid: true, reason: "API key is valid." };
+    }
+    // 429 = quota exceeded. The key itself is valid; the user just hit a
+    // rate limit. Per requirements, we treat this as VALID.
+    if (res.status === 429) {
+      return {
+        ok: true,
+        valid: true,
+        reason: "API key is valid (quota currently exceeded — ignored per validation policy).",
+      };
+    }
+    if (res.status === 400) {
+      return { ok: true, valid: false, reason: "Google rejected the key as malformed." };
+    }
+    if (res.status === 401 || res.status === 403) {
+      let bodyText = "";
+      try {
+        bodyText = await res.text();
+      } catch (_) {}
+      const snippet = bodyText ? ` — ${bodyText.slice(0, 200)}` : "";
+      return {
+        ok: true,
+        valid: false,
+        reason: `Invalid API key (HTTP ${res.status})${snippet}`,
+      };
+    }
+    return {
+      ok: true,
+      valid: false,
+      reason: `Unexpected response from Google (HTTP ${res.status}).`,
+    };
+  } catch (err) {
+    clearTimeout(timer);
+    const isAbort = err && (err.name === "AbortError" || err.code === "ABORT_ERR");
+    return {
+      ok: false,
+      valid: false,
+      reason: isAbort
+        ? "Validation timed out — check your internet connection and try again."
+        : `Could not reach Google to validate the key: ${err.message || err}`,
+    };
+  }
+}

@@ -79,6 +79,16 @@
           AI, outreach, scheduling) live inside the web app.
         </p>
 
+        <!-- Sessions health indicator — surfaces missing platform logins. -->
+        <div id="sessions-health" class="sessions-health hidden">
+          <div class="sessions-health-icon" id="sessions-health-icon">!</div>
+          <div class="sessions-health-text">
+            <div class="sessions-health-title" id="sessions-health-title">Missing browser sessions</div>
+            <div class="sessions-health-meta" id="sessions-health-meta">Some platforms need sign-in.</div>
+          </div>
+          <button id="sessions-health-open" class="btn btn-secondary btn-mini">Sign in…</button>
+        </div>
+
         <!-- Advanced controls (collapsed by default) -->
         <details class="advanced">
           <summary>Advanced controls</summary>
@@ -185,6 +195,48 @@
 
     <!-- Toast container for transient notifications -->
     <div id="toast-container" class="toast-container"></div>
+
+    <!-- ───────── Missing sessions modal ─────────
+         Shown when the launcher detects that the current CDP profile is
+         missing one or more required browser sessions (LinkedIn, Facebook,
+         Instagram, Google Gemini). Each platform gets a button that opens
+         the login page IN the already-running CDP Chrome — never spawns a
+         new browser instance. -->
+    <div id="sessions-modal-backdrop" class="modal-backdrop hidden" aria-hidden="true">
+      <div class="modal sessions-modal" role="dialog" aria-labelledby="sessions-modal-title">
+        <div class="modal-head">
+          <h2 id="sessions-modal-title">Sign in to your accounts</h2>
+          <button type="button" id="sessions-modal-close" class="modal-close" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-intro">
+            Some browser sessions required for automation are missing. Click each
+            <strong>Open ↗</strong> button to sign in inside the already-running
+            Chrome — your sessions are detected automatically.
+          </p>
+
+          <div id="sessions-modal-status" class="sessions-modal-status">
+            <span id="sessions-modal-cdp-state">Chrome: checking...</span>
+            <button type="button" id="sessions-modal-refresh" class="btn btn-secondary btn-mini">Refresh</button>
+          </div>
+
+          <div id="sessions-modal-grid" class="sessions-grid">
+            <!-- cards rendered dynamically -->
+          </div>
+
+          <div class="sessions-modal-note">
+            <strong>Google Gemini:</strong> there is no dedicated login endpoint.
+            Click <em>Open ↗</em> on the Gemini card to open the Gemini app in the
+            CDP Chrome, then sign in with your personal Google account. The
+            session becomes available automatically once you're signed in.
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button type="button" id="sessions-modal-dismiss" class="btn btn-secondary">Later</button>
+          <button type="button" id="sessions-modal-done" class="btn btn-primary" disabled>All set</button>
+        </div>
+      </div>
+    </div>
 
     <script src="renderer.js"></script>
   </body>

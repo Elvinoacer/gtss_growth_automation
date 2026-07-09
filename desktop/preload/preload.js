@@ -30,18 +30,34 @@ contextBridge.exposeInMainWorld("gtss", {
     start: () => ipcRenderer.invoke("cdp:start"),
     stop: () => ipcRenderer.invoke("cdp:stop"),
     // Onboarding-only: launch CDP Chrome WITHOUT the web app URL (the
-    // server isn't up yet). The user signs into each platform inside this
-    // Chrome; cookies are then available to automation once the server
-    // boots.
+    // server isn't up yet) and WITHOUT cloning the user's profile (the
+    // slow clone is deferred to server startup so the wizard stays snappy).
+    // The user signs into each platform inside this Chrome; cookies are
+    // then available to automation once the server boots.
     startStandalone: () => ipcRenderer.invoke("cdp:start-standalone"),
     // Open each platform's login page in the running CDP Chrome.
     openLoginTabs: (platforms) => ipcRenderer.invoke("cdp:open-login-tabs", platforms),
+    // Open an arbitrary URL (e.g. https://gemini.google.com/) inside the
+    // running CDP Chrome. Used by the "Missing sessions" modal in the main
+    // launcher window so logins always reuse the existing browser — never
+    // spawn a new Chrome instance, never create another endpoint.
+    openUrlInCdp: (url) => ipcRenderer.invoke("cdp:open-url-in-cdp", url),
     // Poll current session state via CDP cookies. Returns:
     //   { ok, sessions: { google:{loggedIn,cookies,label}, linkedin:..., ... }, running }
     // or { ok:false, sessions:null, running } if the CDP query failed.
     checkSessions: () => ipcRenderer.invoke("cdp:check-sessions"),
     // Lightweight state poll — used by onboarding to know when Chrome is up.
     state: () => ipcRenderer.invoke("cdp:state"),
+  },
+
+  // ─── Gemini API key validation ─────────────────────────────────────────
+  //
+  // Live validation that an API key is genuinely a Google AI Studio key.
+  // Returns { ok, valid, reason }. `ok:false` means we couldn't reach
+  // Google to validate (network error / timeout) — the renderer should
+  // treat that as "unknown" rather than "invalid".
+  gemini: {
+    validateKey: (apiKey) => ipcRenderer.invoke("gemini:validate-key", apiKey),
   },
 
   // ─── Open the web app in the user's default browser ─────────────────────
