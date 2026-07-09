@@ -100,35 +100,48 @@
       <!-- ───────── Step 3: Done ─────────
            Platform sign-in (LinkedIn, X, Facebook, Instagram, Google/Gemini)
            is NO LONGER done in the wizard. After the user clicks Finish,
-           the launcher starts the server, opens the web app in the CDP
-           Chrome, and AUTOMATICALLY pops up a "missing sessions" modal in
-           the launcher window — the user signs in to each platform inside
-           that SAME Chrome (the one automation will use), and live polling
-           detects each login as it happens. See desktop/renderer/renderer.js
-           for the modal logic. -->
+           the launcher starts the server AND opens the web app in the
+           user's DEFAULT browser (not inside Electron). The user signs
+           into the web app there. If any platform sessions required for
+           automation are missing, a "missing sessions" modal appears in
+           the launcher window — its "Open ↗" buttons open each platform's
+           login page in the user's DEFAULT browser too. See
+           desktop/renderer/renderer.js for the modal logic. -->
       <section class="step-panel" id="step-3">
         <h2>You're all set! 🎉</h2>
         <p>
-          Click <strong>Finish &amp; start</strong> to launch Chrome and start the GTSS server.
-          The web app opens automatically in that Chrome window. The first thing that happens
-          after the web app loads is a quick session check — if any of your platforms
-          (LinkedIn, X, Instagram, Facebook, Google/Gemini) aren't signed in, a modal pops up
-          here in the launcher with a one-click <em>Open ↗</em> button for each platform so you
-          can sign in inside the same Chrome that handles automation.
+          Click <strong>Finish &amp; start</strong> to start the GTSS server and open
+          the web app in your default browser. The same Chrome that handles
+          automation runs in the background — but you'll sign in to the web app
+          and to your platforms (LinkedIn, X, Instagram, Facebook, Google/Gemini)
+          inside your normal browser, where you're already comfortable.
         </p>
         <ul class="next-steps">
-          <li>Finish launches Chrome with the web app — same Chrome handles automation</li>
-          <li>If sessions are missing, a sign-in modal appears automatically here</li>
-          <li>Once signed in, manage everything from the web app's Settings → Platform Sessions</li>
+          <li>Starts the GTSS server (Node.js backend)</li>
+          <li>Launches the automation browser (Chrome with CDP) in the background</li>
+          <li>Opens the web app in your default browser — sign in there</li>
+          <li>If any platform sessions are missing, a sign-in modal appears here</li>
         </ul>
+
+        <!-- ───────── Live progress checklist ─────────
+             Shown when the user clicks "Finish & start". Each step lights
+             up as the corresponding stage streams in from the main process
+             via the "onboarding:progress" IPC channel. The user sees
+             exactly what's happening — no more "redirected prematurely"
+             feeling. If a step fails, it shows a red ✗ with the error
+             message and the user can retry. -->
         <div id="finish-progress" class="finish-progress" hidden>
-          <div class="finish-progress-step" data-stage="server">Server starting...</div>
-          <div class="finish-progress-step" data-stage="init">Initializing browser...</div>
-          <div class="finish-progress-step" data-stage="clone">Cloning browser profile...</div>
-          <div class="finish-progress-step" data-stage="endpoint">Preparing CDP endpoint...</div>
-          <div class="finish-progress-step" data-stage="almost-ready">Almost ready...</div>
+          <div class="finish-progress-title">Setting things up…</div>
+          <div class="finish-progress-subtitle">This only happens once. The next launch will be much faster.</div>
+          <div class="finish-progress-step" data-stage="server">Starting the GTSS server…</div>
+          <div class="finish-progress-step" data-stage="browser">Initializing the automation browser…</div>
+          <div class="finish-progress-step" data-stage="clone">Cloning your Chrome profile (first launch only)…</div>
+          <div class="finish-progress-step" data-stage="endpoint">Preparing the CDP endpoint…</div>
+          <div class="finish-progress-step" data-stage="open-webapp">Opening the web app in your default browser…</div>
           <div class="finish-progress-step" data-stage="ready">Ready.</div>
+          <div id="finish-progress-error" class="finish-progress-error" hidden></div>
         </div>
+
         <div class="step-actions">
           <button class="btn btn-primary btn-big" id="onboard-finish">Finish &amp; start →</button>
         </div>

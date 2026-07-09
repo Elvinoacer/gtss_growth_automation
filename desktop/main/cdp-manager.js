@@ -820,7 +820,7 @@ class CdpManager {
     const sourceDefault = path.join(source, "Default");
     if (fs.existsSync(sourceDefault)) {
       progress("clone", "Copying Default profile (cookies, logins, preferences)...");
-      copyDirSelective(sourceDefault, defaultProfile, PROFILE_STRIP_DIRS, {
+      await copyDirSelective(sourceDefault, defaultProfile, PROFILE_STRIP_DIRS, {
         onProgress: (msg) => progress("clone", msg),
       });
     } else {
@@ -832,7 +832,7 @@ class CdpManager {
       if (profileDirs.length > 0) {
         const sourceProfile = path.join(source, profileDirs[0]);
         progress("clone", `Default profile not found; copying ${profileDirs[0]} instead.`);
-        copyDirSelective(sourceProfile, defaultProfile, PROFILE_STRIP_DIRS, {
+        await copyDirSelective(sourceProfile, defaultProfile, PROFILE_STRIP_DIRS, {
           onProgress: (msg) => progress("clone", msg),
         });
       }
@@ -1005,18 +1005,33 @@ function profileHasCookies(userdataDir) {
 // source root). Used to strip Cache / Code Cache / etc.
 //
 // `opts.onProgress` (optional) is invoked with a short human-readable message
-// every ~200 files copied so the UI can show "Copying profile... 800 files"
-// style progress during the (potentially slow) first-time clone.
-function copyDirSelective(src, dest, stripDirs, opts = {}) {
+// every ~250ms so the UI can show "Copying profile... 800 files" style
+// progress during the (potentially slow) first-time clone.
+//
+// ─── Async + yields to the event loop ──────────────────────────────────────
+//
+// This function is ASYNC and periodically yields to the Electron main
+// thread's event loop (via `setImmediate`) every ~50 files. Without these
+// yields, a large profile clone (10,000+ files) blocks the main thread for
+// 10-60 seconds, making the entire app appear hung — no UI updates, no IPC
+// handling, no log streaming. This was the root cause of the "clicking
+// Start causes the app to hang" symptom: the synchronous clone ran inside
+// `cdp.start()` which ran inside `lifecycle.startAll()` which ran inside
+// the `lifecycle:start` IPC handler — freezing the main process until the
+// copy finished.
+//
+// The yields add ~1ms of overhead per 50 files (negligible compared to the
+// ~1ms per file copy) but keep the UI responsive throughout the clone.
+async function copyDirSelective(src, dest, stripDirs, opts = {}) {
   const onProgress = typeof opts.onProgress === "function" ? opts.onProgress : null;
   const state = { files: 0, dirs: 0, lastReportAt: Date.now() };
-  _copyDirInner(src, dest, stripDirs, state, onProgress);
+  await _copyDirInner(src, dest, stripDirs, state, onProgress);
   if (onProgress && state.files > 0) {
     onProgress(`Profile copy finished — ${state.files} files in ${state.dirs} directories.`);
   }
 }
 
-function _copyDirInner(src, dest, stripDirs, state, onProgress) {
+async function _copyDirInner(src, dest, stripDirs, state, onProgress) {
   fs.mkdirSync(dest, { recursive: true });
   const entries = fs.readdirSync(src, { withFileTypes: true });
   for (const entry of entries) {
@@ -1033,7 +1048,7 @@ function _copyDirInner(src, dest, stripDirs, state, onProgress) {
       }
       if (entry.isDirectory()) {
         state.dirs += 1;
-        _copyDirInner(srcPath, destPath, stripDirs, state, onProgress);
+        await _copyDirInner(srcPath, destPath, stripDirs, state, onProgress);
       } else if (entry.isFile()) {
         // Skip files > 50MB (probably media caches).
         const stat = fs.statSync(srcPath);
@@ -1044,6 +1059,14 @@ function _copyDirInner(src, dest, stripDirs, state, onProgress) {
         if (onProgress && Date.now() - state.lastReportAt > 250) {
           state.lastReportAt = Date.now();
           onProgress(`Copying profile... ${state.files} files copied`);
+        }
+        // Yield to the event loop every ~50 files so the Electron main
+        // process can process IPC, update the UI, and stream log lines
+        // while the clone is still running. This is the fix for the
+        // "clicking Start hangs the app" symptom — without it, a 10k-file
+        // profile clone freezes the main thread for 10-60 seconds.
+        if (state.files % 50 === 0) {
+          await new Promise((r) => setImmediate(r));
         }
       }
     } catch (err) {

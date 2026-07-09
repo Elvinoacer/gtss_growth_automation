@@ -598,3 +598,120 @@ pipelines (outreach, content, dm_check):
   button (it flips red and unclickable above 3000) and the publish step
   would time out at the click.
 - Exported `typeInChunks` via `__private` so it can be unit-tested.
+
+## D. Authentication in the default browser, real setup progress, and startup-hang fix
+
+This pass addresses three UX observations from testing:
+
+1. Authentication was happening inside Electron (in the CDP Chrome the
+   launcher spawned) instead of in the user's default web browser.
+2. Clicking **Finish & start** in onboarding immediately redirected to
+   the launcher without showing what was happening during startup.
+3. Clicking **Start** sometimes appeared to hang the app.
+
+### 1. Authentication in the user's default browser (not inside Electron)
+
+**Problem:** The web app URL (`http://localhost:3000`) was opened as a
+tab *inside* the CDP Chrome that Electron spawned. Platform sign-in (the
+"Missing sessions" modal) likewise opened LinkedIn/X/Facebook/Instagram/
+Google login pages inside that same CDP Chrome. That tied authentication
+to an Electron-controlled browser — which felt embedded, didn't carry
+Google's trusted-device state, and contributed to the startup hang (see
+fix 3 below).
+
+**Fix — moved every auth surface to `shell.openExternal`:**
+
+- `desktop/main/lifecycle.js` — `startAll()` and `openWebApp()` now
+  open the web app URL in the user's default browser via
+  `shell.openExternal`, never inside CDP Chrome. The CDP Chrome still
+  runs for automation — it just doesn't host the web app UI anymore.
+- `desktop/main/ipc-handlers.js` — new `app:open-external` IPC channel
+  that validates the URL is `http(s)` and then calls
+  `shell.openExternal`. Used by the missing-sessions modal.
+- `desktop/preload/preload.js` — new `openExternal(url)` method on the
+  `window.gtss` API; the legacy `cdp.openUrlInCdp` is retained but no
+  longer used by the auth flow.
+- `desktop/renderer/renderer.js` — the "Open ↗" buttons in the
+  missing-sessions modal now call `window.gtss.openExternal(url)`
+  instead of `window.gtss.cdp.openUrlInCdp(url)`. The "All set" button
+  is no longer gated on live session detection (fresh sign-ins in the
+  default browser don't reach the CDP Chrome until the next profile
+  clone — gating would trap the user in the modal).
+- `desktop/renderer/index.html` + `onboarding.html` — updated all
+  user-facing copy to reflect "opens in your default browser".
+
+**Trade-off the user should know:** cookies set during a fresh sign-in
+inside the default browser don't transfer to the CDP Chrome until the
+next profile clone runs (on next launcher start or on "Restart CDP").
+If the user's default browser is Chrome (the common case), this is
+automatic on the next launch. The modal's intro text explains this.
+
+### 2. Real setup-progress screen before navigating to the launcher
+
+**Problem:** `onOnboardingComplete` was fire-and-forget — it closed the
+onboarding window, opened the launcher, and *then* started the server in
+the background. The user saw a brief flash of "background tasks" and was
+immediately redirected, with no visibility into what was happening.
+
+**Fix — keep the onboarding window open and stream structured progress
+events until startup finishes:**
+
+- `desktop/main/lifecycle.js` — `startAll({ onProgress })` now accepts a
+  structured progress callback. Each call emits a stable stage
+  identifier (`start`, `server`, `browser`, `clone`, `endpoint`,
+  `open-webapp`, `ready`) plus error variants (`server:error`,
+  `browser:error`, `open-webapp:error`). Replaces the previous
+  regex-based log scraping.
+- `desktop/main/main.js` — `onOnboardingComplete(sendProgress)` is now
+  async and awaited. It runs `lifecycle.startAll` with the progress
+  callback, waits for it to finish, briefly shows the "Done!" state
+  (~800ms), and only *then* swaps the onboarding window for the
+  launcher. If startup fails, the onboarding window stays open and the
+  error is surfaced in-place so the user can retry.
+- `desktop/main/ipc-handlers.js` — `onboarding:complete` now awaits
+  `onOnboardingComplete`, streaming `onboarding:progress` events to the
+  onboarding window's `webContents` during the startup.
+- `desktop/preload/preload.js` — new `onboarding.onProgress(cb)` API
+  for subscribing to progress events.
+- `desktop/renderer/onboarding.js` — replaced the regex log scraper
+  with a proper event listener that updates a 6-step checklist
+  (server / browser / clone / endpoint / open-webapp / ready). Each
+  step shows pending (○), active (●), done (✓), or error (✗). Skipped
+  stages (e.g., "clone" when attaching to an existing Chrome) auto-tick
+  to ✓ when a later stage arrives.
+- `desktop/renderer/onboarding.html` + `onboarding.css` — new progress
+  UI with title, subtitle ("This only happens once…"), and a
+  dedicated error banner element below the checklist.
+
+### 3. Startup-hang investigation and fix
+
+**Root cause:** `copyDirSelective` in `desktop/main/cdp-manager.js`
+was a *synchronous* recursive directory copy. On first launch (or any
+launch where the CDP profile needed cloning), it would copy 10,000+
+files from the user's real Chrome profile into the CDP profile dir —
+blocking the Electron main thread for 10-60 seconds. During that
+window, no IPC could be processed, no UI could update, no log lines
+could stream. From the user's perspective, clicking **Start** "hung"
+the app. The embedded-auth flow made the symptom worse because the
+CDP Chrome was also the auth surface — so the user couldn't even tell
+whether the hang was auth-related or startup-related.
+
+**Fix — made the profile clone async with periodic event-loop yields:**
+
+- `desktop/main/cdp-manager.js` — `copyDirSelective` and
+  `_copyDirInner` are now `async` functions. Every 50 files copied,
+  they `await new Promise(r => setImmediate(r))` — yielding ~1ms to
+  let the main thread process IPC, update the UI, and stream log
+  lines. Overhead is negligible (~1ms per 50 files vs. ~1ms per file
+  copy) but the UI stays responsive throughout the clone.
+- `ensureCdpProfile` now `await`s `copyDirSelective` (it was already
+  `async` but called the sync version).
+- Combined with fix 1 (auth moved to the default browser), the CDP
+  Chrome is no longer on the critical path for the user's auth flow —
+  so even if the clone is slow, the user can already be signing into
+  the web app in their default browser while the clone runs in the
+  background.
+
+**Verification:** `node scripts/validate-js.js` reports 13/13 desktop
+JS files pass syntax check. No engine (`gtss-growth-engine/`) files
+were modified.

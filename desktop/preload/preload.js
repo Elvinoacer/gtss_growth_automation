@@ -67,6 +67,22 @@ contextBridge.exposeInMainWorld("gtss", {
   // ─── Open the web app in the user's default browser ─────────────────────
   openInBrowser: () => ipcRenderer.invoke("app:open-in-browser"),
 
+  // ─── Open an arbitrary URL in the user's default browser ────────────────
+  //
+  // Used by the "Missing sessions" modal in the launcher so platform
+  // login URLs open in the user's DEFAULT browser (Firefox, Safari,
+  // Edge, or their normal Chrome) — NOT inside the CDP Chrome that
+  // Electron spawned for automation. This is the key change for
+  // "authentication in the browser, not inside Electron": the user
+  // signs into LinkedIn/X/Facebook/Instagram/Google inside their normal
+  // browser, where they're already comfortable and where their existing
+  // sessions live. The CDP Chrome continues to run in the background
+  // for automation.
+  //
+  // Only http(s) URLs are allowed — the main process validates this
+  // before calling shell.openExternal.
+  openExternal: (url) => ipcRenderer.invoke("app:open-external", url),
+
   // ─── Logs ───────────────────────────────────────────────────────────────
   logs: {
     snapshot: (n) => ipcRenderer.invoke("logs:snapshot", n),
@@ -79,9 +95,28 @@ contextBridge.exposeInMainWorld("gtss", {
   },
 
   // ─── First-run onboarding ───────────────────────────────────────────────
+  //
+  // `complete(payload)` now BLOCKS until the full server + browser startup
+  // finishes. During the startup, the main process streams structured
+  // progress events via the "onboarding:progress" IPC channel — subscribe
+  // with `onProgress(cb)` BEFORE calling `complete()` so you don't miss
+  // the early stages. Each event is { stage, message, ts } where `stage`
+  // is one of: "start", "server", "server:error", "browser", "browser:error",
+  // "clone", "endpoint", "open-webapp", "open-webapp:error", "ready".
+  //
+  // If startup fails, `complete()` resolves with { ok:false, error } and
+  // the onboarding window stays open so the user can retry. If startup
+  // succeeds, the onboarding window is destroyed (by main.js) and the
+  // launcher window takes over — the `complete()` promise never resolves
+  // in that case (the renderer is gone), which is fine.
   onboarding: {
     status: () => ipcRenderer.invoke("onboarding:status"),
     complete: (payload) => ipcRenderer.invoke("onboarding:complete", payload),
+    onProgress: (cb) => {
+      const listener = (_event, data) => cb(data);
+      ipcRenderer.on("onboarding:progress", listener);
+      return () => ipcRenderer.removeListener("onboarding:progress", listener);
+    },
   },
 
   // ─── Auto-updater ───────────────────────────────────────────────────────

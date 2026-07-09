@@ -266,93 +266,131 @@ $("#onboard-step2-next").addEventListener("click", () => {
 
 // ─── Step 3: Finish ──────────────────────────────────────────────────────────
 
-// Live progress checklist for the deferred browser clone + server startup.
-// We listen to lifecycle / cdp log lines and tick each step off as the
-// corresponding message streams through.
+// ─── Live progress checklist for the server + browser startup ───────────────
+//
+// Previously this used a regex-based log scraper — it listened to
+// lifecycle/cdp log lines and pattern-matched phrases like "Server ready"
+// to tick steps off. That was fragile (any wording change broke it) and
+// didn't surface errors.
+//
+// Now we subscribe to the structured "onboarding:progress" IPC channel.
+// Each event is { stage, message, ts } where `stage` is a stable
+// identifier emitted by Lifecycle.startAll(). We map stages to UI steps:
+//
+//   "start"        → (initial banner, no step change)
+//   "server"       → step "server" active
+//   "server:error" → step "server" error
+//   "browser"      → step "browser" active (also covers init/endpoint/
+//                    almost-ready, which Lifecycle maps to "browser")
+//   "browser:error"→ step "browser" error
+//   "clone"        → step "clone" active
+//   "endpoint"     → step "endpoint" active
+//   "open-webapp"  → step "open-webapp" active
+//   "open-webapp:error" → step "open-webapp" error
+//   "ready"        → all steps done
+//
+// The stage order matches the visual order of the steps in the HTML.
+// When a later stage arrives, all earlier stages are marked done (so a
+// skipped stage — e.g., "clone" when attaching to an existing Chrome —
+// still shows a green checkmark).
+const STAGE_ORDER = ["server", "browser", "clone", "endpoint", "open-webapp", "ready"];
+
 const finishProgressEl = $("#finish-progress");
-const finishSteps = {
-  server: finishProgressEl?.querySelector('[data-stage="server"]'),
-  init: finishProgressEl?.querySelector('[data-stage="init"]'),
-  clone: finishProgressEl?.querySelector('[data-stage="clone"]'),
-  endpoint: finishProgressEl?.querySelector('[data-stage="endpoint"]'),
-  almostready: finishProgressEl?.querySelector('[data-stage="almost-ready"]'),
-  ready: finishProgressEl?.querySelector('[data-stage="ready"]'),
-};
-
-function markFinishStepDone(stage) {
-  const el = finishSteps[stage];
-  if (!el) return;
-  el.classList.remove("active");
-  el.classList.add("done");
-}
-
-function markFinishStepActive(stage) {
-  const el = finishSteps[stage];
-  if (!el) return;
-  el.classList.add("active");
-}
+const finishErrorEl = $("#finish-progress-error");
+const finishStepEls = {};
+STAGE_ORDER.forEach((key) => {
+  finishStepEls[key] = finishProgressEl?.querySelector(`[data-stage="${key}"]`);
+});
 
 function showFinishProgress() {
   if (!finishProgressEl) return;
   finishProgressEl.hidden = false;
-  // Reset all steps.
-  Object.values(finishSteps).forEach((el) => {
-    if (el) el.classList.remove("active", "done");
+  // Reset all steps to pending.
+  STAGE_ORDER.forEach((key) => {
+    const el = finishStepEls[key];
+    if (!el) return;
+    el.classList.remove("active", "done", "error");
   });
-  markFinishStepActive("server");
+  if (finishErrorEl) {
+    finishErrorEl.hidden = true;
+    finishErrorEl.textContent = "";
+  }
 }
 
-let finishLogUnsubscribe = null;
-function startFinishProgressLogListener() {
-  if (!window.gtss || !window.gtss.logs) return;
-  finishLogUnsubscribe = window.gtss.logs.onLine((entry) => {
-    if (!entry || !entry.line) return;
-    const src = entry.source || "";
-    const text = entry.line;
-    if (src.startsWith("lifecycle") || src.startsWith("cdp") || src.startsWith("server")) {
-      // If we attached to an existing Chrome, skip the clone stage entirely.
-      if (/Reusing existing Chrome/i.test(text)) {
-        markFinishStepDone("server");
-        markFinishStepDone("init");
-        markFinishStepDone("clone");
-        markFinishStepDone("endpoint");
-        markFinishStepActive("ready");
-        return;
-      }
-      if (/Server starting|Booting the Node\.js server|Server ready/i.test(text)) {
-        if (/Server ready/i.test(text)) markFinishStepDone("server");
-        else markFinishStepActive("server");
-      }
-      if (/Initializing browser|Using Chrome at|setup mode/i.test(text)) {
-        markFinishStepDone("server");
-        markFinishStepActive("init");
-      }
-      if (/Cloning browser profile|Copying profile|Profile copy/i.test(text)) {
-        markFinishStepDone("init");
-        markFinishStepActive("clone");
-      }
-      if (/Preparing CDP endpoint|Launching Chrome on port/i.test(text)) {
-        markFinishStepDone("clone");
-        markFinishStepDone("init");
-        markFinishStepActive("endpoint");
-      }
-      if (/Almost ready/i.test(text)) {
-        markFinishStepDone("endpoint");
-        markFinishStepActive("almostready");
-      }
-      if (/CDP ready|Browser ready|Ready\./i.test(text)) {
-        markFinishStepDone("endpoint");
-        markFinishStepDone("almostready");
-        markFinishStepActive("ready");
-      }
+function markFinishStageActive(stage) {
+  const idx = STAGE_ORDER.indexOf(stage);
+  if (idx < 0) return;
+  // Mark all earlier stages as done (they must have completed for us to
+  // reach this stage). This handles skipped stages (e.g., "clone" is
+  // skipped when we attach to an existing Chrome) gracefully.
+  for (let i = 0; i < idx; i++) {
+    const el = finishStepEls[STAGE_ORDER[i]];
+    if (el) {
+      el.classList.remove("active", "error");
+      el.classList.add("done");
     }
+  }
+  const el = finishStepEls[stage];
+  if (el) {
+    el.classList.remove("done", "error");
+    el.classList.add("active");
+  }
+}
+
+function markFinishStageDone(stage) {
+  const el = finishStepEls[stage];
+  if (!el) return;
+  el.classList.remove("active", "error");
+  el.classList.add("done");
+}
+
+function markFinishStageError(stage, message) {
+  // If the stage isn't one of our tracked steps, fall back to "server"
+  // so the error is at least visible somewhere.
+  const key = STAGE_ORDER.includes(stage) ? stage : "server";
+  const el = finishStepEls[key];
+  if (el) {
+    el.classList.remove("active", "done");
+    el.classList.add("error");
+  }
+  if (finishErrorEl && message) {
+    finishErrorEl.hidden = false;
+    finishErrorEl.textContent = message;
+  }
+}
+
+function markAllFinishStagesDone() {
+  STAGE_ORDER.forEach((key) => markFinishStageDone(key));
+}
+
+let progressUnsubscribe = null;
+
+function startFinishProgressListener() {
+  if (!window.gtss || !window.gtss.onboarding || !window.gtss.onboarding.onProgress) return;
+  progressUnsubscribe = window.gtss.onboarding.onProgress(({ stage, message }) => {
+    if (!stage) return;
+    // Error stages are suffixed with ":error".
+    if (stage.endsWith(":error")) {
+      const baseStage = stage.slice(0, -":error".length);
+      markFinishStageError(baseStage, message);
+      return;
+    }
+    if (stage === "ready") {
+      // Everything done.
+      markAllFinishStagesDone();
+      return;
+    }
+    if (STAGE_ORDER.includes(stage)) {
+      markFinishStageActive(stage);
+    }
+    // "start" is just an initial banner — no step change.
   });
 }
 
-function stopFinishProgressLogListener() {
-  if (typeof finishLogUnsubscribe === "function") {
-    try { finishLogUnsubscribe(); } catch (_) {}
-    finishLogUnsubscribe = null;
+function stopFinishProgressListener() {
+  if (typeof progressUnsubscribe === "function") {
+    try { progressUnsubscribe(); } catch (_) {}
+    progressUnsubscribe = null;
   }
 }
 
@@ -361,27 +399,36 @@ $("#onboard-finish").addEventListener("click", async () => {
   btn.disabled = true;
   btn.textContent = "Saving & starting...";
   showFinishProgress();
-  startFinishProgressLogListener();
+  // Subscribe BEFORE calling complete() so we don't miss the early
+  // stages (server / browser init can fire within milliseconds).
+  startFinishProgressListener();
   const res = await window.gtss.onboarding.complete({
     passphrase: collected.passphrase,
     geminiKey: collected.geminiKey,
   });
-  if (res.ok) {
+  if (res && res.ok) {
+    // main.js will close this window and open the control panel.
+    // The progress checklist stays visible (showing all-green ✓) until
+    // the window is destroyed. We keep the listener attached so any
+    // final "ready" event arrives cleanly.
     btn.textContent = "Done! ✓";
     btn.classList.add("btn-success");
-    // main.js will close this window, open the control panel, and
-    // auto-start the server. The progress checklist above stays visible
-    // (and continues updating from log lines) until the window is closed.
-    // We keep the listener attached so the user sees the deferred browser
-    // clone + server startup progress right up until the launcher UI takes
-    // over.
-    setTimeout(() => stopFinishProgressLogListener(), 30000);
+    // Defensive: stop the listener after 30s in case the window swap
+    // is delayed for some reason.
+    setTimeout(() => stopFinishProgressListener(), 30000);
   } else {
+    // Startup failed — keep the onboarding window open so the user can
+    // see the error and retry. The failing step already shows a red ✗
+    // via markFinishStageError(); we also surface the error message in
+    // the dedicated error element under the checklist.
     btn.disabled = false;
     btn.textContent = "Finish & start →";
-    if (finishProgressEl) finishProgressEl.hidden = true;
-    stopFinishProgressLogListener();
-    toast(res.error || "Failed to save onboarding data.", "error");
+    if (finishErrorEl) {
+      finishErrorEl.hidden = false;
+      finishErrorEl.textContent = res?.error || "Failed to start the server. Click Finish & start to retry.";
+    }
+    stopFinishProgressListener();
+    toast(res?.error || "Failed to save onboarding data.", "error");
   }
 });
 

@@ -328,23 +328,37 @@
    happening and the app doesn't appear frozen. */
 .finish-progress {
   margin: 16px 0;
-  padding: 14px 16px;
+  padding: 18px 18px 14px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .finish-progress[hidden] { display: none; }
+
+.finish-progress-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.finish-progress-subtitle {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
 
 .finish-progress-step {
   font-size: 12px;
   color: var(--text-muted);
   padding-left: 22px;
   position: relative;
-  line-height: 1.6;
+  line-height: 1.7;
+  transition: color 0.15s;
 }
 
 .finish-progress-step::before {
@@ -352,6 +366,7 @@
   position: absolute;
   left: 0;
   color: var(--text-muted);
+  transition: color 0.15s;
 }
 
 .finish-progress-step.active {
@@ -372,6 +387,31 @@
   content: "✓";
   color: var(--success);
 }
+
+.finish-progress-step.error {
+  color: var(--danger);
+}
+
+.finish-progress-step.error::before {
+  content: "✗";
+  color: var(--danger);
+  animation: none;
+}
+
+.finish-progress-error {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.finish-progress-error[hidden] { display: none; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }

@@ -14,12 +14,44 @@ const $$ = (sel) => document.querySelectorAll(sel);
 
 // ─── Sessions health (missing-session detection) ────────────────────────────
 //
-// After the server + CDP Chrome come up, we poll the CDP cookies to see which
-// platforms (LinkedIn, Facebook, Instagram, Google Gemini) the user is
-// signed into. If any required sessions are missing, we surface a banner in
-// the Control tab; clicking "Sign in…" opens a modal that lets the user
-// open each platform's login page IN the already-running CDP Chrome — never
-// a new browser instance, never a new endpoint.
+// ─── Authentication in the user's default browser (not inside Electron) ────
+//
+// After the server + CDP Chrome come up, we poll the CDP cookies to see
+// which platforms (LinkedIn, Facebook, Instagram, Google Gemini) the
+// automation browser is signed into. If any required sessions are
+// missing, we surface a banner in the Control tab; clicking "Sign in…"
+// opens a modal with an "Open ↗" button for each platform.
+//
+// IMPORTANT: The "Open ↗" buttons now open each platform's login page in
+// the user's DEFAULT browser (via window.gtss.openExternal, which calls
+// shell.openExternal in the main process) — NOT in the CDP Chrome that
+// Electron spawned. This is the key change for "authentication in the
+// browser, not inside Electron".
+//
+// Trade-off: because the user signs into a different browser than the
+// CDP Chrome, fresh cookies set during that sign-in don't transfer to
+// the automation browser automatically. The CDP profile clone (which
+// runs on first launch and on "Restart CDP") is what carries cookies
+// from the user's real Chrome into the CDP Chrome. So the flow is:
+//
+//   1. User clicks "Open ↗" on LinkedIn → LinkedIn opens in their default
+//      browser (which is Chrome for most users).
+//   2. User signs into LinkedIn in their default browser.
+//   3. The next time the launcher starts (or the user clicks "Restart
+//      CDP"), the CDP profile clone picks up the fresh LinkedIn cookies
+//      from the user's real Chrome profile and copies them into the
+//      CDP Chrome.
+//   4. Subsequent automation runs are authenticated.
+//
+// We surface this clearly in the modal's intro text so the user
+// understands why the green checkmark doesn't appear instantly after
+// they sign in (the way it did when sign-in happened inside the CDP
+// Chrome).
+//
+// The live polling of CDP cookies is RETAINED — it's still useful for
+// detecting sessions that were ALREADY present (carried over from a
+// previous clone). It just won't detect brand-new sign-ins until the
+// next profile clone.
 
 const MODAL_SESSION_PLATFORMS = [
   {
@@ -104,8 +136,21 @@ function renderSessionsModalGrid() {
     `;
   }).join("");
 
-  // Wire up Open buttons — each opens the platform's login URL inside the
-  // running CDP Chrome. Never spawns a new browser instance.
+  // Wire up Open buttons — each opens the platform's login URL in the
+  // user's DEFAULT browser (via window.gtss.openExternal → shell.openExternal).
+  // Previously these called window.gtss.cdp.openUrlInCdp() which opened
+  // the login page inside the CDP Chrome that Electron spawned. That
+  // tied authentication to the Electron-controlled browser — which is
+  // what we're explicitly moving away from ("authentication in the
+  // browser, not inside Electron").
+  //
+  // The user signs in inside their normal browser. If that browser is
+  // Chrome (the common case), the fresh cookies will be picked up by
+  // the next CDP profile clone (run on next launcher start or on
+  // "Restart CDP"). If the user's default browser is Firefox/Safari/
+  // Edge, the cookies won't transfer automatically — the user would
+  // need to also sign in inside Chrome for automation to work. We
+  // surface this in the modal's intro text.
   grid.querySelectorAll(".session-open-btn").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const key = btn.dataset.platformKey;
@@ -115,12 +160,15 @@ function renderSessionsModalGrid() {
       btn.disabled = true;
       btn.textContent = "Opening...";
       try {
-        const res = await window.gtss.cdp.openUrlInCdp(platform.loginUrl);
+        const res = await window.gtss.openExternal(platform.loginUrl);
         if (res.ok) {
-          toast(`${platform.label} opened in the CDP Chrome — sign in there.`, "info");
-          // Kick off an immediate poll so the user sees the green checkmark
-          // appear as soon as they sign in.
-          pollModalSessionsOnce();
+          toast(`${platform.label} opened in your default browser — sign in there.`, "info");
+          // Note: we do NOT kick off an immediate poll here anymore.
+          // Cookies signed into the default browser won't appear in the
+          // CDP Chrome until the next profile clone. The user can click
+          // "Refresh" manually after re-cloning, or just dismiss the
+          // modal — the green checkmarks will populate on the next
+          // launcher start.
         } else {
           toast(`Could not open ${platform.label}: ${res.error || "unknown error"}`, "error");
         }
@@ -136,16 +184,30 @@ function renderSessionsModalGrid() {
 function updateSessionsModalDoneButton() {
   const btn = $("#sessions-modal-done");
   if (!btn) return;
-  // "All set" is enabled only once every REQUIRED platform is logged in.
-  // (Recommended ones can be skipped.)
+  // Previously the "All set" button was DISABLED until every required
+  // platform session was detected via CDP cookie polling. That worked
+  // when sign-in happened INSIDE the CDP Chrome (cookies appeared
+  // instantly). Now that sign-in happens in the user's DEFAULT browser,
+  // fresh cookies don't reach the CDP Chrome until the next profile
+  // clone — so gating the button on live detection would trap the user
+  // in a modal they can never dismiss.
+  //
+  // The button is now ALWAYS enabled. The user clicks it when they've
+  // finished signing in to whatever platforms they care about. The
+  // green checkmarks in the grid still update from CDP polling, so any
+  // sessions ALREADY present (carried over from a previous clone) will
+  // show as ✓ — but the user isn't forced to wait for fresh sign-ins
+  // to be detected (they won't be, until the next clone).
+  btn.disabled = false;
   const requiredMissing = MODAL_SESSION_PLATFORMS.filter(
     (p) => p.required && !(modalSessionState[p.key] && modalSessionState[p.key].loggedIn),
   );
-  btn.disabled = requiredMissing.length > 0;
   if (requiredMissing.length === 0) {
     btn.title = "All required sessions detected";
   } else {
-    btn.title = `Still missing: ${requiredMissing.map((p) => p.label).join(", ")}`;
+    btn.title =
+      `Still missing in the automation browser: ${requiredMissing.map((p) => p.label).join(", ")}. ` +
+      `If you just signed in to one of these in your default browser, the session will be detected after the next CDP profile clone (run "Restart CDP" or relaunch the app).`;
   }
 }
 
@@ -270,14 +332,17 @@ $("#sessions-modal-refresh")?.addEventListener("click", pollModalSessionsOnce);
 // ─── Auto-open the missing-sessions modal ─────────────────────────────
 //
 // Per project requirements: the FIRST thing that happens after the user
-// clicks Start (post-onboarding) is — once the web app URL has loaded in
-// the CDP Chrome — we check sessions for LinkedIn, X, Instagram, Facebook,
-// and Google/Gemini. If ANY are missing, we AUTOMATICALLY pop up the
-// sign-in modal (not just the passive health-card banner). The modal's
-// "Open ↗" buttons open each platform's login page IN the already-running
-// CDP Chrome (never a new browser), and live polling detects each login
-// as it happens — reusing the same UX pattern as the web app's
-// /settings → Platform Sessions.
+// clicks Start (post-onboarding) is — once the server + CDP Chrome have
+// come up — we check the CDP profile for LinkedIn, X, Instagram,
+// Facebook, and Google/Gemini sessions. If ANY are missing, we
+// AUTOMATICALLY pop up the sign-in modal (not just the passive
+// health-card banner). The modal's "Open ↗" buttons open each
+// platform's login page in the user's DEFAULT browser (via
+// shell.openExternal — never inside the CDP Chrome that Electron
+// spawned). Live polling of CDP cookies detects sessions that were
+// already present from a previous profile clone — but it won't detect
+// brand-new sign-ins until the next clone runs (the user can click
+// "Restart CDP" or relaunch the app to trigger a fresh clone).
 const _originalStartHandler = $("#start-btn").onclick;
 let _autoModalCheckAfterStart = null;
 $("#start-btn").addEventListener("click", () => {
@@ -291,9 +356,8 @@ $("#start-btn").addEventListener("click", () => {
     _autoModalCheckAfterStart = null;
   }
   // Give the server + CDP ~6s to come up (the server boots first, then
-  // CDP Chrome, then the web app URL is opened in a new tab). After that
-  // we poll sessions and auto-open the modal if anything required is
-  // missing.
+  // CDP Chrome). After that we poll sessions and auto-open the modal if
+  // anything required is missing.
   _autoModalCheckAfterStart = setTimeout(async () => {
     _autoModalCheckAfterStart = null;
     await pollModalSessionsOnce();
@@ -309,9 +373,9 @@ $("#start-btn").addEventListener("click", () => {
       if (backdrop && backdrop.classList.contains("hidden")) {
         openSessionsModal();
         toast(
-          `Missing sessions detected: ${missing.map((p) => p.label).join(", ")}. Sign in inside the CDP Chrome.`,
+          `Missing sessions detected: ${missing.map((p) => p.label).join(", ")}. Click "Open ↗" to sign in inside your default browser.`,
           "warning",
-          6000,
+          7000,
         );
       }
     }
@@ -359,18 +423,18 @@ function updateHero(server, cdp) {
   if (state === "running") {
     const since = server.startedAt ? new Date(server.startedAt).toLocaleTimeString() : "";
     const cdpInfo = cdp.state === "running"
-      ? ` · Chrome CDP on port ${cdp.port}`
+      ? ` · Chrome CDP on port ${cdp.port} (automation browser, background)`
       : " · CDP inactive (isolated browser mode)";
     $("#hero-meta").textContent = `Server up since ${since} · PID ${server.pid} · http://localhost:${server.port}${cdpInfo}`;
   } else if (state === "starting") {
     $("#hero-meta").textContent =
-      "Booting the server... check the Logs tab for live progress. The browser tab opens automatically once the port is ready.";
+      "Booting the server... check the Logs tab for live progress. The web app opens in your default browser once the port is ready.";
   } else if (state === "stopping") {
     $("#hero-meta").textContent = "Shutting down...";
   } else if (state === "crashed") {
     $("#hero-meta").textContent = "The server crashed. See the error above.";
   } else {
-    $("#hero-meta").textContent = "Click Start to launch the app in Chrome.";
+    $("#hero-meta").textContent = "Click Start to launch the app in your default browser.";
   }
 
   // Show/hide error card.
@@ -409,7 +473,7 @@ function updateHero(server, cdp) {
 
   // If CDP is running, show a small banner so the user knows.
   if (cdp.state === "running") {
-    $("#hero-meta").textContent += " · CDP mode active (using your real Chrome)";
+    $("#hero-meta").textContent += " · CDP automation browser active (background)";
   }
 
   // About tab — runtime info.
@@ -434,10 +498,10 @@ $("#start-btn").addEventListener("click", async () => {
   // Clear any previous error.
   $("#error-card").classList.add("hidden");
   $("#status-hero").classList.remove("hidden");
-  toast("Starting the server — the browser tab opens once the port is ready.", "info");
+  toast("Starting the server — the web app opens in your default browser once it's ready.", "info");
   const res = await window.gtss.lifecycle.start();
   if (res.ok) {
-    toast("Ready! The web app is open in the Chrome window.", "success");
+    toast("Ready! The web app is open in your default browser.", "success");
   } else {
     toast(`Failed to start: ${res.error}`, "error");
   }
@@ -469,10 +533,10 @@ $("#server-restart-btn").addEventListener("click", async () => {
 });
 
 $("#cdp-start-btn").addEventListener("click", async () => {
-  toast("Starting Chrome CDP — your normal Chrome will close...", "info");
+  toast("Starting the CDP automation browser in the background...", "info");
   const res = await window.gtss.cdp.start();
   if (res.ok) {
-    toast("CDP started. Automation will now use your real Chrome.", "success");
+    toast("CDP started. Automation will use this Chrome (running in the background).", "success");
   } else {
     toast(res.error, "error");
   }

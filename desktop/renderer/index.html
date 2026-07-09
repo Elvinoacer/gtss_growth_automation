@@ -74,9 +74,11 @@
         </div>
 
         <p class="hint-text">
-          Click Start to launch Chrome with the web app. The same Chrome handles
-          automation — so outreach works immediately. All settings (platforms,
-          AI, outreach, scheduling) live inside the web app.
+          Click Start to launch the server and open the web app in your default
+          browser. The automation browser (Chrome with CDP) runs in the
+          background — outreach works immediately once your platform sessions
+          are detected. All settings (platforms, AI, outreach, scheduling) live
+          inside the web app at <code>http://localhost:3000</code>.
         </p>
 
         <!-- Sessions health indicator — surfaces missing platform logins. -->
@@ -200,13 +202,15 @@
          Shown — AUTOMATICALLY — when the launcher detects that the current
          CDP profile is missing one or more browser sessions required for
          automation: LinkedIn, X, Instagram, Facebook, AND Google/Gemini.
-         The modal auto-pops after the user clicks Start and the web app
-         URL has loaded in the CDP Chrome. Each platform gets an "Open ↗"
-         button that opens its login page IN the already-running CDP
-         Chrome (the same Chrome that handles automation — never a new
-         browser instance). Live polling detects each login as it happens
-         and ticks the green checkmark. This reuses the same UX pattern
-         as the web app's /settings → Platform Sessions. -->
+         The modal auto-pops after the user clicks Start and the server +
+         CDP Chrome have come up. Each platform gets an "Open ↗" button
+         that opens its login page in the user's DEFAULT browser (via
+         shell.openExternal) — NOT inside the CDP Chrome that Electron
+         spawned. This is the key change for "authentication in the
+         browser, not inside Electron": the user signs in where they're
+         already comfortable, and the fresh cookies are picked up by the
+         next CDP profile clone (run on "Restart CDP" or on the next
+         launcher start). -->
     <div id="sessions-modal-backdrop" class="modal-backdrop hidden" aria-hidden="true">
       <div class="modal sessions-modal" role="dialog" aria-labelledby="sessions-modal-title">
         <div class="modal-head">
@@ -216,9 +220,12 @@
         <div class="modal-body">
           <p class="modal-intro">
             Some browser sessions required for automation are missing. Click each
-            <strong>Open ↗</strong> button to sign in inside the already-running
-            Chrome — your sessions are detected automatically. This is the same
-            flow as <strong>Settings → Platform Sessions</strong> in the web app.
+            <strong>Open ↗</strong> button to sign in inside your <strong>default
+            browser</strong> — not inside this app. If your default browser is Chrome
+            (the common case), the fresh sessions will be picked up the next time
+            the launcher clones your Chrome profile (click <em>Restart CDP</em> in
+            Advanced controls, or simply relaunch the app). Sessions already
+            present from a previous clone show a green ✓ below.
           </p>
 
           <div id="sessions-modal-status" class="sessions-modal-status">
@@ -233,15 +240,15 @@
           <div class="sessions-modal-note">
             <strong>Google / Gemini:</strong> there is no dedicated login endpoint.
             Click <em>Open ↗</em> on the Google / Gemini card to open the Gemini
-            app in the CDP Chrome, then sign in with your personal Google
-            account. The session becomes available automatically once you're
-            signed in — Gemini will not operate in a copied CDP profile without
-            an active Google login.
+            app in your default browser, then sign in with your personal Google
+            account. The session becomes available to automation after the next
+            CDP profile clone (Gemini will not operate in a copied CDP profile
+            without an active Google login).
           </div>
         </div>
         <div class="modal-foot">
           <button type="button" id="sessions-modal-dismiss" class="btn btn-secondary">Later</button>
-          <button type="button" id="sessions-modal-done" class="btn btn-primary" disabled>All set</button>
+          <button type="button" id="sessions-modal-done" class="btn btn-primary">All set</button>
         </div>
       </div>
     </div>

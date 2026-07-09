@@ -255,12 +255,47 @@ function registerIpcHandlers({
 
   // ─── Open the web app ───────────────────────────────────────────────────
   //
-  // If CDP Chrome is running, open a new tab IN the CDP Chrome (via the
-  // DevTools HTTP API). Otherwise, fall back to the default browser.
+  // Always opens in the user's DEFAULT browser via shell.openExternal.
+  // Previously this opened a tab inside the running CDP Chrome (via the
+  // DevTools HTTP API) — but that tied the web-app tab to the CDP Chrome,
+  // which felt "embedded inside Electron". Now the web app always opens
+  // in the user's normal browser. See Lifecycle.openWebApp().
 
   ipcMain.handle("app:open-in-browser", async () => {
     try {
       await lifecycle.openWebApp();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  // ─── Open an arbitrary URL in the user's default browser ──────────────
+  //
+  // Used by the "Missing sessions" modal in the launcher — each platform
+  // (LinkedIn, Facebook, Instagram, Google Gemini) gets an "Open ↗"
+  // button that calls this with the platform's login URL. The URL opens
+  // in the user's DEFAULT browser (not the CDP Chrome), so the user
+  // signs in where they're already comfortable and where their existing
+  // sessions live.
+  //
+  // This is the key change for "authentication in the browser, not
+  // inside Electron": previously the modal called cdp:open-url-in-cdp
+  // which opened login pages inside the CDP Chrome that Electron
+  // spawned. Now we always shell.openExternal — the CDP Chrome still
+  // runs for automation, but authentication happens in the user's
+  // normal browser.
+  ipcMain.handle("app:open-external", async (_event, url) => {
+    try {
+      if (!url || typeof url !== "string") {
+        return { ok: false, error: "No URL provided." };
+      }
+      // Only allow http(s) URLs — never file://, javascript:, etc.
+      if (!/^https?:\/\//i.test(url)) {
+        return { ok: false, error: "Only http(s) URLs are allowed." };
+      }
+      const { shell } = require("electron");
+      await shell.openExternal(url);
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err.message };
@@ -292,9 +327,35 @@ function registerIpcHandlers({
   ipcMain.handle("onboarding:complete", async (_event, payload) => {
     try {
       await firstRun.complete(payload.passphrase, payload.geminiKey);
+      // ─── Run the full startup WITH live progress events ───────────────
+      //
+      // Previously this was fire-and-forget: onOnboardingComplete() was
+      // called without await, the IPC returned immediately, and main.js
+      // did the window swap + server startup in the background. The user
+      // saw a brief flash of "background tasks" and was immediately
+      // redirected to the launcher — without any visibility into what
+      // was happening.
+      //
+      // Now we AWAIT onOnboardingComplete(). It runs the full server +
+      // browser startup, streaming progress events back to the onboarding
+      // window via webContents.send("onboarding:progress", ...). The
+      // renderer shows each stage on its progress screen. Only after
+      // startup succeeds does onOnboardingComplete() swap windows — so
+      // by the time the IPC resolves, the user is already in the
+      // launcher. (If startup fails, onOnboardingComplete throws, the
+      // IPC returns { ok:false, error }, and the renderer shows the
+      // error in-place — the onboarding window stays open for retry.)
       if (typeof onOnboardingComplete === "function") {
-        // Fire-and-forget — main.js handles the window swap + auto-start.
-        onOnboardingComplete();
+        await onOnboardingComplete((stage, message) => {
+          const win = getMainWindow();
+          if (win && !win.isDestroyed()) {
+            win.webContents.send("onboarding:progress", {
+              stage,
+              message,
+              ts: Date.now(),
+            });
+          }
+        });
       }
       return { ok: true };
     } catch (err) {

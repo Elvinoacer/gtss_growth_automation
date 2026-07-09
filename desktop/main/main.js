@@ -121,24 +121,45 @@ app.whenReady().then(async () => {
     logStream,
     updater,
     getMainWindow: () => mainWindow,
-    onOnboardingComplete: async () => {
+    onOnboardingComplete: async (sendProgress) => {
+      // ─── Show real progress before swapping windows ────────────────────
+      //
+      // Previously this callback was fire-and-forget: it closed the
+      // onboarding window, opened the main control panel, and THEN started
+      // the server. The user saw a brief flash of "background tasks" and
+      // was immediately redirected to the launcher without any visibility
+      // into what was happening. That felt like being "redirected
+      // prematurely".
+      //
+      // Now we run the full server + browser startup WITH live progress
+      // events streamed back to the onboarding window (via sendProgress).
+      // The user sees each stage — server boot, browser init, profile
+      // clone (first launch only), web app opened in default browser —
+      // before the window swaps to the launcher. Only after startup
+      // succeeds do we close the onboarding window and open the control
+      // panel. If startup fails, the onboarding window stays open and
+      // shows the error so the user can retry.
+      try {
+        await lifecycle.startAll({ openBrowser: true, onProgress: sendProgress });
+      } catch (err) {
+        logStream.append("lifecycle:stderr", `Auto-start after onboarding failed: ${err.message}`);
+        logStream.append("lifecycle", "Click Finish & start to retry, or click Start on the Control tab later.");
+        // Re-throw so the IPC handler returns { ok:false, error } to the
+        // renderer — the onboarding wizard shows the error in-place and
+        // the user can retry. The window is NOT swapped in this case.
+        throw err;
+      }
+      // Give the renderer a brief moment to show the "Done!" state on
+      // its progress screen before we destroy the window. Without this,
+      // the user sees the progress fill in... and then the window
+      // vanishes, which feels abrupt.
+      await new Promise((r) => setTimeout(r, 800));
       // Swap onboarding window for the main control panel.
       if (mainWindow) {
         mainWindow.close();
         mainWindow = null;
       }
       await createMainWindow();
-      // Auto-start the server and open the web app — true one-click UX.
-      // The user just finished onboarding; they shouldn't have to click
-      // Start manually. Wrapped in try/catch so a startup failure doesn't
-      // leave them stuck — the error card on the Control tab will surface
-      // whatever went wrong.
-      try {
-        await lifecycle.startAll({ openBrowser: true });
-      } catch (err) {
-        logStream.append("lifecycle:stderr", `Auto-start after onboarding failed: ${err.message}`);
-        logStream.append("lifecycle", "Click Start on the Control tab to retry.");
-      }
     },
   });
 

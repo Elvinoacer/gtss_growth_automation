@@ -78,52 +78,84 @@ class Lifecycle {
    * the previous "Connection refused" race where Chrome would open
    * http://localhost:3000 before Express was ready to answer.
    *
+   * ─── Authentication in the user's default browser (not inside Electron) ──
+   *
+   * The web app URL (http://localhost:3000) is opened in the user's DEFAULT
+   * browser via `shell.openExternal`, NOT in the CDP Chrome. This is the key
+   * change for "authentication in the browser, not inside Electron": the
+   * user signs into the web app, signs into Google/Gemini, etc. in their
+   * normal browser (where they're already comfortable and where their
+   * existing sessions live). The CDP Chrome continues to run for automation
+   * — it just doesn't host the web app UI anymore.
+   *
+   * ─── Structured progress events ──────────────────────────────────────────
+   *
+   * `onProgress(stage, message)` is called at each high-level stage of the
+   * startup so the caller (e.g., the onboarding wizard) can render a real
+   * progress screen with named steps instead of scraping log lines. The
+   * stage values are stable identifiers — see the onboarding renderer for
+   * the mapping from stage → user-facing label.
+   *
+   *   "start"         — initial banner
+   *   "server"        — server boot (port wait)
+   *   "browser"       — CDP Chrome init / attach
+   *   "clone"         — deferred profile clone (first launch only)
+   *   "endpoint"      — CDP endpoint preparation
+   *   "open-webapp"   — opening the web app in the default browser
+   *   "ready"         — final banner
+   *
+   * Error stages are suffixed with ":error" (e.g., "server:error") so the
+   * renderer can show a failure indicator on the matching step.
+   *
    * Flow:
    *   1. Start the server (waits for the port via ServerManager.waitForPort).
-   *      → Progress is broadcast through the logStream so the launcher UI can
-   *        show "Booting server..." messages while it spins up.
-   *   2. Once the server is ready, start CDP Chrome — but WITHOUT a URL
-   *      argument (so Chrome doesn't open a tab too early). After Chrome is
-   *      ready, we open the web app URL in a new tab via the CDP HTTP API.
-   *      This is also where the deferred profile clone runs (if needed) —
-   *      the launcher UI shows live "Cloning browser profile..." progress.
+   *      → Progress is broadcast through the logStream AND onProgress so the
+   *        launcher UI / onboarding wizard can show "Booting server...".
+   *   2. Once the server is ready, start CDP Chrome — without a URL
+   *      argument. The web app is NOT opened inside CDP Chrome anymore.
+   *      This is where the deferred profile clone runs (if needed) —
+   *      every step is broadcast via onProgress so the wizard can show
+   *      "Cloning browser profile..." progress.
    *   3. Write BROWSER_MODE=cdp + CDP_ENDPOINT to .env so the server's
    *      automation layer picks them up on its next browser launch.
+   *   4. Open the web app URL in the user's DEFAULT browser via
+   *      shell.openExternal. The user signs in there.
    *
-   * If CDP can't start (Chrome not installed), fall back to opening the web
-   * app in the user's default browser.
+   * If CDP can't start (Chrome not installed), fall back to Playwright's
+   * persistent browser mode but STILL open the web app in the default
+   * browser — the user's auth flow is unaffected.
    */
-  async startAll({ openBrowser = true } = {}) {
-    this.log.append("lifecycle", "Starting GTSS Growth Engine...");
+  async startAll({ openBrowser = true, onProgress } = {}) {
+    const progress = (stage, message) => {
+      try {
+        this.log.append("lifecycle", message);
+      } catch (_) {}
+      try {
+        if (typeof onProgress === "function") onProgress(stage, message);
+      } catch (_) {}
+    };
+
+    progress("start", "Starting GTSS Growth Engine...");
     const port = this.server.port || 3000;
     const webAppUrl = `http://localhost:${port}`;
 
     // ─── 1. Start the server FIRST and wait for it to be ready ──────────
-    //
-    // This is the key fix for the "Connection refused" race: previously we
-    // opened the URL in CDP Chrome before Express had even bound to the port,
-    // so the user saw a blank "This site can't be reached" page on every
-    // launch. Now we block until the server's port accepts TCP connections.
     if (!this.server.isRunning()) {
-      this.log.append("lifecycle", "Server starting...");
-      this.log.append("lifecycle", "Booting the Node.js server — waiting for the port to open...");
+      progress("server", "Server starting...");
+      progress("server", "Booting the Node.js server — waiting for the port to open...");
       try {
         await this.server.start({ port });
+        progress("server", "Server ready.");
       } catch (err) {
-        // ServerManager.start() already records a diagnostic and leaves the
-        // state as "starting" or "crashed" — we just surface the message
-        // here and abort the rest of the flow. The launcher UI's error card
-        // will show the actionable remedy.
-        this.log.append("lifecycle:stderr", `Server failed to start: ${err.message}`);
+        progress("server:error", `Server failed to start: ${err.message}`);
         throw err;
       }
     } else {
-      this.log.append("lifecycle", "Server already running — reusing it.");
+      progress("server", "Server already running — reusing it.");
     }
 
     // Give Express a short beat to finish mounting its routes after the
-    // port accepts connections (the port being open only means listen() has
-    // returned, not that middleware is fully wired up).
+    // port accepts connections.
     await new Promise((r) => setTimeout(r, 400));
 
     // ─── 2. Start CDP Chrome (without a URL) ────────────────────────────
@@ -140,39 +172,34 @@ class Lifecycle {
     let cdpActive = false;
     try {
       if (!this.cdp.isRunning()) {
-        this.log.append("lifecycle", "Initializing browser...");
-        // NOTE: We deliberately do NOT pass openUrl here. We open the URL
-        // AFTER Chrome's CDP endpoint is up so the tab doesn't hit a
-        // half-ready server.
-        //
-        // The (potentially slow) profile clone happens INSIDE cdp.start()
-        // via ensureCdpProfile() — every step is broadcast to the logStream
-        // so the launcher UI can show "Cloning browser profile..." etc.
-        // If cdp.start() attached to an existing Chrome, no clone runs.
+        progress("browser", "Initializing browser...");
+        // NOTE: We deliberately do NOT pass openUrl here. The web app is
+        // opened in the user's DEFAULT browser (step 4 below) — not in
+        // the CDP Chrome — so platform authentication happens where the
+        // user is already comfortable.
         await this.cdp.start({
           onProgress: (stage, message) => {
-            // The CdpManager already appends each message to the logStream,
-            // but we also surface a high-level lifecycle banner for the
-            // stages the user cares about so the launcher's status hero
-            // can show a friendly progress label.
+            // Map CDP stage names to our high-level stages so the
+            // onboarding wizard's progress UI can highlight the right step.
             if (stage === "clone") {
-              this.log.append("lifecycle", message);
+              progress("clone", message);
             } else if (stage === "ready") {
-              // Distinguish "we attached to an existing Chrome" from
-              // "we spawned a fresh one" so the launcher UI can show the
-              // right messaging. The attach path logs "Reusing existing
-              // Chrome..." which we surface verbatim.
               if (/Reusing existing Chrome/i.test(message)) {
-                this.log.append("lifecycle", "Reusing existing Chrome — no new browser spawned, no profile clone needed.");
+                progress("browser", "Reusing existing Chrome — no new browser spawned, no profile clone needed.");
               } else {
-                this.log.append("lifecycle", "Browser ready.");
+                progress("browser", "Browser ready.");
               }
+            } else if (stage === "init" || stage === "endpoint" || stage === "almost-ready") {
+              // Surface init / endpoint / almost-ready as part of the
+              // browser stage (the wizard groups them under
+              // "Initializing the automation browser").
+              progress("browser", message);
             }
           },
         });
         cdpActive = true;
       } else {
-        this.log.append("lifecycle", "CDP Chrome already running — reusing it.");
+        progress("browser", "CDP Chrome already running — reusing it.");
         cdpActive = true;
       }
 
@@ -180,34 +207,41 @@ class Lifecycle {
       // where to connect.
       this.env.upsert("CDP_ENDPOINT", `http://127.0.0.1:${this.cdp.port}`);
       this.env.upsert("BROWSER_MODE", "cdp");
-      this.log.append("lifecycle", `CDP active on port ${this.cdp.port}. Automation will use this Chrome.`);
-
-      // Open the web app URL in a new tab now that both Chrome AND the
-      // server are ready.
-      if (openBrowser) {
-        const ok = await this.cdp.openTab(webAppUrl);
-        if (!ok) {
-          this.log.append("lifecycle:stderr", "Couldn't open a new tab in CDP Chrome. Open it manually.");
-        }
-      }
+      progress("endpoint", `CDP active on port ${this.cdp.port}. Automation will use this Chrome.`);
     } catch (err) {
-      this.log.append("lifecycle:stderr", `CDP Chrome failed to start: ${err.message}`);
-      this.log.append("lifecycle", "Falling back to isolated browser mode (Playwright Chromium).");
+      progress("browser:error", `CDP Chrome failed to start: ${err.message}`);
+      progress("browser", "Falling back to isolated browser mode (Playwright Chromium).");
       this.env.upsert("BROWSER_MODE", "persistent");
       this.env.upsert("CDP_ENDPOINT", "");
+    }
 
-      // Open the web app in the default browser as fallback.
-      if (openBrowser) {
-        this.log.append("lifecycle", `Opening ${webAppUrl} in your default browser...`);
+    // ─── 3. Open the web app in the user's DEFAULT browser ─────────────
+    //
+    // This is the key change for "authentication in the browser, not
+    // inside Electron". Previously, the web app was opened as a tab
+    // inside the CDP Chrome that Electron spawned — which meant the user
+    // signed into the web app and signed into Google/Gemini inside a
+    // Chrome window that Electron controlled. That felt embedded and
+    // caused issues with session transfer (Google's trusted-device state
+    // doesn't carry over to a copied profile).
+    //
+    // Now the web app opens in the user's default browser (Firefox,
+    // Safari, Edge, or their normal Chrome) via shell.openExternal. The
+    // CDP Chrome still runs in the background for automation — it just
+    // doesn't host the web app UI.
+    if (openBrowser) {
+      progress("open-webapp", `Opening ${webAppUrl} in your default browser...`);
+      try {
         await shell.openExternal(webAppUrl);
+        progress("open-webapp", "Web app opened in your default browser.");
+      } catch (err) {
+        progress("open-webapp:error", `Couldn't open the web app in your browser: ${err.message}. Open ${webAppUrl} manually.`);
       }
     }
 
-    if (cdpActive) {
-      this.log.append("lifecycle", "Ready. The web app is open in the CDP Chrome window.");
-    } else {
-      this.log.append("lifecycle", "Ready. The web app is open in your default browser.");
-    }
+    progress("ready", cdpActive
+      ? "Ready. The web app is open in your default browser; automation runs in the CDP Chrome."
+      : "Ready. The web app is open in your default browser.");
   }
 
   async stopAll(reason = "user") {
@@ -275,16 +309,22 @@ class Lifecycle {
   }
 
   /**
-   * Open the web app. If CDP Chrome is running, open a new tab in it.
-   * Otherwise, open in the user's default browser.
+   * Open the web app in the user's DEFAULT browser.
+   *
+   * Previously this preferred to open a new tab in the running CDP Chrome
+   * (via the DevTools HTTP API). That tied the user's web-app tab to the
+   * CDP Chrome — which felt "embedded inside Electron" and caused session
+   * confusion (Google/Gemini sessions signed into the CDP Chrome didn't
+   * carry trusted-device state, etc.).
+   *
+   * Now we ALWAYS open in the user's default browser via shell.openExternal.
+   * The CDP Chrome still runs for automation — it just doesn't host the
+   * web app UI. This matches the "authentication in the browser, not
+   * inside Electron" requirement.
    */
   async openWebApp() {
     const port = this.server.port || 3000;
     const url = `http://localhost:${port}`;
-    if (this.cdp.isRunning()) {
-      const ok = await this.cdp.openTab(url);
-      if (ok) return;
-    }
     await shell.openExternal(url);
   }
 
