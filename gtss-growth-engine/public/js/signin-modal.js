@@ -2,29 +2,24 @@
  * signin-modal.js — the platform sign-in modal that lives on the web app's
  * root page ("/").
  *
- * ─── What this replaces ──────────────────────────────────────────────────
+ * ─── What this does ────────────────────────────────────────────────────
  *
- * The sign-in modal used to live inside the Electron launcher (desktop
- * renderer). It opened platform login pages in the user's DEFAULT browser
- * via shell.openExternal — which meant fresh cookies never reached the CDP
- * Chrome that actually runs automation (not until a profile clone ran).
+ * Renders a modal on the dashboard that lets the user sign in to each
+ * platform. The modal uses the SAME central server-side authentication
+ * flow that powers /settings#platform-sessions: clicking a platform's
+ * "Login / Re-authenticate" button calls
  *
- * ─── How it works now ────────────────────────────────────────────────────
+ *   POST /api/sessions/authenticate/:platform
  *
- * The modal is rendered here, on the dashboard. When the user clicks a
- * platform's "Open in Chrome" button, we call the bridge HTTP server
- * (desktop/main/bridge-server.js, port 9224) which:
+ * which (in src/automation/executor.js#authenticatePlatform) launches a
+ * visible automation browser, navigates to the platform's login page,
+ * waits for the user to sign in, and persists the session to the
+ * `platform_sessions` SQLite table.
  *
- *   1. Makes sure the CDP Chrome is running VISIBLY (starts it if needed,
- *      or restarts it visibly if it was headless).
- *   2. Opens the platform's login URL in a new tab of that CDP Chrome.
- *
- * Because login happens inside the CDP Chrome — the same browser that
- * automation uses — cookies land in the right profile immediately. We
- * poll the bridge's /api/bridge/cdp/sessions endpoint every few seconds
- * and update each platform card optimistically (green ✓) the moment a
- * session cookie is detected. No profile-clone round-trip, no "sign in
- * again after restarting the app".
+ * Because the modal uses the same endpoint as Settings → Platform
+ * Sessions, the two are perfectly interchangeable: a session started
+ * from the dashboard shows up in Settings (and vice versa), and the
+ * sidebar status dots stay in sync via window.gtss.updateSessionDots().
  *
  * ─── Session validation sources ─────────────────────────────────────────
  *
@@ -32,23 +27,20 @@
  * what the /settings#platform-sessions page shows (and what the
  * automation engine will actually use at runtime):
  *
- *   1. Bridge CDP cookies — /api/bridge/cdp/sessions
- *      Live cookie detection inside the CDP Chrome. Reflects what just
- *      happened in the open login tab.
- *
- *   2. Server-side DB sessions — /api/sessions/details
+ *   1. Server-side DB sessions — /api/sessions/details
  *      The SAME endpoint the Settings page uses. Reads the
  *      `platform_sessions` SQLite table (written by the server-side
  *      authenticate flow in /api/sessions/authenticate/:platform, and
  *      by markSessionActive() during automation runs).
  *
+ *   2. Bridge CDP cookies — /api/bridge/cdp/sessions
+ *      Live cookie detection inside the CDP Chrome (only available
+ *      inside the Electron launcher). Used as a secondary source so
+ *      the modal reflects logins performed in the open CDP Chrome
+ *      tab too.
+ *
  * If EITHER source says the platform is logged in, the card shows
- * green. This means:
- *   - Standalone users (no Electron launcher, no bridge) still see
- *     their saved sessions and the modal still works as a launchpad.
- *   - After a server-side authenticate() run (e.g. from Settings), the
- *     modal reflects the new state without needing the CDP Chrome to be
- *     running.
+ * green.
  *
  * ─── When the modal shows ────────────────────────────────────────────────
  *
@@ -62,23 +54,22 @@
  * session) or "All set" (which writes the sentinel via the bridge so the
  * launcher's next Start uses the normal background flow).
  *
- * ─── Fallback when the bridge isn't reachable ───────────────────────────
+ * ─── Standalone mode ────────────────────────────────────────────────────
  *
  * If the web app is running standalone (npm start inside
  * gtss-growth-engine/, without the Electron launcher), the bridge on
- * 127.0.0.1:9224 won't answer. In that case we still show the modal —
- * but the "Open in Chrome" buttons become "Sign in via Settings" links
- * that route the user to /settings#platform-sessions, which uses the
- * server-side authenticate flow.
+ * 127.0.0.1:9224 won't answer. That's fine — the "Login / Re-authenticate"
+ * button still works because it calls the server-side authenticate
+ * endpoint directly, exactly like the Settings page does.
  *
  * ─── Gemini / Google note ───────────────────────────────────────────────
  *
  * Gemini has no dedicated login endpoint — users sign in at
  * https://gemini.google.com/ with their Google account from inside the
- * CDP Chrome. If the Google session cannot be detected here (cookies
- * not yet picked up, or running standalone without the bridge), the
- * user must either:
- *   (a) open Gemini in the automation Chrome and sign in there, OR
+ * automation browser that the authenticate endpoint launches. If the
+ * Google session cannot be detected here (cookies not yet picked up),
+ * the user must either:
+ *   (a) sign in again via Login / Re-authenticate, OR
  *   (b) provide a Gemini API key in Settings → API Configuration,
  *       which the engine will use as a fallback when no signed-in
  *       browser session is available.
@@ -275,40 +266,37 @@
         </div>
         <div class="gtss-signin-body">
           <p class="gtss-signin-intro">
-            Sign in to each platform inside the <strong>automation Chrome</strong>
-            (the same browser that runs your outreach). Click
-            <strong>Open in Chrome</strong> — a tab opens in the Chrome window
-            at port 9222 where you can log in. Sessions are detected
-            automatically and marked green below. No separate browser sign-in,
-            no profile clone needed.
+            Click <strong>Login / Re-authenticate</strong> on any platform to
+            open its login page in the automation browser. Sign in there — the
+            session is saved automatically and the card turns green below.
+            This is the exact same flow that powers
+            <a href="/settings#platform-sessions">Settings → Platform Sessions</a>,
+            so sessions started here show up there (and vice versa).
           </p>
           <div class="gtss-signin-status">
-            <span id="gtss-signin-cdp-state">Chrome: checking…</span>
+            <span id="gtss-signin-cdp-state">Checking session status…</span>
             <button type="button" id="gtss-signin-refresh" class="gtss-signin-btn-secondary">Refresh</button>
           </div>
           <div id="gtss-signin-grid" class="gtss-signin-grid"></div>
           <p class="gtss-signin-note">
             <strong>Tip:</strong> if a session you just signed in still shows
-            “Not signed in”, click <em>Refresh</em> — cookie detection can take
-            a few seconds. <strong>Google / Gemini</strong> has no dedicated
-            login page; the <em>Open in Chrome</em> button opens Gemini itself
-            — sign in there with your Google account. If you cannot sign in
-            through the automation Chrome, you can also set a
+            “Not signed in”, click <em>Refresh</em> — server-side session
+            detection can take a few seconds to catch up. <strong>Google /
+            Gemini</strong> has no dedicated login page; the
+            <em>Login / Re-authenticate</em> button opens Gemini itself — sign
+            in there with your Google account. If you cannot sign in through
+            the automation browser, you can also set a
             <em>Gemini API key</em> in
             <a href="/settings#api-configuration">Settings → API Configuration</a>
             — the engine will use it as a fallback when no signed-in browser
-            session is available. You must be logged into your Gemini account
-            in the automation Chrome for the API fallback to take over
-            automatically.
+            session is available.
           </p>
           <p class="gtss-signin-note gtss-signin-note-bridge-off" id="gtss-signin-bridge-note" hidden>
             <strong>Standalone mode:</strong> the GTSS launcher isn't running,
-            so “Open in Chrome” isn't available here. Use
-            <a href="/settings#platform-sessions">Settings → Platform Sessions</a>
-            to sign in via the server-side authenticate flow — the same flow
-            that powers the
+            but you can still sign in here — <em>Login / Re-authenticate</em>
+            launches the automation browser server-side, exactly like the
             <a href="/settings#platform-sessions">Platform Sessions</a> section
-            on the Settings page.
+            on the Settings page does.
           </p>
         </div>
         <div class="gtss-signin-foot">
@@ -334,7 +322,6 @@
   function renderGrid() {
     const grid = modalEl.querySelector("#gtss-signin-grid");
     if (!grid) return;
-    const bridgeUp = !!bridgeBase;
     grid.innerHTML = PLATFORMS.map((p) => {
       const state = sessionState[p.key] || { loggedIn: false };
       const loggedIn = Boolean(state.loggedIn);
@@ -347,17 +334,19 @@
       const stateCls = loggedIn ? "logged-in" : "not-logged-in";
       const check = loggedIn ? "✓" : "○";
 
-      // Action button: when the bridge is reachable, we render "Open in
-      // Chrome" (launches the login tab inside the CDP Chrome). When it
-      // isn't, we render "Sign in via Settings" so the user is routed
-      // to the same flow that powers /settings#platform-sessions.
+      // Action button — mirrors the Settings → Platform Sessions flow
+      // exactly. The button always calls the central server-side
+      // /api/sessions/authenticate/:platform endpoint (the same one
+      // settings.js's authenticatePlatform() calls), which launches the
+      // automation browser, lets the user log in, and persists the
+      // session. This works whether or not the GTSS launcher / bridge
+      // is running, so the dashboard modal behaves identically to the
+      // Settings#platform-sessions page.
       let actionBtn;
       if (loggedIn) {
         actionBtn = `<button class="gtss-signin-btn-open" data-platform="${p.key}" title="${escapeHtml(p.hint)}" disabled>✓ Done</button>`;
-      } else if (bridgeUp) {
-        actionBtn = `<button class="gtss-signin-btn-open" data-platform="${p.key}" title="${escapeHtml(p.hint)}">Open in Chrome</button>`;
       } else {
-        actionBtn = `<a class="gtss-signin-btn-open gtss-signin-btn-settings" href="/settings#platform-sessions" title="Open Settings → Platform Sessions to sign in">Sign in via Settings</a>`;
+        actionBtn = `<button class="gtss-signin-btn-open" data-platform="${p.key}" title="${escapeHtml(p.hint)}">Login / Re-authenticate</button>`;
       }
 
       const geminiBadge = p.geminiNote
@@ -381,36 +370,40 @@
       `;
     }).join("");
 
-    // Wire up Open buttons (only present when bridge is up + not yet
-    // logged in). The "Sign in via Settings" anchors are plain links
-    // and need no handler.
+    // Wire up the Login / Re-authenticate buttons. This mirrors
+    // settings.js's authenticatePlatform() exactly: same endpoint
+    // (POST /api/sessions/authenticate/:platform), same in-flight
+    // UX (disable + "Opening browser..."), same post-success refresh
+    // (reload server sessions, re-render grid, update sidebar dots),
+    // same toast copy.
     grid.querySelectorAll(".gtss-signin-btn-open[data-platform]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const key = btn.dataset.platform;
         const platform = PLATFORMS.find((p) => p.key === key);
         if (!platform) return;
-        const original = btn.textContent;
+        const originalText = btn.textContent;
         btn.disabled = true;
-        btn.textContent = "Opening…";
+        btn.textContent = "Opening browser...";
         try {
-          const res = await bridgeFetch("/api/bridge/cdp/open-login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ platform: key }),
-          });
-          if (res.ok) {
-            showToast(`${platform.label} login opened in the automation Chrome — sign in there.`, "info");
-            // Optimistic: poll immediately so the green check appears ASAP.
-            pollOnce();
-          } else {
-            showToast(`Could not open ${platform.label}: ${res.error || "unknown error"}`, "error");
+          await window.gtss.fetchJSON(
+            `/api/sessions/authenticate/${key}`,
+            { method: "POST" },
+          );
+          showToast(`${platform.label} session saved`, "success");
+          // Refresh the server-side session state, re-render the
+          // grid, and update the sidebar dots — same as settings.
+          await pollOnce();
+          if (window.gtss && typeof window.gtss.updateSessionDots === "function") {
+            window.gtss.updateSessionDots();
           }
         } catch (err) {
-          showToast(`Bridge unreachable: ${err.message}. Is the GTSS launcher running?`, "error");
+          showToast(err.message || `Could not authenticate ${platform.label}.`, "error");
         } finally {
-          btn.textContent = original;
           const state = sessionState[key];
-          if (!state || !state.loggedIn) btn.disabled = false;
+          if (!state || !state.loggedIn) {
+            btn.disabled = false;
+          }
+          btn.textContent = originalText;
         }
       });
     });
@@ -435,13 +428,16 @@
   function updateCdpStateLabel(running) {
     const el = modalEl.querySelector("#gtss-signin-cdp-state");
     if (!el) return;
+    // The modal uses the central server-side authenticate flow (same
+    // as Settings → Platform Sessions), so the bridge / CDP Chrome
+    // status is informational only — login works regardless.
     if (!bridgeBase) {
-      el.textContent = "Chrome: launcher not running — use Settings to sign in.";
+      el.textContent = "Standalone mode — login launches the automation browser server-side.";
       return;
     }
     el.textContent = running
-      ? "Chrome: running (visible, port 9222)"
-      : "Chrome: not running — click a platform to launch it.";
+      ? "Automation Chrome: running (visible, port 9222)."
+      : "Automation Chrome: not running — login will launch it automatically.";
   }
 
   function updateBridgeNote() {

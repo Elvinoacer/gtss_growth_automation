@@ -343,21 +343,38 @@ document.addEventListener("DOMContentLoaded", () => {
           <div class="text-[10px] text-slate-400">Last: ${lastActive}</div>
         </div>
         ${statusBadge}
-        ${!active ? `<button class="reauth-btn text-[10px] font-semibold text-sky-300 hover:text-sky-200" data-platform="${platform}">Connect</button>` : ""}`;
+        ${!active ? `<button class="reauth-btn text-[10px] font-semibold text-sky-300 hover:text-sky-200" data-platform="${platform}">Login / Re-authenticate</button>` : ""}`;
       panel.appendChild(div);
     });
 
     panel.querySelectorAll(".reauth-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const platform = btn.dataset.platform;
+        // Mirror settings.js#authenticatePlatform exactly: disable the
+        // button, show in-flight status, call the central server-side
+        // authenticate endpoint, refresh the dashboard panel + sidebar
+        // dots, and restore the button label afterwards.
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Opening browser...";
         try {
-          const data = await fetchJSON(
-            `/api/sessions/authenticate/${platform}`,
-            { method: "POST" },
-          );
-          showToast(data.message, "info");
+          await fetchJSON(`/api/sessions/authenticate/${platform}`, {
+            method: "POST",
+          });
+          showToast(`${platform} session saved`, "success");
+          // Refresh the dashboard's session panel + the sidebar dots.
+          await loadStats();
+          if (
+            window.gtss &&
+            typeof window.gtss.updateSessionDots === "function"
+          ) {
+            window.gtss.updateSessionDots();
+          }
         } catch (e) {
           showToast(e.message, "error");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = originalText;
         }
       });
     });
