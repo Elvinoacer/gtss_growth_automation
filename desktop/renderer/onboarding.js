@@ -285,15 +285,21 @@ $("#onboard-step2-next").addEventListener("click", () => {
 //   "browser:error"→ step "browser" error
 //   "clone"        → step "clone" active
 //   "endpoint"     → step "endpoint" active
-//   "open-webapp"  → step "open-webapp" active
-//   "open-webapp:error" → step "open-webapp" error
 //   "ready"        → all steps done
 //
 // The stage order matches the visual order of the steps in the HTML.
 // When a later stage arrives, all earlier stages are marked done (so a
 // skipped stage — e.g., "clone" when attaching to an existing Chrome —
 // still shows a green checkmark).
-const STAGE_ORDER = ["server", "browser", "clone", "endpoint", "open-webapp", "ready"];
+//
+// NOTE: the "open-webapp" stage is no longer part of the onboarding
+// checklist. Per the Launch Sequence UX Strategy, onboarding runs
+// background-only (visible: false, openBrowser: false) — no web app is
+// opened during the wizard. The web app opens later, when the user
+// presses Start in the launcher. The "open-webapp" stage is still emitted
+// by Lifecycle.startAll() when openBrowser: true (launcher Start), but
+// that path uses the launcher's own UI, not this checklist.
+const STAGE_ORDER = ["server", "browser", "clone", "endpoint", "ready"];
 
 const finishProgressEl = $("#finish-progress");
 const finishErrorEl = $("#finish-progress-error");

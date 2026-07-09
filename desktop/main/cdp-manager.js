@@ -253,6 +253,15 @@ class CdpManager {
     this.chromePath = null;
     this.lastError = null;
     this.startedAt = null;
+    // Tracks the visibility of the Chrome we spawned (or attached to).
+    //   true  — we spawned Chrome with a visible window (launcher Start / tray).
+    //   false — we spawned Chrome headless (onboarding / background setup).
+    //   null  — we ATTACHED to an externally-launched Chrome via
+    //           _tryAttachExisting(); we don't know (and don't control)
+    //           its visibility. Used by Lifecycle.startAll() to decide
+    //           whether to restart Chrome visibly when the user presses
+    //           Start in the launcher (headless → visible transition).
+    this.startedVisible = null;
   }
 
   isRunning() {
@@ -311,8 +320,17 @@ class CdpManager {
    *   the multi-step startup sequence (locating Chrome, cloning profile,
    *   preparing endpoint, waiting for port). Every message is ALSO pushed
    *   into the logStream so the launcher's Logs tab surfaces the same info.
+   * @param {boolean} [opts.visible=true] — when false, Chrome is spawned
+   *   with `--headless=new` and `windowsHide: true` so NO window, tab, or
+   *   navigation is ever drawn on screen. This is the mode that MUST be
+   *   used for every background/setup call (onboarding's lifecycle.startAll,
+   *   the legacy cdp:start-standalone path, the onboarding "Restart Chrome"
+   *   button). The user should never see a Chrome window they didn't ask
+   *   for; visible Chrome is reserved for the moment the user explicitly
+   *   presses Start in the launcher. See the "Launch Sequence UX Strategy"
+   *   doc for the full ordering contract.
    */
-  async start({ openUrl, skipProfileCopy = false, onProgress } = {}) {
+  async start({ openUrl, skipProfileCopy = false, visible = true, onProgress } = {}) {
     if (this.child) {
       throw new Error(`CDP Chrome already running (pid ${this.child.pid})`);
     }
@@ -381,6 +399,31 @@ class CdpManager {
     }
 
     // 3. Spawn Chrome with remote debugging.
+    //
+    // ─── Visibility contract (Launch Sequence UX Strategy) ──────────────
+    //
+    // `visible` controls whether the spawned Chrome draws a window on
+    // screen. The project's inviolable rule: the user should NEVER see a
+    // Chrome window they didn't ask for.
+    //
+    //   visible: true  (default) — Chrome opens a normal visible window.
+    //     Used ONLY when the user explicitly pressed Start in the launcher
+    //     (or the tray Quick Start). This is the first legitimate moment a
+    //     visible browser window is expected.
+    //
+    //   visible: false — Chrome is spawned with `--headless=new` and
+    //     `windowsHide: true` so NO window, tab, or navigation is ever
+    //     drawn. Used for every background/setup call: onboarding's
+    //     lifecycle.startAll(), the legacy cdp:start-standalone path, and
+    //     the onboarding "Restart Chrome" button. Headless Chrome still
+    //     exposes the full CDP endpoint (clone, session check, warm-up),
+    //     so background work proceeds identically — the user just doesn't
+    //     see it.
+    //
+    // `openUrl` is OPT-IN and must be OMITTED entirely during clone/setup
+    // (do not rely on downstream logic to suppress navigation). Only pass
+    // it when the launcher explicitly wants to open the web app in a tab
+    // post-Start.
     progress("endpoint", "Preparing CDP endpoint...");
     const args = [
       `--remote-debugging-port=${this.port}`,
@@ -394,20 +437,35 @@ class CdpManager {
       "--disable-features=ChromeWhatsNewUI",
     ];
 
-    // If a URL was provided, Chrome will open it in a new tab on launch.
-    // This is how the web app opens INSIDE the CDP Chrome.
+    // Headless mode for background/setup calls. `--headless=new` (Chrome
+    // 109+) runs a real renderer with full CDP support but no visible
+    // window — exactly what onboarding needs (clone, session check,
+    // warm-up) without stealing focus or showing Chrome's native
+    // "Who's using Chrome?" profile picker on an empty user-data-dir.
+    if (!visible) {
+      args.push("--headless=new");
+    }
+
+    // `openUrl` is opt-in. When provided, Chrome opens it in a new tab on
+    // launch. This is how the launcher opens the web app INSIDE the CDP
+    // Chrome. During clone/setup, callers MUST omit `openUrl` entirely —
+    // never pass it and rely on downstream suppression.
     if (openUrl) {
       args.push(openUrl);
       this.logStream.append("cdp", `Will open ${openUrl} on launch.`);
     }
 
 
-    this.logStream.append("cdp", `Launching Chrome on port ${this.port}...`);
+    this.logStream.append("cdp", `Launching Chrome on port ${this.port} (visible=${visible})...`);
     this.child = spawn(this.chromePath, args, {
       cwd: this.cdpProfileDir,
       stdio: ["ignore", "pipe", "pipe"],
       detached: false,
-      windowsHide: false, // Chrome should be visible to the user.
+      // Hide the spawn console window on Windows when headless. Chrome's
+      // own window visibility is controlled by `--headless=new` above; this
+      // flag only suppresses the OS-level console that Node would otherwise
+      // flash on Windows.
+      windowsHide: !visible,
     });
 
     this.child.stdout.on("data", (buf) => {
@@ -450,6 +508,11 @@ class CdpManager {
       await this.waitForPort(this.port, 15000);
       this.state = "running";
       this.startedAt = new Date().toISOString();
+      // Record the visibility of the Chrome we just spawned so
+      // Lifecycle.startAll() can decide whether to restart it visibly
+      // when the user presses Start in the launcher (headless → visible
+      // transition).
+      this.startedVisible = visible;
       progress("ready", `CDP ready at http://127.0.0.1:${this.port}`);
     } catch (err) {
       this.state = "crashed";
@@ -494,6 +557,10 @@ class CdpManager {
       this.state = "running";
       this.startedAt = new Date().toISOString();
       this.lastError = null;
+      // We adopted a Chrome we didn't spawn — we don't know whether it's
+      // visible or headless, and we don't control it. startedVisible stays
+      // null so Lifecycle.startAll() won't try to restart it for visibility.
+      this.startedVisible = null;
       const banner = info.Browser
         ? `Reusing existing Chrome on port ${this.port} (${info.Browser}). No new browser spawned.`
         : `Reusing existing Chrome on port ${this.port}. No new browser spawned.`;
@@ -853,11 +920,19 @@ class CdpManager {
   async restart(options = {}) {
     await this.stop("restart");
     await new Promise((r) => setTimeout(r, 500));
-    // Forward onProgress to start() so the onboarding Finish screen's
-    // "Restart Chrome" button can show clone-stage progress (including
-    // a fresh `clone:warning` if the user's real Chrome is STILL holding
-    // SQLite locks after the first attempt).
-    await this.start({ onProgress: options.onProgress });
+    // Forward onProgress AND visibility to start() so the onboarding
+    // Finish screen's "Restart Chrome" button can show clone-stage
+    // progress (including a fresh `clone:warning` if the user's real
+    // Chrome is STILL holding SQLite locks after the first attempt)
+    // WITHOUT flashing a visible Chrome window — onboarding's Restart
+    // Chrome stays headless, matching the Launch Sequence UX Strategy.
+    // `options.visible` is undefined when not passed, which lets start()
+    // apply its own default (visible: true). Callers in onboarding
+    // context MUST explicitly pass visible: false.
+    await this.start({
+      visible: options.visible,
+      onProgress: options.onProgress,
+    });
   }
 
   // ─── Profile management ──────────────────────────────────────────────────

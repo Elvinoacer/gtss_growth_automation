@@ -140,7 +140,26 @@ app.whenReady().then(async () => {
       // panel. If startup fails, the onboarding window stays open and
       // shows the error so the user can retry.
       try {
-        await lifecycle.startAll({ openBrowser: true, onProgress: sendProgress });
+        // ─── Launch Sequence UX Strategy: onboarding runs background-only ──
+        //
+        // visible: false  — Chrome is spawned HEADLESS (no window, no tab,
+        //   no navigation). The wizard's progress screen narrates server
+        //   boot + profile clone + endpoint ready with ZERO surprise
+        //   windows. The user never sees a Chrome window they didn't ask
+        //   for. Chrome only becomes visible later, when the user presses
+        //   Start in the launcher (see the lifecycle:start IPC handler in
+        //   ipc-handlers.js, which calls startAll({ visible: true })).
+        //
+        // openBrowser: false — do NOT open the web app in the user's
+        //   default browser during onboarding. The launcher is the next
+        //   surface the user sees; opening a browser tab here would be a
+        //   surprise window competing with the launcher for focus. The
+        //   web app opens when the user presses Start in the launcher.
+        await lifecycle.startAll({
+          visible: false,
+          openBrowser: false,
+          onProgress: sendProgress,
+        });
       } catch (err) {
         logStream.append("lifecycle:stderr", `Auto-start after onboarding failed: ${err.message}`);
         logStream.append("lifecycle", "Click Finish & start to retry, or click Start on the Control tab later.");
@@ -269,6 +288,8 @@ function createTray() {
       label: "Quick Start",
       click: async () => {
         if (lifecycle && !lifecycle.isRunning()) {
+          // User-initiated (tray menu) → visible Chrome + open web app.
+          // lifecycle.startAll() defaults to visible: true, openBrowser: true.
           await lifecycle.startAll();
         }
         if (mainWindow) mainWindow.show();

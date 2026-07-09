@@ -124,8 +124,30 @@ class Lifecycle {
    * If CDP can't start (Chrome not installed), fall back to Playwright's
    * persistent browser mode but STILL open the web app in the default
    * browser — the user's auth flow is unaffected.
+   *
+   * ─── Visibility (Launch Sequence UX Strategy) ──────────────────────────
+   *
+   * `visible` controls whether the CDP Chrome draws a window on screen:
+   *
+   *   visible: false — Chrome is spawned headless. Used by onboarding's
+   *     onOnboardingComplete() so the wizard's progress screen narrates
+   *     background work (server boot, clone, endpoint ready) with ZERO
+   *     surprise windows. The user never sees a Chrome window they didn't
+   *     ask for.
+   *
+   *   visible: true (default) — Chrome is spawned with a visible window.
+   *     Used when the user explicitly presses Start in the launcher (or
+   *     the tray Quick Start). If CDP is already running headless (from
+   *     onboarding), we RESTART it visibly so the user sees Chrome appear
+   *     as a direct result of pressing Start — the first legitimate moment
+   *     a visible browser window is expected.
+   *
+   * `openBrowser` controls whether the web app URL is opened in the user's
+   * DEFAULT browser via shell.openExternal. During onboarding this is
+   * false (no surprise browser windows); from the launcher Start it's
+   * true (the user pressed Start, they want to use the app).
    */
-  async startAll({ openBrowser = true, onProgress } = {}) {
+  async startAll({ openBrowser = true, visible = true, onProgress } = {}) {
     const progress = (stage, message) => {
       try {
         this.log.append("lifecycle", message);
@@ -172,12 +194,21 @@ class Lifecycle {
     let cdpActive = false;
     try {
       if (!this.cdp.isRunning()) {
-        progress("browser", "Initializing browser...");
+        // ─── No CDP running: spawn fresh with requested visibility ──────
+        //
+        // visible: false → headless Chrome (onboarding background work).
+        // visible: true  → visible Chrome (launcher Start / tray Quick
+        //   Start). This is the first legitimate moment a visible browser
+        //   window is expected and welcome.
+        //
         // NOTE: We deliberately do NOT pass openUrl here. The web app is
         // opened in the user's DEFAULT browser (step 4 below) — not in
         // the CDP Chrome — so platform authentication happens where the
-        // user is already comfortable.
+        // user is already comfortable. `openUrl` is opt-in per the
+        // Launch Sequence UX Strategy guardrails.
+        progress("browser", "Initializing browser...");
         await this.cdp.start({
+          visible,
           onProgress: (stage, message) => {
             // Map CDP stage names to our high-level stages so the
             // onboarding wizard's progress UI can highlight the right step.
@@ -199,6 +230,30 @@ class Lifecycle {
               // Surface init / endpoint / almost-ready as part of the
               // browser stage (the wizard groups them under
               // "Initializing the automation browser").
+              progress("browser", message);
+            }
+          },
+        });
+        cdpActive = true;
+      } else if (visible && this.cdp.startedVisible === false) {
+        // ─── Headless → visible transition ───────────────────────────────
+        //
+        // CDP is already running but was spawned HEADLESS by onboarding's
+        // lifecycle.startAll({ visible: false }). The user has now pressed
+        // Start in the launcher (visible: true) — the first legitimate
+        // moment a visible browser window is expected. We restart CDP
+        // visibly so Chrome appears on screen as a direct result of the
+        // user's action. The --user-data-dir is unchanged, so the profile
+        // cloned during onboarding (with all the user's logins) is
+        // preserved across the restart.
+        progress("browser", "Bringing Chrome to the foreground...");
+        await this.cdp.stop("visibility-change");
+        await this.cdp.start({
+          visible: true,
+          onProgress: (stage, message) => {
+            if (stage === "ready") {
+              progress("browser", "Browser ready (visible).");
+            } else if (stage === "init" || stage === "endpoint" || stage === "almost-ready") {
               progress("browser", message);
             }
           },
@@ -265,11 +320,18 @@ class Lifecycle {
       } catch (err) {
         progress("open-webapp:error", `Couldn't open the web app in your browser: ${err.message}. Open ${webAppUrl} manually.`);
       }
+      progress("ready", cdpActive
+        ? "Ready. The web app is open in your default browser; automation runs in the CDP Chrome."
+        : "Ready. The web app is open in your default browser.");
+    } else {
+      // Onboarding path (openBrowser: false) — no surprise browser window.
+      // The web app will be opened later, when the user presses Start in
+      // the launcher. The progress screen narrates background readiness
+      // only, per the Launch Sequence UX Strategy.
+      progress("ready", cdpActive
+        ? "Ready. Server and automation browser are running in the background."
+        : "Ready. Server is running in the background.");
     }
-
-    progress("ready", cdpActive
-      ? "Ready. The web app is open in your default browser; automation runs in the CDP Chrome."
-      : "Ready. The web app is open in your default browser.");
   }
 
   async stopAll(reason = "user") {
@@ -314,6 +376,8 @@ class Lifecycle {
 
   async startCdpOnly() {
     if (this.cdp.isRunning()) return;
+    // User-initiated (advanced CDP-only control) → visible Chrome.
+    // cdp.start() defaults to visible: true.
     await this.cdp.start();
     if (this.cdp.port) {
       this.env.upsert("CDP_ENDPOINT", `http://127.0.0.1:${this.cdp.port}`);

@@ -38,7 +38,16 @@ function registerIpcHandlers({
 
   ipcMain.handle("lifecycle:start", async () => {
     try {
-      await lifecycle.startAll({ openBrowser: true });
+      // ─── Launcher Start: Chrome becomes visible HERE ──────────────────
+      //
+      // This is the FIRST legitimate moment a visible Chrome window is
+      // expected and welcome. If onboarding spawned Chrome headless
+      // (lifecycle.startAll({ visible: false }) in onOnboardingComplete),
+      // Lifecycle.startAll() will restart it visibly so the user sees
+      // Chrome appear as a direct result of pressing Start. The web app
+      // also opens in the user's default browser — the user pressed
+      // Start, they want to use the app.
+      await lifecycle.startAll({ visible: true, openBrowser: true });
       return { ok: true, status: lifecycle.getStatus() };
     } catch (err) {
       return { ok: false, error: err.message };
@@ -133,7 +142,15 @@ function registerIpcHandlers({
   // "onboarding:progress" channel — see lifecycle.startAll).
   ipcMain.handle("cdp:restart", async () => {
     try {
+      // Onboarding context → headless. The "Restart Chrome" button on the
+      // onboarding Finish screen re-runs the profile clone after the user
+      // closed their real Chrome (clone:warning). Chrome must stay
+      // headless here — the launcher hasn't opened yet, so a visible
+      // Chrome window would be a surprise window competing with the
+      // wizard. Visible Chrome is reserved for the launcher's Start
+      // button (see lifecycle:start).
       await cdpManager.restart({
+        visible: false,
         onProgress: (_stage, message) => {
           try { logStream.append("cdp", message); } catch (_) {}
         },
@@ -195,8 +212,14 @@ function registerIpcHandlers({
         // (skipProfileCopy: true) — the slow clone is deferred to
         // lifecycle.startAll() which runs with live progress feedback in
         // the launcher UI.
+        //
+        // visible: false — this is a background/setup path (legacy
+        // "just get Chrome up"). Per the Launch Sequence UX Strategy,
+        // background tasks must NEVER draw a visible window. Visible
+        // Chrome is reserved for the launcher's Start button.
         await cdpManager.start({
           skipProfileCopy: true,
+          visible: false,
           onProgress: (_stage, message) => {
             // The CdpManager already appends to logStream, but we also
             // surface a high-level lifecycle banner so the launcher's Logs
@@ -241,9 +264,15 @@ function registerIpcHandlers({
       // responding to a "missing sessions" prompt, so they're about to
       // sign in anyway; no point cloning a profile they're going to
       // overwrite with fresh logins).
+      //
+      // visible: true — this is a USER-INITIATED action (the user clicked
+      // a button in the "Missing sessions" modal to open a login URL).
+      // They expect to SEE Chrome so they can sign in. This is not a
+      // background task; visible Chrome is correct here.
       if (!cdpManager.isRunning()) {
         await cdpManager.start({
           skipProfileCopy: true,
+          visible: true,
           onProgress: (_stage, message) => logStream.append("lifecycle", message),
         });
         envBootstrap.upsert("CDP_ENDPOINT", `http://127.0.0.1:${cdpManager.port}`);
