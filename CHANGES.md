@@ -715,3 +715,86 @@ whether the hang was auth-related or startup-related.
 **Verification:** `node scripts/validate-js.js` reports 13/13 desktop
 JS files pass syntax check. No engine (`gtss-growth-engine/`) files
 were modified.
+
+### 4. Profile-clone freeze — selective async atomic copy
+
+**Problem:** Even after fix 3 above, users on Windows still saw the
+"GTSS Growth Engine is not responding" dialog during the "Setting things
+up..." phase of onboarding. The previous fix made `copyDirSelective`
+`async` and added `setImmediate` yields every 50 files, but kept
+`fs.copyFileSync` per file — which is itself blocking I/O. Each large
+file copy (5–50MB IndexedDB blobs, LevelDB MANIFEST files, etc.) blocked
+the Electron main thread for tens-to-hundreds of milliseconds. Over
+5,000–50,000 files, that added up to a 10–60+ second main-thread freeze.
+
+The strip list (`PROFILE_STRIP_DIRS`) was also too narrow: it stripped
+`Cache`, `Code Cache`, `GPUCache`, `Service Worker/CacheStorage`,
+`Service Worker/ScriptCache`, `GrShaderCache`, `ShaderCache`,
+`Downloads`, `Crashpad`, `component_crx_cache` — but did NOT strip the
+actual heavy hitters: `IndexedDB`, `Local Storage`, `Sessions`,
+`Media Cache`, `Storage`, the `Service Worker` parent tree, etc. Those
+typically make up 90%+ of a Chrome profile's size (500MB–5GB).
+
+**Fix — selective async atomic clone:**
+
+- `desktop/main/cdp-manager.js` — replaced the "copy entire `Default/`
+  dir minus a strip list" approach with a whitelist of session-bearing
+  files only:
+    - `Cookies`, `Cookies-journal` (session cookies — SQLite)
+    - `Login Data`, `Login Data-journal`, `Login Data For Account` (saved
+      logins — SQLite, encrypted via `Local State` + OS keyring)
+    - `Web Data`, `Web Data-journal` (autofill, payment methods — SQLite)
+    - `Preferences`, `Secure Preferences` (JSON)
+    - `TransportSecurity` (HSTS — SQLite)
+    - `Favicons`, `Favicons-journal`, `History`, `History-journal`,
+      `Top Sites`, `Top Sites-journal` (small UX-improving SQLite)
+    - `Network/Cookies`, `Network/Network Persistent State` (newer
+      Chrome layouts)
+    - `Local State` (top-level; carries the `os_crypt.encrypted_key`
+      blob needed to decrypt the above on Windows/macOS — same user +
+      same machine preserves decryption)
+  Each file is normally <8MB; total clone drops from 10–60+ seconds
+  (multi-GB) to <1 second (a few MB).
+- All file I/O switched from `fs.*Sync` to `fs.promises.*` (`fsp.*`),
+  which runs on libuv's thread pool — never the main thread. No more
+  per-file blocking.
+- Each file copied atomically: write to `<dest>.tmp.<pid>` then rename
+  in the destination dir (same-dir rename is atomic on POSIX and on
+  NTFS). A crash mid-copy or a Windows "force quit" never leaves a
+  half-written Cookies/Login Data file that would short-circuit the
+  `profileLooksPopulated` check on the next launch. This closes the
+  regression the previous fix was trying to address.
+- Files copied in parallel batches of 4 (`CLONE_CONCURRENCY`) for speed.
+- 8MB per-file size cap (`SESSION_FILE_MAX_BYTES`) as defense in depth.
+- The expanded `PROFILE_STRIP_DIRS` (now includes `IndexedDB`,
+  `Local Storage`, `Session Storage`, `Storage`, `Sessions`, `Service
+  Worker`, `Media Cache`, `blob_storage`, `File System`, `SyncData`,
+  `optimization_guide*`, `webrtc_event_logs`, etc.) is retained for
+  the rare fallback `copyDirAsync` path — only used when the source
+  profile has NO session files (e.g., a fresh Chrome install that has
+  never had any logins). The fallback path's `fs.copyFileSync` was
+  also replaced with `fsp.copyFile`, and the `setImmediate` yield
+  cadence tightened from every 50 files to every 16.
+- `gtss-growth-engine/scripts/launch-chrome.sh` — mirrored the same
+  selective-copy logic. Replaced `cp -r "$SOURCE_PROFILE/Default"`
+  with a per-file atomic `cp` loop over the same `SESSION_FILES`
+  whitelist, with the same 8MB cap and the same `Local State` top-level
+  copy. Bash uses `cp -p` to a `.tmp.$$` then `mv -f` for atomicity.
+
+**Why cloning IS still necessary:** Chrome forbids
+`--remote-debugging-port` against the user's default profile dir, AND
+the user's real Chrome holds exclusive SQLite locks on the Cookies /
+Login Data files when running. So we MUST copy the session-bearing
+files to a separate `chrome-cdp-profile/` dir. But we no longer copy
+the multi-GB caches — only the small files that actually carry login
+state.
+
+**Verification:** `node scripts/validate-js.js` reports 13/13 desktop
+JS files pass syntax check. A standalone functional test of the new
+helpers (`atomicCopyFile`, `cloneSessionFiles`) was run end-to-end
+against a fake Chrome profile tree containing real session files plus
+20MB IndexedDB blobs — all 14 assertions pass: session files copied
+correctly, heavy dirs skipped, subdir `Network/Cookies` created on
+demand, atomic rename leaves no `.tmp` leftovers, and a simulated
+crash-leftover `.tmp` file is overwritten cleanly on the next run.
+`bash -n launch-chrome.sh` passes. `.git/` directory untouched.

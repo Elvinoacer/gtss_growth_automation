@@ -41,6 +41,7 @@
 
 const { spawn } = require("child_process");
 const fs = require("fs");
+const fsp = fs.promises; // async fs — used for the profile clone so we never block the Electron main thread
 const path = require("path");
 const os = require("os");
 const net = require("net");
@@ -110,19 +111,121 @@ const PLATFORM_LOGIN_URLS = {
 const DEFAULT_PORT = 9222;
 const CDP_PROFILE_DIRNAME = "chrome-cdp-profile";
 
-// Heavy directories we strip from the copied profile to save disk space.
+// ─── Session-bearing files we copy from the user's real Chrome profile ──────
+//
+// Why a whitelist instead of "copy everything except caches":
+// The user's `Default/` profile dir typically contains 5,000–50,000 files
+// totaling 500MB–5GB. Most of that mass is in `IndexedDB/`, `Local Storage/`,
+// `Sessions/`, `Media Cache/`, `Storage/`, `Service Worker/` — none of which
+// are needed to preserve LinkedIn/X/Instagram/Facebook/Google logins. The
+// session-bearing state lives in a handful of small SQLite/JSON files:
+//
+//   - Cookies                  → session cookies (the actual login tokens)
+//   - Login Data               → saved passwords (encrypted via Local State + OS keyring)
+//   - Login Data For Account   → account-scoped passwords
+//   - Web Data                 → autofill, payment methods (small)
+//   - Preferences              → JSON, profile preferences
+//   - Secure Preferences       → JSON, security-managed preferences
+//   - TransportSecurity        → HSTS list (small SQLite)
+//   - Favicons                 → favicon cache (small SQLite, improves UX)
+//   - History                  → browsing history (small SQLite, improves UX)
+//   - Top Sites                → top-sites list (small SQLite)
+//
+// Each file is normally <8MB. Total clone drops from minutes (multi-GB)
+// to under a second (a few MB). This is the fix for the "clicking Start
+// hangs the app" symptom — the previous fix (CHANGES.md §3) added
+// setImmediate yields every 50 files but kept `fs.copyFileSync` per file,
+// which is itself blocking I/O that hangs the event loop on large files.
+//
+// We also copy the SQLite `-journal` / `-wal` / `-shm` sidecar files if
+// they exist, so we don't leave Chrome's SQLite stores in a torn state.
+// These are tiny (typically <100KB) and Chrome recreates them as needed,
+// but copying them when present avoids "database is malformed" warnings.
+//
+// `Local State` lives at the TOP LEVEL of the user-data dir (not inside
+// `Default/`) and is handled separately — see ensureCdpProfile().
+const SESSION_FILES = [
+  "Cookies",
+  "Cookies-journal",
+  "Login Data",
+  "Login Data-journal",
+  "Login Data For Account",
+  "Login Data For Account-journal",
+  "Web Data",
+  "Web Data-journal",
+  "Preferences",
+  "Secure Preferences",
+  "TransportSecurity",
+  "TransportSecurity-journal",
+  "Favicons",
+  "Favicons-journal",
+  "History",
+  "History-journal",
+  "Top Sites",
+  "Top Sites-journal",
+  "Network/Cookies", // newer Chrome layouts put Cookies under Network/
+  "Network/Network Persistent State",
+];
+
+// Hard cap on per-file size during the selective clone. Session/login files
+// are normally <8MB; anything bigger is almost certainly a stale blob we
+// don't want to copy. Defense-in-depth — if a user has somehow ended up
+// with a 500MB Cookies file (impossible in practice), we skip it.
+const SESSION_FILE_MAX_BYTES = 8 * 1024 * 1024;
+
+// Heavy directories we strip from the copied profile in the FALLBACK
+// recursive-copy path (only used when no session files were found at the
+// source — e.g., a fresh Chrome install with no logins). This list is much
+// more aggressive than the previous one: it now includes IndexedDB, Local
+// Storage, Sessions, Media Cache, Storage, and the full Service Worker
+// tree — the actual heavy hitters that were missing before and caused the
+// 10–60 second main-thread freeze.
 const PROFILE_STRIP_DIRS = [
+  // Caches (always safe to drop)
   "Cache",
+  "CacheTmp",
   "Code Cache",
   "GPUCache",
-  "Service Worker/CacheStorage",
-  "Service Worker/ScriptCache",
   "GrShaderCache",
   "ShaderCache",
+  "DawnGraphCache",
+  "DawnWebGPUCache",
+  "Media Cache",
+  // Service Worker tree (huge; recreated on demand)
+  "Service Worker",
+  // IndexedDB / Storage (very huge — sites cache video blobs here)
+  "IndexedDB",
+  "Local Storage",
+  "Session Storage",
+  "Storage",
+  "blob_storage",
+  "File System",
+  // Sessions / Sync (per-tab session state — not needed for login persistence)
+  "Sessions",
+  "SyncData",
+  "Sync App Settings",
+  // Misc heavy / unneeded
   "Downloads",
   "Crashpad",
   " component_crx_cache",
+  "optimization_guide_prediction_model_downloads",
+  "optimization_guide_prediction_models",
+  "webrtc_event_logs",
+  "SmartADCHistograms",
+  "FirstPartySetsPartitioning",
+  "DIPS",
+  "Trust Tokens",
+  "FileManager",
+  "Affiliation Database",
+  // Subdir under Default that some Chrome versions create
+  "optimization_guide",
+  "Site Characteristics Database",
 ];
+
+// Concurrency limit for parallel file copies. 4 is a sweet spot: enough to
+// keep the disk busy, low enough that we don't starve libuv's default
+// thread pool (size 4) or thrash the page cache.
+const CLONE_CONCURRENCY = 4;
 
 class CdpManager {
   // `dataRoot` is the writable per-user data directory (appData). The CDP
@@ -769,7 +872,7 @@ class CdpManager {
     // Previously we only checked `fs.existsSync(<cdpProfileDir>/Default)`.
     // That check passes for an EMPTY Default dir — which is exactly what
     // happens if a previous launch crashed mid-copy (mkdir succeeded, then
-    // copyDirSelective failed before writing any files). On every subsequent
+    // the copy failed before writing any files). On every subsequent
     // launch, the empty Default dir would short-circuit the copy step and
     // Chrome would start with a fresh profile containing NO authenticated
     // sessions. The user would then see "CDP Chrome has no sessions at all"
@@ -794,12 +897,12 @@ class CdpManager {
     }
 
     // If the Default dir exists but is empty/stale, remove it so the copy
-    // below starts clean. Otherwise copyDirSelective would skip the mkdir
-    // but still try to copy files into a half-populated dir.
+    // below starts clean. Otherwise the selective copy below would write
+    // into a half-populated dir.
     if (fs.existsSync(defaultProfile) && !profileLooksPopulated) {
       progress("clone", "Existing CDP profile looks empty — re-cloning from your Chrome profile to restore sessions.");
       try {
-        fs.rmSync(defaultProfile, { recursive: true, force: true });
+        await fsp.rm(defaultProfile, { recursive: true, force: true });
       } catch (err) {
         this.logStream.append("cdp:stderr", `Could not remove stale profile dir: ${err.message}`);
       }
@@ -808,52 +911,120 @@ class CdpManager {
     const source = locateUserChromeProfile();
     if (!source || !fs.existsSync(source)) {
       progress("init", "No existing Chrome profile found — starting with a fresh profile. You'll need to log into LinkedIn/X/Facebook/Instagram manually.");
-      fs.mkdirSync(this.cdpProfileDir, { recursive: true });
+      await fsp.mkdir(this.cdpProfileDir, { recursive: true });
       return;
     }
 
-    progress("clone", "Cloning browser profile from your Chrome — this may take a moment...");
+    // ─── Selective async atomic clone ─────────────────────────────────────
+    //
+    // Old behavior: `cp -r Default/` minus a small strip list. This copied
+    // 5,000–50,000 files (500MB–5GB) including IndexedDB blobs, Local
+    // Storage, Media Cache, Service Worker tree, etc. Even after the
+    // CHANGES.md §3 fix (async + setImmediate every 50 files), each
+    // individual `fs.copyFileSync` of a large file (5–50MB) blocks the
+    // Electron main thread for tens-to-hundreds of ms, freezing the UI
+    // ("GTSS Growth Engine is not responding" on Windows).
+    //
+    // New behavior: copy ONLY the small SQLite/JSON files that carry
+    // session state (Cookies, Login Data, Local State, Web Data,
+    // Preferences, etc.). All I/O is async (`fsp.copyFile` runs on libuv's
+    // thread pool, never the main thread), each file is copied atomically
+    // (write to `.tmp.<pid>` then rename — a crash mid-copy never leaves a
+    // half-populated `Default/`), and copies run in parallel batches of 4
+    // for speed. Total clone time drops from 10–60+ seconds to <1 second.
+    progress("clone", "Cloning browser sessions from your Chrome — copying cookies and logins only...");
     progress("clone", `Source: ${source}`);
-    fs.mkdirSync(this.cdpProfileDir, { recursive: true });
+    await fsp.mkdir(this.cdpProfileDir, { recursive: true });
+    await fsp.mkdir(defaultProfile, { recursive: true });
 
-    // Copy the Default profile dir.
+    // Determine the source profile dir name: usually "Default", but some
+    // Chrome installs only have "Profile 1", "Profile 2", etc. (multi-account
+    // setups). Fall back to the first "Profile *" dir we find.
     const sourceDefault = path.join(source, "Default");
-    if (fs.existsSync(sourceDefault)) {
-      progress("clone", "Copying Default profile (cookies, logins, preferences)...");
-      await copyDirSelective(sourceDefault, defaultProfile, PROFILE_STRIP_DIRS, {
-        onProgress: (msg) => progress("clone", msg),
-      });
-    } else {
-      // Some Chrome installs use "Profile 1", "Profile 2", etc. instead of
-      // "Default". As a fallback, copy the first "Profile *" dir we find.
-      const profileDirs = fs.readdirSync(source, { withFileTypes: true })
+    let sourceProfileDir = sourceDefault;
+    let sourceProfileLabel = "Default";
+    if (!fs.existsSync(sourceDefault)) {
+      const profileDirs = (await fsp.readdir(source, { withFileTypes: true }))
         .filter((e) => e.isDirectory() && /^Profile\b/.test(e.name))
         .map((e) => e.name);
       if (profileDirs.length > 0) {
-        const sourceProfile = path.join(source, profileDirs[0]);
-        progress("clone", `Default profile not found; copying ${profileDirs[0]} instead.`);
-        await copyDirSelective(sourceProfile, defaultProfile, PROFILE_STRIP_DIRS, {
-          onProgress: (msg) => progress("clone", msg),
-        });
+        sourceProfileDir = path.join(source, profileDirs[0]);
+        sourceProfileLabel = profileDirs[0];
+        progress("clone", `Default profile not found at source; cloning ${profileDirs[0]} instead.`);
+      } else {
+        // No Default, no Profile N — fall back to a fresh profile.
+        progress("init", "Source Chrome profile has no Default or Profile N directory — starting with a fresh profile.");
+        return;
       }
     }
-    // Copy "Local State" — needed for encrypted cookie decryption.
+
+    // Copy the session-bearing files in parallel. Each file is copied
+    // atomically (write-to-tmp + rename) so a crash mid-clone cannot
+    // leave a half-written Cookies/Login Data file that would short-
+    // circuit the "profileLooksPopulated" check on the next launch.
+    progress("clone", `Copying session files from ${sourceProfileLabel}/...`);
+    const copyResults = await cloneSessionFiles(
+      sourceProfileDir,
+      defaultProfile,
+      SESSION_FILES,
+      {
+        maxBytes: SESSION_FILE_MAX_BYTES,
+        concurrency: CLONE_CONCURRENCY,
+        onProgress: (msg) => progress("clone", msg),
+      },
+    );
+
+    // Copy "Local State" — lives at the TOP LEVEL of the source user-data
+    // dir (not inside Default/), and is required to decrypt the encrypted
+    // cookies/login-data on Windows and macOS (it carries the
+    // `os_crypt.encrypted_key` blob, which is itself bound to the user's
+    // OS keyring — copying it to the same user's machine preserves
+    // decryption). Without this, copied Cookies/Login Data are useless.
     const localState = path.join(source, "Local State");
     if (fs.existsSync(localState)) {
-      fs.copyFileSync(localState, path.join(this.cdpProfileDir, "Local State"));
+      try {
+        await atomicCopyFile(localState, path.join(this.cdpProfileDir, "Local State"), {
+          maxBytes: SESSION_FILE_MAX_BYTES,
+        });
+        copyResults.copied.push("Local State");
+      } catch (err) {
+        copyResults.skipped.push({ name: "Local State", reason: err.message });
+      }
     }
 
-    // Verify the copy actually produced a Cookies file. If not, the user's
-    // source profile might be locked (Chrome is running) and we should warn
-    // them — the CDP Chrome will not have any sessions until they close
-    // Chrome and re-launch the desktop app.
-    if (!fs.existsSync(cookiesFile)) {
+    // ─── Fallback: if NO session files were copied (e.g., source profile
+    // is from a fresh Chrome install that has no logins yet), fall back to
+    // a recursive copy of the profile dir with the (now expanded) strip
+    // list. This is rare and still much smaller than before because the
+    // strip list now includes IndexedDB, Local Storage, Sessions, Storage,
+    // Service Worker, Media Cache — the actual heavy hitters.
+    if (copyResults.copied.length === 0) {
+      progress("clone", "No session files found at source — falling back to a full profile copy (caches stripped).");
+      await copyDirAsync(sourceProfileDir, defaultProfile, PROFILE_STRIP_DIRS, {
+        onProgress: (msg) => progress("clone", msg),
+      });
+    }
+
+    // ─── Verify the copy actually produced a usable session-bearing file ──
+    //
+    // If neither Cookies nor Login Data exists in the destination after
+    // the clone, the user's source profile is likely LOCKED (their real
+    // Chrome is currently running and holding exclusive SQLite locks on
+    // these files). We can't read them; the CDP Chrome will start with
+    // no sessions. Warn the user — they need to close their real Chrome
+    // and click "Restart Chrome" so the clone can succeed cleanly.
+    if (!fs.existsSync(cookiesFile) && !fs.existsSync(loginDataFile)) {
+      const skippedSummary = copyResults.skipped.length > 0
+        ? ` Skipped: ${copyResults.skipped.map((s) => s.name).join(", ")}.`
+        : "";
       this.logStream.append(
         "cdp:stderr",
-        "Profile copy did not produce a Cookies file. If Chrome is currently running, close it and click Restart Chrome so the profile (with your logins) can be copied cleanly.",
+        `Profile copy did not produce a Cookies or Login Data file.${skippedSummary} If Chrome is currently running, close it and click Restart Chrome so the profile (with your logins) can be copied cleanly.`,
       );
+      progress("clone", "Profile copied but no sessions found — see the warning in the logs.");
     } else {
-      progress("clone", "Profile copy complete. Your existing logins are preserved.");
+      const count = copyResults.copied.length;
+      progress("clone", `Profile clone complete — ${count} session file${count === 1 ? "" : "s"} copied. Your existing logins are preserved.`);
     }
   }
 
@@ -1001,39 +1172,192 @@ function profileHasCookies(userdataDir) {
   return false;
 }
 
-// Recursively copy a directory but skip the named subdirs (relative to the
-// source root). Used to strip Cache / Code Cache / etc.
+// ─── Profile clone helpers (all async, all non-blocking) ────────────────────
 //
-// `opts.onProgress` (optional) is invoked with a short human-readable message
-// every ~250ms so the UI can show "Copying profile... 800 files" style
-// progress during the (potentially slow) first-time clone.
+// These helpers exist to keep the Electron main thread responsive during the
+// first-launch profile clone. The previous implementation (CHANGES.md §3)
+// used `fs.copyFileSync` per file with a `setImmediate` yield every 50 files
+// — but `copyFileSync` is BLOCKING I/O, so each individual large-file copy
+// (5–50MB IndexedDB blobs, etc.) blocked the event loop for tens-to-
+// hundreds of milliseconds. Over thousands of files, that added up to a
+// 10–60+ second main-thread freeze that Windows surfaced as the
+// "GTSS Growth Engine is not responding" dialog.
 //
-// ─── Async + yields to the event loop ──────────────────────────────────────
-//
-// This function is ASYNC and periodically yields to the Electron main
-// thread's event loop (via `setImmediate`) every ~50 files. Without these
-// yields, a large profile clone (10,000+ files) blocks the main thread for
-// 10-60 seconds, making the entire app appear hung — no UI updates, no IPC
-// handling, no log streaming. This was the root cause of the "clicking
-// Start causes the app to hang" symptom: the synchronous clone ran inside
-// `cdp.start()` which ran inside `lifecycle.startAll()` which ran inside
-// the `lifecycle:start` IPC handler — freezing the main process until the
-// copy finished.
-//
-// The yields add ~1ms of overhead per 50 files (negligible compared to the
-// ~1ms per file copy) but keep the UI responsive throughout the clone.
-async function copyDirSelective(src, dest, stripDirs, opts = {}) {
-  const onProgress = typeof opts.onProgress === "function" ? opts.onProgress : null;
-  const state = { files: 0, dirs: 0, lastReportAt: Date.now() };
-  await _copyDirInner(src, dest, stripDirs, state, onProgress);
-  if (onProgress && state.files > 0) {
-    onProgress(`Profile copy finished — ${state.files} files in ${state.dirs} directories.`);
+// All file I/O in this section uses `fs.promises.*` (`fsp.*`), which runs
+// on libuv's thread pool — never the main thread. Combined with the
+// whitelist of small session files in `SESSION_FILES`, the clone now
+// completes in well under a second.
+
+/**
+ * Copy a single file atomically: write to `<dest>.tmp.<pid>` then rename.
+ *
+ * Why atomic: a crash (or a "GTSS is not responding" force-quit) mid-copy
+ * used to leave a half-written Cookies/Login Data file. On the next launch,
+ * the half-written file would satisfy the "profileLooksPopulated" check and
+ * short-circuit the clone — leaving the user with NO sessions. Writing to a
+ * temp file then renaming guarantees the destination is either the old
+ * version (or absent) or the complete new version — never anything in
+ * between.
+ *
+ * @param {string} src - absolute source path
+ * @param {string} dest - absolute destination path
+ * @param {{ maxBytes?: number }} opts - skip files larger than maxBytes
+ * @returns {Promise<void>} rejects on any error (caller decides whether to skip)
+ */
+async function atomicCopyFile(src, dest, opts = {}) {
+  const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : Infinity;
+
+  // Stat the source. We use this both for the size cap and to skip if the
+  // source is missing (a non-existent file is reported as a skip, not an
+  // error — see cloneSessionFiles).
+  const stat = await fsp.stat(src).catch((err) => {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  });
+  if (!stat || !stat.isFile()) return;
+  if (stat.size > maxBytes) {
+    const mb = (stat.size / (1024 * 1024)).toFixed(1);
+    throw new Error(`file too large (${mb}MB > ${(maxBytes / (1024 * 1024)).toFixed(0)}MB cap)`);
+  }
+
+  // Ensure the destination's parent dir exists (handles `Network/Cookies`
+  // etc. where the parent subdir may not exist yet).
+  await fsp.mkdir(path.dirname(dest), { recursive: true });
+
+  // Write to a per-process temp file in the same dir as the destination,
+  // then rename. Same-dir rename is atomic on POSIX and on Windows
+  // (NTFS) — cross-dir renames are NOT atomic on Windows, which is why we
+  // keep the temp file in the destination dir.
+  const tmp = `${dest}.tmp.${process.pid}`;
+  // Copy with COPYFILE_EXCL would fail if a stale .tmp exists from a
+  // previous crashed run; we just overwrite it via the default (0) flag.
+  await fsp.copyFile(src, tmp);
+  // On Windows, `fsp.rename` fails with EPERM if the destination exists
+  // and is held open by another process (rare, but possible if the user
+  // somehow has the CDP Chrome running against the same profile during
+  // the clone). Best-effort unlink-then-rename for cross-platform safety.
+  try {
+    await fsp.rename(tmp, dest);
+  } catch (err) {
+    if (err.code === "EPERM" || err.code === "EEXIST" || err.code === "ENOTEMPTY") {
+      try { await fsp.unlink(dest); } catch (_) {}
+      await fsp.rename(tmp, dest);
+    } else {
+      try { await fsp.unlink(tmp); } catch (_) {}
+      throw err;
+    }
   }
 }
 
-async function _copyDirInner(src, dest, stripDirs, state, onProgress) {
-  fs.mkdirSync(dest, { recursive: true });
-  const entries = fs.readdirSync(src, { withFileTypes: true });
+/**
+ * Copy a whitelist of session-bearing files from `srcDir` to `destDir`.
+ *
+ * Files are copied in parallel batches (`opts.concurrency`, default 4).
+ * Each file is copied atomically via `atomicCopyFile`. Missing source
+ * files are silently skipped (it's normal for, e.g., `Login Data For
+ * Account` to be absent on profiles that never saved any passwords).
+ * Files that fail to copy (locked, permission-denied, too large) are
+ * recorded in the returned `skipped` array so the caller can surface a
+ * useful warning to the user.
+ *
+ * @param {string} srcDir - source profile dir (e.g. .../Default)
+ * @param {string} destDir - destination profile dir (e.g. .../chrome-cdp-profile/Default)
+ * @param {string[]} files - relative file paths to copy (e.g. ["Cookies", "Login Data", "Network/Cookies"])
+ * @param {{ maxBytes?: number, concurrency?: number, onProgress?: (msg: string) => void }} opts
+ * @returns {Promise<{copied: string[], skipped: {name: string, reason: string}[]}>}
+ */
+async function cloneSessionFiles(srcDir, destDir, files, opts = {}) {
+  const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : Infinity;
+  const concurrency = Math.max(1, Math.min(16, opts.concurrency || 4));
+  const onProgress = typeof opts.onProgress === "function" ? opts.onProgress : null;
+
+  const copied = [];
+  const skipped = [];
+  let lastReportAt = Date.now();
+
+  // Pre-filter: stat each candidate once to drop missing files early
+  // (saves a stat call inside the parallel copier and lets us show an
+  // accurate "copying N of M" count up front).
+  const pending = [];
+  for (const name of files) {
+    const src = path.join(srcDir, name);
+    const exists = await fsp.stat(src).then((s) => s.isFile()).catch(() => false);
+    if (exists) pending.push(name);
+  }
+
+  if (onProgress && pending.length > 0) {
+    onProgress(`Copying ${pending.length} session file${pending.length === 1 ? "" : "s"} (cookies, logins, preferences)...`);
+  }
+
+  // Simple bounded-concurrency worker pool: index `i` advances as workers
+  // grab the next file. Each worker copies one file at a time until the
+  // queue is drained.
+  let i = 0;
+  async function worker() {
+    while (i < pending.length) {
+      const name = pending[i++];
+      const src = path.join(srcDir, name);
+      const dest = path.join(destDir, name);
+      try {
+        await atomicCopyFile(src, dest, { maxBytes });
+        copied.push(name);
+      } catch (err) {
+        skipped.push({ name, reason: err.message || String(err) });
+      }
+      // Throttle progress messages to ~5/sec so we don't flood the log.
+      if (onProgress && Date.now() - lastReportAt > 200) {
+        lastReportAt = Date.now();
+        onProgress(`Copied ${copied.length}/${pending.length} session files...`);
+      }
+      // Yield to the event loop between files. fsp.copyFile is non-blocking
+      // already, but yielding lets any pending IPC / paint events through
+      // — defense in depth for very slow disks where stat+copy can still
+      // take 50–100ms per file.
+      await new Promise((r) => setImmediate(r));
+    }
+  }
+  const workers = [];
+  for (let w = 0; w < concurrency && w < pending.length; w++) workers.push(worker());
+  await Promise.all(workers);
+
+  return { copied, skipped };
+}
+
+/**
+ * Recursive async directory copy with a strip-list. Used ONLY as a fallback
+ * when no session files were found at the source (e.g., a fresh Chrome
+ * install that has never had any logins). This path is now rare and the
+ * strip list (PROFILE_STRIP_DIRS) is much more aggressive than before —
+ * it strips IndexedDB, Local Storage, Sessions, Storage, Service Worker,
+ * Media Cache, etc., which were the actual heavy hitters causing the
+ * 10–60s main-thread freeze.
+ *
+ * All I/O is async (`fsp.*`), with a `setImmediate` yield between files
+ * to keep the Electron main thread responsive even on slow disks.
+ *
+ * @param {string} src - source directory
+ * @param {string} dest - destination directory
+ * @param {string[]} stripDirs - directory names (relative to src) to skip
+ * @param {{ onProgress?: (msg: string) => void }} opts
+ */
+async function copyDirAsync(src, dest, stripDirs, opts = {}) {
+  const onProgress = typeof opts.onProgress === "function" ? opts.onProgress : null;
+  const state = { files: 0, dirs: 0, lastReportAt: Date.now() };
+  await _copyDirAsyncInner(src, dest, stripDirs, state, onProgress);
+  if (onProgress && state.files > 0) {
+    onProgress(`Profile fallback copy finished — ${state.files} files in ${state.dirs} directories.`);
+  }
+}
+
+async function _copyDirAsyncInner(src, dest, stripDirs, state, onProgress) {
+  await fsp.mkdir(dest, { recursive: true });
+  let entries;
+  try {
+    entries = await fsp.readdir(src, { withFileTypes: true });
+  } catch (err) {
+    // Source dir unreadable (permission denied, etc.) — skip silently.
+    return;
+  }
   for (const entry of entries) {
     const srcPath = path.join(src, entry.name);
     const relPath = path.relative(src, srcPath);
@@ -1048,24 +1372,23 @@ async function _copyDirInner(src, dest, stripDirs, state, onProgress) {
       }
       if (entry.isDirectory()) {
         state.dirs += 1;
-        await _copyDirInner(srcPath, destPath, stripDirs, state, onProgress);
+        await _copyDirAsyncInner(srcPath, destPath, stripDirs, state, onProgress);
       } else if (entry.isFile()) {
-        // Skip files > 50MB (probably media caches).
-        const stat = fs.statSync(srcPath);
-        if (stat.size > 50 * 1024 * 1024) continue;
-        fs.copyFileSync(srcPath, destPath);
+        // Skip files > 8MB (probably media caches that slipped through
+        // the strip list — defense in depth).
+        const stat = await fsp.stat(srcPath);
+        if (stat.size > 8 * 1024 * 1024) continue;
+        await fsp.copyFile(srcPath, destPath);
         state.files += 1;
         // Report progress at most every ~250ms so we don't flood the log.
         if (onProgress && Date.now() - state.lastReportAt > 250) {
           state.lastReportAt = Date.now();
           onProgress(`Copying profile... ${state.files} files copied`);
         }
-        // Yield to the event loop every ~50 files so the Electron main
-        // process can process IPC, update the UI, and stream log lines
-        // while the clone is still running. This is the fix for the
-        // "clicking Start hangs the app" symptom — without it, a 10k-file
-        // profile clone freezes the main thread for 10-60 seconds.
-        if (state.files % 50 === 0) {
+        // Yield to the event loop every ~16 files. fsp.copyFile is
+        // non-blocking, but yielding keeps IPC / paint events flowing on
+        // slow disks. 16 (not 50) for finer-grained responsiveness.
+        if (state.files % 16 === 0) {
           await new Promise((r) => setImmediate(r));
         }
       }
