@@ -29,6 +29,12 @@ contextBridge.exposeInMainWorld("gtss", {
   cdp: {
     start: () => ipcRenderer.invoke("cdp:start"),
     stop: () => ipcRenderer.invoke("cdp:stop"),
+    // Restart the CDP Chrome WITHOUT restarting the server. Used by the
+    // onboarding Finish screen's "Restart Chrome" button to recover from
+    // a "clone:warning" (locked-Chrome) condition — re-runs the profile
+    // clone so the user's logins are picked up after they close their
+    // real Chrome. See ipc-handlers.js `cdp:restart`.
+    restart: () => ipcRenderer.invoke("cdp:restart"),
     // Legacy "just get Chrome up" channel. Originally used by onboarding
     // step 3 to launch CDP Chrome for in-wizard sign-in, but onboarding
     // no longer touches Chrome — sign-in now happens via the post-Start

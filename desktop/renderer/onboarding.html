@@ -140,6 +140,26 @@
           <div class="finish-progress-step" data-stage="open-webapp">Opening the web app in your default browser…</div>
           <div class="finish-progress-step" data-stage="ready">Ready.</div>
           <div id="finish-progress-error" class="finish-progress-error" hidden></div>
+          <!-- ───────── Warning callout (NEW) ─────────
+               Non-fatal but actionable condition. Currently surfaced by:
+                 - "clone:warning" — Chrome is locked, profile clone ran but
+                   produced no sessions. User must close Chrome and click
+                   Restart Chrome.
+                 - "browser:warning" — CDP failed; automation will run in
+                   an isolated Chromium with no cloned sessions. User will
+                   need to sign in to each platform manually.
+               The Restart Chrome button re-runs the CDP clone+spawn path
+               without re-running the whole wizard. -->
+          <div id="finish-progress-warning" class="finish-progress-warning" hidden>
+            <div class="finish-warning-icon">⚠</div>
+            <div class="finish-warning-body">
+              <div class="finish-warning-title">Action needed</div>
+              <div class="finish-warning-message"></div>
+            </div>
+            <div class="finish-warning-actions">
+              <button type="button" id="finish-warning-restart" class="btn btn-secondary btn-mini">Restart Chrome</button>
+            </div>
+          </div>
         </div>
 
         <div class="step-actions">

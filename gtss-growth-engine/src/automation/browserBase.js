@@ -1271,21 +1271,49 @@ async function createBrowser(platform, options = {}) {
       // proactive (event-driven) and reactive (polling) coverage.
       installStrayTabInterceptor(context, platform);
 
-      // ── Tab reuse for LinkedIn ───────────────────────────────────────────
-      // Previous code unconditionally opened a NEW tab on every CDP attach,
-      // which over a long session accumulated many LinkedIn tabs (one per run).
-      // Now we mirror the Instagram path: reuse an existing linkedin.com tab
-      // if one is open and not closed, otherwise open a new one. This keeps
-      // the user's Chrome tab count stable across runs.
+      // ── Tab reuse for LinkedIn (and now X, Facebook) ───────────────────
+      //
+      // [FIX 2b] Previous code unconditionally opened a NEW tab on every
+      // CDP attach, which over a long session accumulated many platform
+      // tabs (one per run) AND — more importantly — produced the visible
+      // "tab opens then closes immediately" flicker when a posting
+      // attempt failed and the retry loop opened a brand-new tab for the
+      // next attempt. The retry-loop flicker is now fixed at the call
+      // site (schedulerService.publishPost reuses the same browserState
+      // across retries — see FIX 2a), but extending the tab-reuse
+      // pattern from LinkedIn to X and Facebook here is the second half
+      // of the fix: it ensures that even when createBrowser IS called
+      // again (e.g. by a different caller, or by the retry path when the
+      // previous page died), we adopt the existing platform tab instead
+      // of stacking a new one.
+      //
+      // Instagram uses createInstagramBrowser (its own dedicated launcher)
+      // which already does tab-reuse — so it isn't routed through this
+      // branch. See createInstagramBrowser around line 1977 for the
+      // equivalent logic.
+      //
+      // Tab-reuse candidates are filtered by the platform's primary
+      // domain. We never grab a tab that's on a /job-posting,
+      // /jobs/view, /jobs/, or /talent/job-posting-redirect path
+      // (closeStrayTabs should have already removed them, but be
+      // defensive — LinkedIn auto-redirects to these aggressively).
+      const platformDomain =
+        platform === "linkedin" ? "linkedin.com"
+        : platform === "x" ? "x.com"
+        : platform === "facebook" ? "facebook.com"
+        : platform === "instagram" ? "instagram.com"
+        : null;
+
       let page = null;
-      if (platform === "linkedin") {
+      if (platformDomain) {
         const existingPages = context.pages().filter((candidate) => {
           if (!candidate || candidate.isClosed()) return false;
           const url = String(candidate.url?.() || candidate.url || "").toLowerCase();
           if (!url || url === "about:blank") return false;
-          // Only consider LinkedIn tabs — never grab a /job-posting tab
-          // (closeStrayTabs should have already removed them, but be defensive).
-          if (!url.includes("linkedin.com")) return false;
+          // Only consider tabs on this platform's primary domain —
+          // never grab a /job-posting tab (closeStrayTabs should have
+          // already removed them, but be defensive).
+          if (!url.includes(platformDomain)) return false;
           if (
             url.includes("/job-posting") ||
             url.includes("/talent/job-posting-redirect") ||
@@ -1298,7 +1326,7 @@ async function createBrowser(platform, options = {}) {
         });
         page = existingPages[0] || null;
         if (page) {
-          logger.info("BROWSER", `Reusing existing LinkedIn tab: ${page.url()}`);
+          logger.info("BROWSER", `Reusing existing ${platform} tab: ${page.url()}`);
           await page.bringToFront().catch(() => {});
         }
       }
@@ -1495,11 +1523,50 @@ async function closeBrowser(browser, platform, context, options = {}) {
             : null;
 
       if (pageToClose && !pageToClose.isClosed()) {
+        // [FIX 2c] Short visible delay before closing on success so the
+        // user can glance over at the tab and visually confirm "yes,
+        // that actually posted" — instead of the tab being yanked away
+        // the instant the "✓ Posted to X" confirmation event fires.
+        //
+        // We only delay on SUCCESS; on failure we close immediately so
+        // the next attempt (or the next platform in the queue) doesn't
+        // wait on a dead tab. The delay is short (2.5s) — long enough
+        // to register visually, short enough not to slow down multi-
+        // platform posts noticeably.
+        //
+        // Skip the delay entirely if DEBUG_NO_CLOSE_DELAY is set (useful
+        // for tests / headless runs where the wait would just slow
+        // things down).
+        const success = options.success === true;
+        if (success && !process.env.DEBUG_NO_CLOSE_DELAY) {
+          await new Promise((r) => setTimeout(r, 2500)).catch(() => {});
+        }
+
         // CDP mode: close only the automation tab, keep Chrome running
         await pageToClose.close();
+
+        // [FIX 2d] Differentiate close reasons in the log line. Previously
+        // this always logged "Closed automation tab for {platform}
+        // (Chrome stays open)" regardless of outcome — making it hard to
+        // diagnose the next time the user reported "tab opens then
+        // closes immediately." Now we log:
+        //   "...after successful post"            — success
+        //   "...after failed attempt (n/3)"       — failure with attempt #
+        //   "...after failed attempt"             — failure with no attempt #
+        //   "...(reason: page-closed-mid-attempt)" — page already dead
+        // The attempt number and reason are passed through from
+        // closeBrowserContext, which gets them from publishPost.
+        const reason = options.reason ? ` (reason: ${options.reason})` : "";
+        const attemptPart =
+          typeof options.attempt === "number"
+            ? ` attempt (${options.attempt}/3)`
+            : " attempt";
+        const outcomePart = success
+          ? "after successful post"
+          : `after failed${attemptPart}`;
         logger.info(
           "BROWSER",
-          `Closed automation tab for ${platform} (Chrome stays open)`,
+          `Closed automation tab for ${platform} — ${outcomePart}${reason} (Chrome stays open)`,
         );
       } else {
         logger.warn("BROWSER", "No automation tab found to close", {
@@ -1512,7 +1579,17 @@ async function closeBrowser(browser, platform, context, options = {}) {
       } else if (browser) {
         await browser.close();
       }
-      logger.info("BROWSER", `Closed browser for ${platform}`);
+      // [FIX 2d] Same differentiation for the full-browser-close path.
+      const success = options.success === true;
+      const reason = options.reason ? ` (reason: ${options.reason})` : "";
+      const attemptPart =
+        typeof options.attempt === "number"
+          ? ` attempt (${options.attempt}/3)`
+          : " attempt";
+      const outcomePart = success
+        ? "after successful post"
+        : `after failed${attemptPart}`;
+      logger.info("BROWSER", `Closed browser for ${platform} — ${outcomePart}${reason}`);
       if (platform === "instagram") {
         const report = getSelectorHealthReport();
         for (const warnMsg of report.warnings) {
@@ -1532,7 +1609,19 @@ async function closeBrowser(browser, platform, context, options = {}) {
   }
 }
 
-async function closeBrowserContext(platform, browserState) {
+// ─── closeBrowserContext (FIX 2c/2d) ────────────────────────────────────────
+//
+// `options.success` and `options.attempt` are now threaded through to
+// closeBrowser so the log line can distinguish "after successful post"
+// from "after failed attempt (n/3)". Both are optional — existing
+// callers that don't pass them get the old log behavior (the outcome
+// part just says "after failed attempt" with no number).
+//
+// `options.reason` is an optional short string explaining WHY the close
+// is happening (e.g. "page-closed-mid-attempt"). It's appended to the
+// log line in parens so the next time the user reports a flicker, the
+// logs make it obvious which path triggered the close.
+async function closeBrowserContext(platform, browserState, options = {}) {
   if (!browserState) return;
 
   await closeBrowser(browserState.browser, platform, browserState.context, {
@@ -1542,6 +1631,9 @@ async function closeBrowserContext(platform, browserState) {
     shouldClosePageOnly: browserState.shouldClosePageOnly,
     page: browserState.page,
     lock: browserState.lock,
+    success: options.success,
+    attempt: options.attempt,
+    reason: options.reason,
   });
 }
 

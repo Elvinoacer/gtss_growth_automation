@@ -113,6 +113,41 @@ function registerIpcHandlers({
     }
   });
 
+  // ─── CDP restart (NEW) ─────────────────────────────────────────────────
+  //
+  // Used by the onboarding Finish screen's "Restart Chrome" button —
+  // surfaces when the profile clone failed because the user's real
+  // Chrome was holding SQLite locks on Cookies/Login Data (the
+  // "clone:warning" stage emitted by cdp-manager.js ensureCdpProfile()).
+  //
+  // This wraps cdpManager.restart() (which is stop() + start()) and
+  // re-runs the profile clone on the next start(). Crucially, it does
+  // NOT touch the running server — only the CDP Chrome — so the user's
+  // web app session is unaffected. Returns the new CDP state so the
+  // caller can confirm Chrome came back up.
+  //
+  // The onProgress callback forwards clone-stage messages into the
+  // logStream so the launcher's Logs tab shows what the restart is
+  // doing (the onboarding renderer's progress checklist is driven by
+  // the same `clone` / `clone:warning` stages via the
+  // "onboarding:progress" channel — see lifecycle.startAll).
+  ipcMain.handle("cdp:restart", async () => {
+    try {
+      await cdpManager.restart({
+        onProgress: (_stage, message) => {
+          try { logStream.append("cdp", message); } catch (_) {}
+        },
+      });
+      // Persist the CDP endpoint into .env in case the previous start
+      // wrote BROWSER_MODE=persistent (the fallback path).
+      envBootstrap.upsert("CDP_ENDPOINT", `http://127.0.0.1:${cdpManager.port}`);
+      envBootstrap.upsert("BROWSER_MODE", "cdp");
+      return { ok: true, status: cdpManager.getState() };
+    } catch (err) {
+      return { ok: false, error: err.message, status: cdpManager.getState() };
+    }
+  });
+
   // ─── CDP session checking (post-Start "missing sessions" modal) ───────
   //
   // These channels support the launcher's post-Start "missing sessions"

@@ -21,6 +21,18 @@
         <button class="tab" data-tab="about" role="tab">About</button>
       </nav>
       <div class="topbar-right">
+        <!-- ─── Persistent connection-health badge (FIX 1d, NEW) ─────────
+             Always-visible badge showing "X/N platforms connected".
+             Color: green when all (or all required) are connected,
+             yellow when some are missing, red when none are connected.
+             Clicking opens the missing-sessions modal. Removes a click
+             from the common case of "are my platforms still signed in?"
+             — the user sees the answer at a glance. -->
+        <button id="sessions-health-badge" class="sessions-health-badge hidden"
+                title="Open the platform sessions modal">
+          <span class="sessions-badge-dot"></span>
+          <span class="sessions-badge-label">—</span>
+        </button>
         <div id="update-indicator" class="update-indicator hidden">
           <span class="update-dot"></span>
           <span class="update-label">Update available</span>

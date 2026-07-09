@@ -99,6 +99,28 @@ const MODAL_SESSION_PLATFORMS = [
 let modalSessionState = {};
 let modalPollTimer = null;
 let modalDismissedForThisRun = false;
+// ─── Per-platform skip (NEW) ────────────────────────────────────────────────
+//
+// Previously the sessions modal was all-or-nothing: a single "Later" /
+// "All set" gate for every platform at once. On a completely fresh
+// machine (no cloned profile, no cookies for ANY platform), the modal
+// would push the user to log into all 5 things at once — overwhelming.
+//
+// Now the user can dismiss individual platform cards via a "Skip" button
+// (per card). A skipped platform:
+//   - Is excluded from the "missing sessions" count in the health card.
+//   - Won't re-trigger the auto-open modal on subsequent Start clicks
+//     (until the user explicitly re-shows skipped platforms — currently
+//     via re-opening the modal from the health card).
+//   - Remains skip-able until the user signs in (then it auto-unskips
+//     because polling detects the session and re-renders the card as
+//     "Logged in" with the Skip button hidden).
+//
+// Skipped state is in-memory only — it does NOT persist across launcher
+// restarts. That's deliberate: if the user relaunches the app, we want
+// a fresh opportunity to detect sessions (e.g. after a profile clone)
+// without the user having to remember they skipped something.
+const modalSkippedPlatforms = new Set();
 
 function renderSessionsModalGrid() {
   const grid = $("#sessions-modal-grid");
@@ -106,16 +128,36 @@ function renderSessionsModalGrid() {
   grid.innerHTML = MODAL_SESSION_PLATFORMS.map((p) => {
     const state = modalSessionState[p.key] || { loggedIn: false };
     const loggedIn = Boolean(state.loggedIn);
+    // A platform is "skipped" only while it's still not signed in. Once
+    // polling detects a session, we drop the skip flag so the card
+    // renders as "Logged in" with the Skip button hidden.
+    const skipped = !loggedIn && modalSkippedPlatforms.has(p.key);
     const cardCls = [
       "session-card",
       p.required ? "required" : "",
       loggedIn ? "logged-in" : "",
+      skipped ? "skipped" : "",
     ].filter(Boolean).join(" ");
     const stateText = loggedIn
       ? "Logged in"
-      : "Not signed in yet";
-    const stateCls = loggedIn ? "logged-in" : "not-logged-in";
-    const check = loggedIn ? "✓" : "○";
+      : skipped
+        ? "Skipped for now"
+        : "Not signed in yet";
+    const stateCls = loggedIn
+      ? "logged-in"
+      : skipped
+        ? "skipped"
+        : "not-logged-in";
+    const check = loggedIn ? "✓" : skipped ? "—" : "○";
+    // Hide the Skip button when the platform is already signed in —
+    // there's nothing to skip at that point.
+    const skipBtn = loggedIn
+      ? ""
+      : `<button class="btn btn-mini btn-tertiary session-skip-btn"
+                data-platform-key="${p.key}"
+                title="Dismiss this platform for now — you can sign in later">
+          Skip
+        </button>`;
     return `
       <div class="${cardCls}" data-session-key="${p.key}">
         <div class="session-logo ${p.key}">${p.icon}</div>
@@ -131,6 +173,7 @@ function renderSessionsModalGrid() {
                 title="${p.loginHint}">
           Open ↗
         </button>
+        ${skipBtn}
         <div class="session-check">${check}</div>
       </div>
     `;
@@ -179,6 +222,29 @@ function renderSessionsModalGrid() {
       }
     });
   });
+
+  // ─── Wire up per-card Skip buttons (NEW) ─────────────────────────────
+  //
+  // Each card has its own Skip button. Clicking it adds the platform
+  // to modalSkippedPlatforms and re-renders the grid so the card
+  // immediately shows "Skipped for now" + the checkmark turns into
+  // an em-dash. The skip is in-memory only; signing in (detected by
+  // polling) auto-clears the skip on the next render.
+  grid.querySelectorAll(".session-skip-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.platformKey;
+      if (!key) return;
+      modalSkippedPlatforms.add(key);
+      const platform = MODAL_SESSION_PLATFORMS.find((p) => p.key === key);
+      renderSessionsModalGrid();
+      updateSessionsModalDoneButton();
+      updateSessionsHealthCard();
+      updateSessionsHealthBadge();
+      if (platform) {
+        toast(`${platform.label} skipped — you can sign in later from the Control tab.`, "info");
+      }
+    });
+  });
 }
 
 function updateSessionsModalDoneButton() {
@@ -198,12 +264,21 @@ function updateSessionsModalDoneButton() {
   // sessions ALREADY present (carried over from a previous clone) will
   // show as ✓ — but the user isn't forced to wait for fresh sign-ins
   // to be detected (they won't be, until the next clone).
+  //
+  // ─── Per-platform skip (NEW) ─────────────────────────────────────────
+  //
+  // Skipped platforms are excluded from the "still missing" hint that
+  // appears in the button's tooltip — the user has explicitly deferred
+  // them, so we don't nag.
   btn.disabled = false;
   const requiredMissing = MODAL_SESSION_PLATFORMS.filter(
-    (p) => p.required && !(modalSessionState[p.key] && modalSessionState[p.key].loggedIn),
+    (p) =>
+      p.required &&
+      !(modalSessionState[p.key] && modalSessionState[p.key].loggedIn) &&
+      !modalSkippedPlatforms.has(p.key),
   );
   if (requiredMissing.length === 0) {
-    btn.title = "All required sessions detected";
+    btn.title = "All required sessions detected (or skipped)";
   } else {
     btn.title =
       `Still missing in the automation browser: ${requiredMissing.map((p) => p.label).join(", ")}. ` +
@@ -218,8 +293,15 @@ function updateSessionsHealthCard() {
     card.classList.add("hidden");
     return;
   }
+  // ─── Per-platform skip (NEW) ─────────────────────────────────────────
+  //
+  // Skipped platforms are NOT counted as "missing" — the user has
+  // explicitly deferred them. So if every required platform is either
+  // signed in OR skipped, the health card flips to the OK state.
   const missing = MODAL_SESSION_PLATFORMS.filter(
-    (p) => !(modalSessionState[p.key] && modalSessionState[p.key].loggedIn),
+    (p) =>
+      !(modalSessionState[p.key] && modalSessionState[p.key].loggedIn) &&
+      !modalSkippedPlatforms.has(p.key),
   );
   if (missing.length === 0) {
     card.classList.add("ok");
@@ -241,6 +323,69 @@ function updateSessionsHealthCard() {
   }
 }
 
+// ─── Persistent connection-health badge (FIX 1d, NEW) ──────────────────────
+//
+// Always-visible badge in the topbar that shows "X/N platforms connected"
+// — green when all are connected, yellow when some are missing, red when
+// no required platforms are connected. Removes a click: the user can see
+// at a glance whether they need to sign in to anything without opening
+// the modal or the Settings page.
+//
+// Counting rules:
+//   - Skipped platforms count as "connected" for badge purposes (the
+//     user has explicitly deferred them — they shouldn't drag the badge
+//     to red).
+//   - "N" is MODAL_SESSION_PLATFORMS.length (5 — Google/LinkedIn/Facebook/
+//     X/Instagram).
+//   - "X" is the number of platforms that are either signed in OR skipped.
+//   - Color thresholds:
+//       X === N            → green  ("All connected")
+//       X >= requiredCount → green  (all REQUIRED platforms are signed in
+//                                    or skipped; optional ones are nice-to-have)
+//       X > 0              → yellow ("X of N connected")
+//       X === 0            → red    ("No platforms connected")
+function updateSessionsHealthBadge() {
+  const badge = $("#sessions-health-badge");
+  if (!badge) return;
+  const total = MODAL_SESSION_PLATFORMS.length;
+  const connected = MODAL_SESSION_PLATFORMS.filter(
+    (p) =>
+      (modalSessionState[p.key] && modalSessionState[p.key].loggedIn) ||
+      modalSkippedPlatforms.has(p.key),
+  ).length;
+  const required = MODAL_SESSION_PLATFORMS.filter((p) => p.required);
+  const requiredConnected = required.filter(
+    (p) =>
+      (modalSessionState[p.key] && modalSessionState[p.key].loggedIn) ||
+      modalSkippedPlatforms.has(p.key),
+  ).length;
+
+  badge.classList.remove("ok", "warn", "error");
+  let label;
+  if (connected === total) {
+    badge.classList.add("ok");
+    label = `${connected}/${total} connected`;
+    badge.title = "All platforms are connected.";
+  } else if (requiredConnected === required.length) {
+    // All required platforms are signed in (or skipped); only optional
+    // ones are missing. Show green — the user can run automation.
+    badge.classList.add("ok");
+    label = `${connected}/${total} connected`;
+    badge.title = "All required platforms connected. Optional ones can be signed in later.";
+  } else if (connected === 0) {
+    badge.classList.add("error");
+    label = `0/${total} connected`;
+    badge.title = "No platforms connected. Click the badge to sign in.";
+  } else {
+    badge.classList.add("warn");
+    label = `${connected}/${total} connected`;
+    badge.title = `${total - connected} platform${total - connected === 1 ? "" : "s"} still need sign-in. Click to open the modal.`;
+  }
+  const labelEl = badge.querySelector(".sessions-badge-label");
+  if (labelEl) labelEl.textContent = label;
+  badge.classList.remove("hidden");
+}
+
 async function pollModalSessionsOnce() {
   try {
     const res = await window.gtss.cdp.checkSessions();
@@ -250,14 +395,23 @@ async function pollModalSessionsOnce() {
     for (const p of MODAL_SESSION_PLATFORMS) {
       const fresh = res.sessions[p.key];
       const prev = modalSessionState[p.key];
-      if (fresh && fresh.loggedIn) next[p.key] = fresh;
-      else if (prev && prev.loggedIn) next[p.key] = prev;
-      else if (fresh) next[p.key] = fresh;
+      if (fresh && fresh.loggedIn) {
+        next[p.key] = fresh;
+        // Auto-clear the skip flag if the platform is now signed in —
+        // a freshly-detected session is more authoritative than the
+        // user's earlier "skip" intent.
+        modalSkippedPlatforms.delete(p.key);
+      } else if (prev && prev.loggedIn) {
+        next[p.key] = prev;
+      } else if (fresh) {
+        next[p.key] = fresh;
+      }
     }
     modalSessionState = next;
     renderSessionsModalGrid();
     updateSessionsModalDoneButton();
     updateSessionsHealthCard();
+    updateSessionsHealthBadge();
   } catch (_) {
     // Silent — polling failures are expected.
   }
@@ -309,6 +463,14 @@ function closeSessionsModal() {
 }
 
 $("#sessions-health-open")?.addEventListener("click", openSessionsModal);
+// Topbar badge click → open the same sessions modal (FIX 1d).
+$("#sessions-health-badge")?.addEventListener("click", () => {
+  // Re-show the modal even if the user previously dismissed it via
+  // "Later" — clicking the badge is an explicit re-open gesture.
+  modalDismissedForThisRun = false;
+  updateSessionsHealthCard();
+  openSessionsModal();
+});
 $("#sessions-modal-close")?.addEventListener("click", () => {
   modalDismissedForThisRun = true;
   updateSessionsHealthCard();
@@ -350,11 +512,21 @@ $("#start-btn").addEventListener("click", () => {
   // and the auto-modal can re-trigger if sessions are still missing after
   // the new launch.
   modalDismissedForThisRun = false;
-  // Cancel any previous auto-modal timer (e.g., user clicked Start twice).
+  // Note: we deliberately do NOT clear modalSkippedPlatforms here. A
+  // fresh Start may run a fresh CDP profile clone (which could pick up
+  // sessions the user signed into since the last launch), but the
+  // user's "I'll deal with Instagram later" intent should persist
+  // within a launcher session. The skip set is only cleared by:
+  //   - polling detecting a session for that platform (auto-clear)
+  //   - launcher restart (in-memory only)
   if (_autoModalCheckAfterStart) {
     clearTimeout(_autoModalCheckAfterStart);
     _autoModalCheckAfterStart = null;
   }
+  // Update the badge immediately so it doesn't flash stale state while
+  // the server boots. Once sessions are polled, pollModalSessionsOnce()
+  // will refresh it.
+  updateSessionsHealthBadge();
   // Give the server + CDP ~6s to come up (the server boots first, then
   // CDP Chrome). After that we poll sessions and auto-open the modal if
   // anything required is missing.
@@ -362,26 +534,30 @@ $("#start-btn").addEventListener("click", () => {
     _autoModalCheckAfterStart = null;
     await pollModalSessionsOnce();
     // Auto-open the modal if any session is missing AND the user hasn't
-    // dismissed it for this run. We DON'T auto-open if every required
-    // platform is already signed in (e.g., the user re-ran Start after
-    // completing sign-in — no need to nag them).
+    // dismissed it for this run AND the missing platform hasn't been
+    // explicitly skipped. We DON'T auto-open if every required platform
+    // is already signed in or skipped (e.g., the user re-ran Start
+    // after completing sign-in — no need to nag them).
     const missing = MODAL_SESSION_PLATFORMS.filter(
-      (p) => !(modalSessionState[p.key] && modalSessionState[p.key].loggedIn),
+      (p) =>
+        !(modalSessionState[p.key] && modalSessionState[p.key].loggedIn) &&
+        !modalSkippedPlatforms.has(p.key),
     );
     if (missing.length > 0 && !modalDismissedForThisRun) {
       const backdrop = $("#sessions-modal-backdrop");
       if (backdrop && backdrop.classList.contains("hidden")) {
         openSessionsModal();
         toast(
-          `Missing sessions detected: ${missing.map((p) => p.label).join(", ")}. Click "Open ↗" to sign in inside your default browser.`,
+          `Missing sessions detected: ${missing.map((p) => p.label).join(", ")}. Click "Open ↗" to sign in inside your default browser, or "Skip" to defer a platform.`,
           "warning",
           7000,
         );
       }
     }
     // Start a slow background poll (every 10s) that keeps the health card
-    // up to date while the user is using the app, even after the modal is
-    // closed. The polling is cheap (one CDP WebSocket round-trip).
+    // and the topbar badge up to date while the user is using the app,
+    // even after the modal is closed. The polling is cheap (one CDP
+    // WebSocket round-trip).
     if (!modalPollTimer) {
       modalPollTimer = setInterval(pollModalSessionsOnce, 10000);
     }
@@ -729,3 +905,13 @@ function toast(message, kind = "info") {
 loadInitialLogs();
 refreshStatus();
 loadAboutData();
+// Kick off an initial sessions poll so the topbar badge populates as
+// soon as the launcher window opens (in case CDP is already running
+// from a previous session and the sessions are already detectable).
+// The poll is async and silent on failure — no UI disruption if CDP
+// isn't up yet.
+pollModalSessionsOnce().catch(() => {});
+// Render the badge in its initial "—" state immediately so it doesn't
+// flash empty before the first poll resolves. updateSessionsHealthBadge()
+// will replace it as soon as pollModalSessionsOnce returns.
+updateSessionsHealthBadge();

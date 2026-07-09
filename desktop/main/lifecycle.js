@@ -183,6 +183,12 @@ class Lifecycle {
             // onboarding wizard's progress UI can highlight the right step.
             if (stage === "clone") {
               progress("clone", message);
+            } else if (stage === "clone:warning") {
+              // Forward locked-Chrome warnings as a first-class
+              // `clone:warning` stage so the onboarding renderer can show
+              // a yellow "close Chrome and retry" callout with a Restart
+              // Chrome button — instead of a buried log line.
+              progress("clone:warning", message);
             } else if (stage === "ready") {
               if (/Reusing existing Chrome/i.test(message)) {
                 progress("browser", "Reusing existing Chrome — no new browser spawned, no profile clone needed.");
@@ -210,6 +216,28 @@ class Lifecycle {
       progress("endpoint", `CDP active on port ${this.cdp.port}. Automation will use this Chrome.`);
     } catch (err) {
       progress("browser:error", `CDP Chrome failed to start: ${err.message}`);
+      // ─── Isolated-browser fallback (NEW: dedicated warning stage) ───────
+      //
+      // Previously this emitted a plain "browser" progress line saying
+      // "Falling back to isolated browser mode (Playwright Chromium)." —
+      // which the onboarding renderer treated as just another browser
+      // progress message and showed as a green checkmark on the
+      // "Initializing the automation browser" step. The user would then
+      // be surprised later when the missing-sessions modal insisted none
+      // of their platforms were signed in (because the isolated browser
+      // has no cloned cookies).
+      //
+      // Now we emit a dedicated `browser:warning` stage with a
+      // self-contained message so the onboarding renderer shows a yellow
+      // warning callout explaining the trade-off: automation will run in
+      // an isolated Chromium, and the user will need to sign in to each
+      // platform manually.
+      const fallbackMsg =
+        "Automation will run in an isolated Chromium browser — your existing " +
+        "Chrome logins are NOT available. You'll need to sign in to LinkedIn, X, " +
+        "Facebook, Instagram, and Google/Gemini manually inside the automation " +
+        "browser when prompted.";
+      progress("browser:warning", fallbackMsg);
       progress("browser", "Falling back to isolated browser mode (Playwright Chromium).");
       this.env.upsert("BROWSER_MODE", "persistent");
       this.env.upsert("CDP_ENDPOINT", "");

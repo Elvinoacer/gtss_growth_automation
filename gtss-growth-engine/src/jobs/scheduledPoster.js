@@ -298,6 +298,25 @@ function initScheduledPoster() {
   );
 }
 
+/**
+ * @deprecated Legacy Instagram posting entry point — NOT used by the
+ *   actual cron flow. The cron job above calls `publishPost()` from
+ *   `schedulerService.js` (which handles all four platforms: LinkedIn,
+ *   X, Facebook, Instagram, including carousel/story/video variants
+ *   and the per-platform caption lookup). This function only handles
+ *   Instagram and only the feed/story/carousel types — calling it for
+ *   any other platform returns "Unsupported platform".
+ *
+ *   Retained because test/instagramPoster.test.js exercises it
+ *   directly to verify the ig_post_type dispatch. If you're adding new
+ *   posting logic, add it to `schedulerService.publishPost` instead —
+ *   NOT here.
+ *
+ * @param {*} post — post row from the DB
+ * @param {*} browser — Playwright Browser (mocked in tests)
+ * @param {*} emitter — event emitter
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
 async function postToInstagram(post, browser, emitter) {
   const db = getDb();
   const loadedPost =
@@ -352,6 +371,24 @@ async function postToInstagram(post, browser, emitter) {
   return result;
 }
 
+/**
+ * @deprecated Legacy multi-platform dispatcher — NOT used by the cron
+ *   flow. Only handles `instagram` (via the deprecated postToInstagram
+ *   above) and returns `{ success: false, error: "Unsupported
+ *   platform: ..." }` for everything else (LinkedIn, X, Facebook).
+ *
+ *   The real multi-platform path is `schedulerService.publishPost()`,
+ *   which the cron job calls directly (see the `cron.schedule` block
+ *   above — it imports `publishPost` and calls it for every due post).
+ *   This function is retained only for backwards-compat with callers
+ *   that may still import it from this module's exports.
+ *
+ * @param {string} platform — "instagram" (other values return an error)
+ * @param {*} post — post row from the DB
+ * @param {*} browser — Playwright Browser
+ * @param {*} emitter — event emitter
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
 async function postToPlatform(platform, post, browser, emitter) {
   switch (platform) {
     case "instagram":

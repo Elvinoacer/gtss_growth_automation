@@ -798,3 +798,132 @@ correctly, heavy dirs skipped, subdir `Network/Cookies` created on
 demand, atomic rename leaves no `.tmp` leftovers, and a simulated
 crash-leftover `.tmp` file is overwritten cleanly on the next run.
 `bash -n launch-chrome.sh` passes. `.git/` directory untouched.
+
+---
+
+## H. Setup UX + Posting Pipeline fixes (review pass)
+
+These edits address the two issues called out in the latest review:
+
+1. **First-launch setup UX is clunky** — the clone step had no
+   background handling, no actionable UI when Chrome was locked, and
+   no persistent "setup health" indicator after onboarding.
+2. **Content-posting pipeline opens a browser tab for a platform and
+   it "automatically closes" shortly after** — caused by `finally
+   { closeBrowserContext(...) }` running after every attempt in the
+   retry loop, not just at the end.
+
+### Setup UX (FIX 1a–1d)
+
+**FIX 1a — Surface "Chrome is locked" as an actionable UI state.**
+`desktop/main/cdp-manager.js` `ensureCdpProfile()` already detected the
+condition (Cookies/Login Data missing from the destination after the
+clone) but only emitted a `cdp:stderr` log line. Now it emits a new
+`clone:warning` stage with a self-contained, user-facing message. The
+onboarding Finish screen listens for the `:warning` suffix and shows a
+yellow callout with a **Restart Chrome** button — instead of a buried
+log line.
+
+**FIX 1b — Make onboarding clearly state isolated-browser fallback.**
+`desktop/main/lifecycle.js` `startAll()` now emits a dedicated
+`browser:warning` stage when CDP fails and we fall back to
+`BROWSER_MODE=persistent`. The onboarding Finish screen surfaces this
+in the same yellow callout so the user knows automation will run
+without their cloned logins — they'll need to sign in to each platform
+manually.
+
+**FIX 1c — Per-platform Skip in the sessions modal.**
+`desktop/renderer/renderer.js` `renderSessionsModalGrid()` now renders
+a per-card "Skip" button. A skipped platform is excluded from the
+"missing sessions" count in the health card, won't re-trigger the
+auto-open modal on subsequent Start clicks, and is auto-unskipped when
+polling detects a session for it. The skip state is in-memory only —
+deliberately not persisted across launcher restarts, so a fresh launch
+gets a fresh opportunity to detect sessions.
+
+**FIX 1d — Persistent connection-health badge.**
+`desktop/renderer/index.html` adds a new `#sessions-health-badge`
+button in the topbar showing "X/N platforms connected". Green when all
+(or all required) are connected, yellow when some are missing, red
+when none are connected. Clicking opens the missing-sessions modal.
+`updateSessionsHealthBadge()` is called from `pollModalSessionsOnce()`
+and on Start click, so it stays live.
+
+**Supporting changes:**
+- `desktop/main/ipc-handlers.js`: new `cdp:restart` IPC handler that
+  wraps `cdpManager.restart()` (which now forwards `onProgress` to
+  `start()` so the Finish screen's Restart Chrome button gets live
+  clone-stage progress).
+- `desktop/preload/preload.js`: exposes `window.gtss.cdp.restart`.
+- `desktop/renderer/onboarding.html` + `onboarding.css`: warning
+  callout markup + yellow styling.
+- `desktop/renderer/styles.css`: styles for the badge, the skipped
+  card state, and the per-card Skip button.
+
+### Posting Pipeline (FIX 2a–2d)
+
+**FIX 2a — Don't close on failure inside the retry loop.**
+`gtss-growth-engine/src/services/schedulerService.js` `publishPost()`
+previously declared `browserState` inside the per-attempt `try` and
+called `closeBrowserContext(...)` in the per-attempt `finally` — so
+every attempt (success OR failure) opened and closed a tab. If all 3
+attempts failed quickly, the user saw the tab open and close three
+times in ~15 seconds.
+
+Now `browserState` is hoisted to the platform-loop scope. The retry
+loop **reuses the same tab across attempts** (only recreating it if
+the previous page died mid-attempt). The tab is closed **once** in an
+outer `finally` after the loop. This eliminates the open→close→wait→
+open→close flicker.
+
+**FIX 2b — Extend LinkedIn's tab-reuse pattern to X and Facebook.**
+`gtss-growth-engine/src/automation/browserBase.js` `createBrowser()`
+previously only reused an existing tab when `platform === "linkedin"`.
+Now it computes a `platformDomain` (`linkedin.com` / `x.com` /
+`facebook.com` / `instagram.com`) and reuses any existing tab on that
+domain. (Instagram is also covered here for completeness, though in
+practice Instagram goes through `createInstagramBrowser` which already
+had its own tab-reuse logic.)
+
+**FIX 2c — Short visible delay before closing on success.**
+`browserBase.js` `closeBrowser()` now waits 2.5 seconds before closing
+the tab when `options.success === true` (CDP / `shouldClosePageOnly`
+branch only). This lets the user glance over and visually confirm
+"yes, that actually posted" instead of having the tab yanked away the
+instant the "✓ Posted to X" event fires. The delay is skipped on
+failure (so retries aren't slowed) and can be disabled via
+`DEBUG_NO_CLOSE_DELAY=1` for tests/headless runs.
+
+**FIX 2d — Differentiate close reasons in the log line.**
+`browserBase.js` `closeBrowser()` previously always logged
+`"Closed automation tab for {platform} (Chrome stays open)"`. Now it
+logs:
+- `"...after successful post (Chrome stays open)"` — success
+- `"...after failed attempt (n/3) (Chrome stays open)"` — failure
+- `"...after failed attempt (reason: page-closed-mid-attempt)..."` — page died
+
+`closeBrowserContext()` accepts new optional `options.success`,
+`options.attempt`, and `options.reason` fields and threads them
+through. Existing 2-arg callers (geminiWeb.js, instagramWarmupJob.js,
+etc.) continue to work — they get the old "after failed attempt" log
+line with no attempt number.
+
+### Cleanup (FIX 3)
+
+`scheduledPoster.js`'s local `postToInstagram()` and `postToPlatform()`
+are NOT used by the cron flow (the cron job calls
+`schedulerService.publishPost()` directly, which handles all four
+platforms). They're retained because `test/instagramPoster.test.js`
+exercises `postToInstagram` directly to verify `ig_post_type` dispatch.
+Both are now marked `@deprecated` with JSDoc explaining the situation
+and pointing future contributors to `schedulerService.publishPost`.
+
+### Verification
+
+- `node --check` passes on every modified JS file:
+  `cdp-manager.js`, `lifecycle.js`, `ipc-handlers.js`, `preload.js`,
+  `renderer.js`, `onboarding.js`, `browserBase.js`,
+  `schedulerService.js`, `scheduledPoster.js`.
+- Backward-compat preserved: `closeBrowserContext(platform, browserState)`
+  still works (the new `options` arg defaults to `{}`).
+- `.git/` directory untouched.

@@ -413,6 +413,66 @@
 
 .finish-progress-error[hidden] { display: none; }
 
+/* ─── Warning callout (NEW) ─────────────────────────────────────────────────
+   Non-fatal but actionable condition surfaced by `clone:warning` and
+   `browser:warning` stages. Distinct from .finish-progress-error:
+   - Yellow (warning) instead of red (error) — the step still completed,
+     the user just needs to take action to recover.
+   - Includes a Restart Chrome button (right-aligned) so the user can
+     re-trigger the clone without re-running the whole wizard. */
+.finish-progress-warning {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: var(--radius-sm);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: start;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.finish-progress-warning[hidden] { display: none; }
+
+.finish-warning-icon {
+  font-size: 18px;
+  line-height: 1;
+  color: #d97706;
+  /* Align the icon with the first line of the message text. */
+  margin-top: 1px;
+}
+
+.finish-warning-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0; /* allow long messages to wrap inside the grid cell */
+}
+
+.finish-warning-title {
+  font-weight: 600;
+  color: #b45309;
+  font-size: 12px;
+}
+
+.finish-warning-message {
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.finish-warning-actions {
+  display: flex;
+  align-items: center;
+}
+
+.finish-warning-actions .btn {
+  white-space: nowrap;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }

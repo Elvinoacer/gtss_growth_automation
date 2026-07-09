@@ -850,10 +850,14 @@ class CdpManager {
     });
   }
 
-  async restart() {
+  async restart(options = {}) {
     await this.stop("restart");
     await new Promise((r) => setTimeout(r, 500));
-    await this.start();
+    // Forward onProgress to start() so the onboarding Finish screen's
+    // "Restart Chrome" button can show clone-stage progress (including
+    // a fresh `clone:warning` if the user's real Chrome is STILL holding
+    // SQLite locks after the first attempt).
+    await this.start({ onProgress: options.onProgress });
   }
 
   // ─── Profile management ──────────────────────────────────────────────────
@@ -1011,17 +1015,39 @@ class CdpManager {
     // the clone, the user's source profile is likely LOCKED (their real
     // Chrome is currently running and holding exclusive SQLite locks on
     // these files). We can't read them; the CDP Chrome will start with
-    // no sessions. Warn the user — they need to close their real Chrome
-    // and click "Restart Chrome" so the clone can succeed cleanly.
+    // no sessions.
+    //
+    // ─── Actionable UI signal (NEW) ──────────────────────────────────────
+    //
+    // Previously this only emitted a `cdp:stderr` log line and a generic
+    // `progress("clone", "...see the warning in the logs.")` message. The
+    // user had to dig through the Logs tab to find the actionable advice.
+    //
+    // Now we emit a dedicated `clone:warning` stage with a self-contained,
+    // user-facing message. The launcher's onboarding renderer listens for
+    // the `:warning` suffix and shows a first-class warning callout with a
+    // "Restart Chrome" button — instead of a buried log line — so the user
+    // sees: "Your Chrome is currently open — close it and click Restart
+    // Chrome" right on the Finish screen.
     if (!fs.existsSync(cookiesFile) && !fs.existsSync(loginDataFile)) {
       const skippedSummary = copyResults.skipped.length > 0
         ? ` Skipped: ${copyResults.skipped.map((s) => s.name).join(", ")}.`
         : "";
-      this.logStream.append(
-        "cdp:stderr",
-        `Profile copy did not produce a Cookies or Login Data file.${skippedSummary} If Chrome is currently running, close it and click Restart Chrome so the profile (with your logins) can be copied cleanly.`,
-      );
-      progress("clone", "Profile copied but no sessions found — see the warning in the logs.");
+      const stderrMsg =
+        `Profile copy did not produce a Cookies or Login Data file.${skippedSummary} ` +
+        `If Chrome is currently running, close it and click Restart Chrome so the profile (with your logins) can be copied cleanly.`;
+      this.logStream.append("cdp:stderr", stderrMsg);
+      // Self-contained actionable message for the UI — the renderer does
+      // NOT have access to the log stream, so this string has to carry
+      // the entire "what's wrong + what to do" on its own.
+      const uiMsg =
+        "Your Chrome is currently open and holding a lock on its session files, " +
+        "so we couldn't copy your logins. Close Chrome completely, then click " +
+        "\"Restart Chrome\" to retry the clone. Your existing logins will be preserved.";
+      progress("clone:warning", uiMsg);
+      // Also keep the informational progress line so the Logs tab still
+      // shows what happened at the clone stage.
+      progress("clone", "Profile copied but no sessions found — waiting for Chrome to be closed.");
     } else {
       const count = copyResults.copied.length;
       progress("clone", `Profile clone complete — ${count} session file${count === 1 ? "" : "s"} copied. Your existing logins are preserved.`);

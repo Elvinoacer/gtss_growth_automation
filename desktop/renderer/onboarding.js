@@ -315,6 +315,16 @@ function showFinishProgress() {
     finishErrorEl.hidden = true;
     finishErrorEl.textContent = "";
   }
+  // Reset the warning callout too (NEW). A previous run may have left
+  // it visible after a clone:warning; when the user clicks Restart
+  // Chrome (or Finish & start again), we want a clean slate.
+  const warningCallout = $("#finish-progress-warning");
+  if (warningCallout) {
+    warningCallout.hidden = true;
+    const msgEl = warningCallout.querySelector(".finish-warning-message");
+    if (msgEl) msgEl.textContent = "";
+    delete warningCallout.dataset.stage;
+  }
 }
 
 function markFinishStageActive(stage) {
@@ -359,6 +369,37 @@ function markFinishStageError(stage, message) {
   }
 }
 
+// ─── Warning callout (NEW) ─────────────────────────────────────────────────
+//
+// Distinct from `markFinishStageError`: a warning is a non-fatal but
+// actionable condition. The step is still considered "done" (we did
+// finish cloning — we just didn't get any sessions out of it) but the
+// user needs to do something (close Chrome and click Restart). The
+// warning callout shows the message + a Restart Chrome button so the
+// user can re-trigger the clone without restarting the whole app.
+//
+// Used for:
+//   - "clone:warning" — Chrome is locked, profile copy produced no sessions
+//   - "browser:warning" — fell back to isolated-browser mode (no cloned
+//     sessions will be available; the user will need to sign in manually)
+function markFinishStageWarning(stage, message) {
+  // Keep the step visually "done" (the clone did run, the browser did
+  // come up) — but show a yellow callout with the actionable message.
+  const key = STAGE_ORDER.includes(stage) ? stage : null;
+  if (key) {
+    markFinishStageDone(key);
+  }
+  const callout = $("#finish-progress-warning");
+  if (callout && message) {
+    callout.hidden = false;
+    const msgEl = callout.querySelector(".finish-warning-message");
+    if (msgEl) msgEl.textContent = message;
+    // Stash the stage on the callout so the Restart button knows which
+    // recovery action to invoke.
+    callout.dataset.stage = stage || "";
+  }
+}
+
 function markAllFinishStagesDone() {
   STAGE_ORDER.forEach((key) => markFinishStageDone(key));
 }
@@ -373,6 +414,15 @@ function startFinishProgressListener() {
     if (stage.endsWith(":error")) {
       const baseStage = stage.slice(0, -":error".length);
       markFinishStageError(baseStage, message);
+      return;
+    }
+    // Warning stages are suffixed with ":warning" (NEW).
+    // These are non-fatal but actionable: we keep the step visually
+    // "done" and surface a yellow callout with a Restart button so the
+    // user can recover without re-running the whole wizard.
+    if (stage.endsWith(":warning")) {
+      const baseStage = stage.slice(0, -":warning".length);
+      markFinishStageWarning(baseStage, message);
       return;
     }
     if (stage === "ready") {
@@ -429,6 +479,48 @@ $("#onboard-finish").addEventListener("click", async () => {
     }
     stopFinishProgressListener();
     toast(res?.error || "Failed to save onboarding data.", "error");
+  }
+});
+
+// ─── Restart Chrome button (NEW) ─────────────────────────────────────────────
+//
+// The warning callout (clone:warning / browser:warning) surfaces a
+// "Restart Chrome" button so the user can recover from a locked-Chrome
+// condition without re-running the entire wizard. Clicking it:
+//   1. Hides the warning callout.
+//   2. Re-runs the CDP restart path (which closes the spawned Chrome,
+//      re-runs the profile clone, and re-spawns Chrome).
+//   3. Re-subscribes to the progress stream so the checklist updates
+//      as the restart progresses.
+//
+// If window.gtss.cdp.restart isn't available (older main process),
+// we fall back to telling the user to click "Finish & start" again.
+$("#finish-warning-restart")?.addEventListener("click", async () => {
+  const restartBtn = $("#finish-warning-restart");
+  if (!restartBtn) return;
+  const original = restartBtn.textContent;
+  restartBtn.disabled = true;
+  restartBtn.textContent = "Restarting Chrome...";
+  const callout = $("#finish-progress-warning");
+  // Hide the callout immediately so the user sees their click registered.
+  if (callout) callout.hidden = true;
+  // Re-show the progress checklist in its "in progress" state.
+  showFinishProgress();
+  startFinishProgressListener();
+  try {
+    if (window.gtss && window.gtss.cdp && typeof window.gtss.cdp.restart === "function") {
+      const res = await window.gtss.cdp.restart();
+      if (!res || !res.ok) {
+        toast(res?.error || "Couldn't restart Chrome automatically. Close Chrome manually and click Finish & start again.", "warning", 7000);
+      }
+    } else {
+      toast("Restart Chrome isn't available in this build. Close Chrome manually and click Finish & start again.", "warning", 7000);
+    }
+  } catch (err) {
+    toast(`Failed to restart Chrome: ${err.message || err}`, "error");
+  } finally {
+    restartBtn.disabled = false;
+    restartBtn.textContent = original;
   }
 });
 
