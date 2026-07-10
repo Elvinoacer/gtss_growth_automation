@@ -419,6 +419,196 @@ function optimisticStateForAction(pipelineId, action) {
   }
 }
 
+// ── Button-level feedback helpers ───────────────────────────────────────────
+//
+// These complement withActionFeedback() for the buttons that don't go through
+// it (Save, toggle, History, Logs, cron presets). They give the user an
+// immediate, unambiguous visual signal that their click was registered and
+// either succeeded or failed — exactly the "visual confirmation" that was
+// missing on the Pipeline page.
+
+/**
+ * Briefly show a success state on a button ("✓ <label>") so the user sees
+ * a concrete confirmation that the action completed, instead of the button
+ * just silently snapping back to its default label.
+ *
+ * After `durationMs` the original innerHTML is restored.
+ *
+ * Safe to call on a button that has already been restored by
+ * withActionFeedback's finally block — this just layers a transient
+ * success flash on top.
+ */
+function showButtonSuccess(btn, label = 'Done', durationMs = 1400) {
+  if (!btn) return;
+  const prev = btn.innerHTML;
+  const prevClass = btn.className;
+  const prevBorder = btn.style.borderColor;
+  const prevBg = btn.style.background;
+  const prevColor = btn.style.color;
+
+  btn.classList.add('pipeline-btn--success');
+  btn.style.borderColor = 'rgba(34,197,94,0.5)';
+  btn.style.background = 'rgba(34,197,94,0.16)';
+  btn.style.color = '#4ade80';
+  btn.innerHTML = `<span aria-hidden="true">✓</span> ${gtss.escapeHtml(label)}`;
+
+  setTimeout(() => {
+    btn.classList.remove('pipeline-btn--success');
+    btn.innerHTML = prev;
+    btn.className = prevClass;
+    btn.style.borderColor = prevBorder;
+    btn.style.background = prevBg;
+    btn.style.color = prevColor;
+  }, durationMs);
+}
+
+/**
+ * Wrap a plain button click in: loading spinner → (await fn) → success
+ * pulse or error toast. This is the lightweight sibling of
+ * withActionFeedback() for actions that don't need the optimistic-state
+ * patch or the inline error banner (e.g. Save, History, Logs, Refresh).
+ *
+ * @param {HTMLElement} btn  - the clicked button
+ * @param {string} actionLabel - human label for error messages
+ * @param {Function} fn - async function returning the result
+ * @param {object} [opts]
+ * @param {string} [opts.successLabel] - label for the transient success state
+ * @param {boolean} [opts.silent] - if true, don't show a toast on error (caller handles it)
+ * @returns {Promise<*>} result of fn
+ */
+async function withButtonFeedback(btn, actionLabel, fn, opts = {}) {
+  const { successLabel = 'Done', silent = false } = opts;
+  if (btn && !btn.disabled) {
+    btn.disabled = true;
+    btn.dataset.originalHtml = btn.innerHTML;
+    btn.dataset.gtssLoading = '1';
+    btn.classList.add('pipeline-btn--loading');
+    btn.innerHTML = `<span class="spinner" style="display:inline-block;animation:spin 1.4s linear infinite">⟳</span> ${btn.innerHTML}`;
+    btn.style.opacity = '0.7';
+  }
+  let succeeded = false;
+  try {
+    const result = await fn();
+    succeeded = true;
+    if (btn) {
+      // Restore first, then layer the success flash on the default look.
+      btn.innerHTML = btn.dataset.originalHtml || btn.innerHTML;
+      delete btn.dataset.originalHtml;
+      delete btn.dataset.gtssLoading;
+      btn.classList.remove('pipeline-btn--loading');
+      btn.style.opacity = '';
+      btn.disabled = false;
+      showButtonSuccess(btn, successLabel, 1400);
+    }
+    return result;
+  } catch (err) {
+    if (btn) {
+      btn.innerHTML = btn.dataset.originalHtml || btn.innerHTML;
+      delete btn.dataset.originalHtml;
+      delete btn.dataset.gtssLoading;
+      btn.classList.remove('pipeline-btn--loading');
+      btn.style.opacity = '';
+      btn.disabled = false;
+      // Brief error flash so the user sees the button "rejected" the click.
+      btn.classList.add('pipeline-btn--error');
+      setTimeout(() => btn.classList.remove('pipeline-btn--error'), 900);
+    }
+    if (!silent) {
+      gtss.showToast(`${actionLabel} failed: ${err?.message || err}`, 'error', 7000);
+    }
+    throw err;
+  }
+}
+
+// ── Dirty-state tracking for the Save button ────────────────────────────────
+//
+// When the user edits the cron expression, a limit field, or a platform
+// checkbox, the Save button gets a "dirty" indicator (a small pulsing dot)
+// so it's obvious there are unsaved changes. The indicator clears on a
+// successful save.
+//
+// This directly addresses the user's complaint that there was no visual
+// confirmation of state — previously the Save button looked identical
+// whether or not there were pending changes, so the user had no way to
+// know whether they needed to click it.
+
+function getCardSaveBtn(card) {
+  if (!card) return null;
+  return card.querySelector('[data-action="save"]');
+}
+
+function markCardDirty(card, isDirty) {
+  if (!card) return;
+  const btn = getCardSaveBtn(card);
+  if (!btn) return;
+  if (isDirty) {
+    card.dataset.dirty = '1';
+    btn.classList.add('pipeline-save-btn--dirty');
+    btn.title = 'You have unsaved changes — click to save them.';
+  } else {
+    delete card.dataset.dirty;
+    btn.classList.remove('pipeline-save-btn--dirty');
+    btn.title = 'Save changes';
+  }
+}
+
+/**
+ * Snapshot the "clean" form values for a card right after render / save,
+ * so we can compare against the live values to detect dirtiness.
+ */
+function snapshotCardCleanValues(card) {
+  if (!card) return;
+  const snap = { cron: null, limits: {}, platforms: {} };
+  const cronInput = card.querySelector('[data-field="cron"]');
+  if (cronInput) snap.cron = cronInput.value;
+  card.querySelectorAll('[data-limit-key]').forEach((el) => {
+    snap.limits[el.dataset.limitKey] = el.type === 'number' ? Number(el.value) : el.value;
+  });
+  card.querySelectorAll('[data-platform-checkbox]').forEach((cb) => {
+    snap.platforms[cb.dataset.platformCheckbox] = cb.checked;
+  });
+  card.__gtssCleanSnapshot = snap;
+}
+
+/**
+ * Compare the live form values of a card against the snapshot taken by
+ * snapshotCardCleanValues(), and mark the card dirty/clean accordingly.
+ */
+function recheckCardDirty(card) {
+  if (!card || !card.__gtssCleanSnapshot) return;
+  const snap = card.__gtssCleanSnapshot;
+  let dirty = false;
+  const cronInput = card.querySelector('[data-field="cron"]');
+  if (cronInput && cronInput.value !== snap.cron) dirty = true;
+  if (!dirty) {
+    card.querySelectorAll('[data-limit-key]').forEach((el) => {
+      const v = el.type === 'number' ? Number(el.value) : el.value;
+      if (snap.limits[el.dataset.limitKey] !== v) dirty = true;
+    });
+  }
+  if (!dirty) {
+    card.querySelectorAll('[data-platform-checkbox]').forEach((cb) => {
+      if (snap.platforms[cb.dataset.platformCheckbox] !== cb.checked) dirty = true;
+    });
+  }
+  markCardDirty(card, dirty);
+}
+
+/**
+ * Attach input/change listeners to every config field inside a card so
+ * dirtiness is detected the moment the user edits anything. Called after
+ * every full re-render (attachCardListeners) and is idempotent.
+ */
+function attachDirtyTracking(card) {
+  if (!card || card.__gtssDirtyBound === '1') return;
+  card.__gtssDirtyBound = '1';
+  const fields = card.querySelectorAll('[data-field="cron"], [data-limit-key], [data-platform-checkbox]');
+  fields.forEach((f) => {
+    const evt = f.type === 'checkbox' ? 'change' : 'input';
+    f.addEventListener(evt, () => recheckCardDirty(card));
+  });
+}
+
 async function loadHealth() {
   try {
     const data = await gtss.fetchJSON('/api/pipelines/health');
@@ -439,6 +629,8 @@ async function savePipeline(id) {
   const card = document.querySelector(`[data-pipeline-id="${id}"]`);
   if (!card) return;
 
+  const saveBtn = getCardSaveBtn(card);
+
   const cronInput = card.querySelector('[data-field="cron"]');
   const payload = { cron: cronInput ? cronInput.value : undefined };
 
@@ -458,21 +650,62 @@ async function savePipeline(id) {
 
   payload.limits = limits;
 
+  // Validate cron expression client-side so we can give immediate feedback
+  // (a red error flash on the Save button + a toast) instead of waiting
+  // for the server round-trip. A cron field with visible content but no
+  // tokens is almost certainly a mistake.
+  if (payload.cron != null && payload.cron.trim() !== '' && payload.cron.trim().split(/\s+/).length < 5) {
+    gtss.showToast('Cron expression needs 5 fields (min hour day month weekday).', 'error', 6000);
+    if (saveBtn) {
+      saveBtn.classList.add('pipeline-btn--error');
+      setTimeout(() => saveBtn.classList.remove('pipeline-btn--error'), 900);
+    }
+    return;
+  }
+
   try {
-    const result = await gtss.fetchJSON(`/api/pipelines/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    });
+    const result = await withButtonFeedback(saveBtn, 'Save', () =>
+      gtss.fetchJSON(`/api/pipelines/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      })
+    , { successLabel: 'Saved', silent: true });
     if (result.ok) {
       gtss.showToast('Pipeline settings saved', 'success');
+      // Clear dirty state immediately AND re-snapshot the clean values
+      // from the inputs as they are now (== what the user just saved).
+      // Without the re-snapshot, the next in-place patch would compare
+      // the live inputs against the pre-save snapshot and falsely flag
+      // the card as dirty again.
+      markCardDirty(card, false);
+      snapshotCardCleanValues(card);
       loadPipelines();
+    } else {
+      // Server returned a non-ok body without throwing.
+      const msg = result.error || 'Save failed';
+      gtss.showToast(msg, 'error', 6000);
     }
   } catch (err) {
-    gtss.showToast(err.message, 'error');
+    // withButtonFeedback already flashed the error state; show the toast here
+    // with the full server message (which may include a hint).
+    gtss.showToast(err?.message || 'Save failed', 'error', 6000);
   }
 }
 
 async function togglePipeline(id, enabled) {
+  // The toggle switch flips visually the instant the user clicks it (native
+  // checkbox behavior). We need to give the user feedback that the change
+  // is being persisted, and — critically — revert the switch if the
+  // server rejects the change. Without the revert, the UI would lie about
+  // the pipeline's enabled state.
+  const card = document.querySelector(`[data-pipeline-id="${id}"]`);
+  const toggleInput = card?.querySelector(`[data-toggle-pipeline="${id}"]`);
+  const slider = toggleInput?.parentElement?.querySelector('.pipeline-toggle-slider');
+
+  // Mark the toggle as "pending" so the slider shows a spinner overlay
+  // and the user knows the request is in flight.
+  if (slider) slider.classList.add('pipeline-toggle--pending');
+
   try {
     const result = await gtss.fetchJSON(`/api/pipelines/${id}`, {
       method: 'PATCH',
@@ -481,9 +714,30 @@ async function togglePipeline(id, enabled) {
     if (result.ok) {
       gtss.showToast(`Pipeline ${enabled ? 'enabled' : 'disabled'}`, enabled ? 'success' : 'info');
       loadPipelines();
+    } else {
+      // Server returned a non-ok body — revert the switch.
+      throw new Error(result.error || 'Toggle failed');
     }
   } catch (err) {
-    gtss.showToast(err.message, 'error');
+    // Revert the checkbox to its previous state so the UI doesn't lie.
+    if (toggleInput) toggleInput.checked = !enabled;
+    // Re-render the slider visuals to match the reverted state.
+    if (slider) {
+      slider.style.background = !enabled ? '#22c55e' : 'rgba(148,163,184,0.3)';
+      slider.style.boxShadow = !enabled ? '0 0 12px rgba(34,197,94,0.3)' : 'none';
+      const knob = slider.querySelector('span');
+      if (knob) {
+        knob.style.left = !enabled ? '' : '3px';
+        knob.style.right = !enabled ? '3px' : '';
+      }
+    }
+    gtss.showToast(`Could not ${enabled ? 'enable' : 'disable'} pipeline: ${err?.message || err}`, 'error', 7000);
+  } finally {
+    if (slider) {
+      // Keep the pending class briefly so the revert animation is visible,
+      // then remove it.
+      setTimeout(() => slider.classList.remove('pipeline-toggle--pending'), 250);
+    }
   }
 }
 
@@ -502,7 +756,15 @@ async function restartPipeline(id, btn) {
   const pipeline = pipelinesData.find((p) => p.id === id);
   const hasActive = pipeline && (pipeline.active_execution_id || pipeline.state === 'running' || pipeline.state === 'paused' || pipeline.state === 'resuming' || pipeline.state === 'stopping' || pipeline.state === 'retrying');
   if (hasActive) {
-    if (!confirm(`Restart pipeline "${id}"?\n\nThis will stop the current run (if any) and start a fresh execution from the first step. If the pipeline is paused, the pause flag will also be cleared.`)) return;
+    const confirmed = await gtss.showConfirmDialog({
+      title: `Restart "${id}"?`,
+      body: `This will stop the current run (if any) and start a fresh execution from the first step. If the pipeline is paused, the pause flag will also be cleared.\n\nCheckpoints from the previous run will be discarded.`,
+      confirmLabel: '↻ Restart',
+      cancelLabel: 'Cancel',
+      danger: true,
+      icon: '↻',
+    });
+    if (!confirmed) return;
   }
   try {
     await withActionFeedback(id, 'Restart', btn,
@@ -534,7 +796,15 @@ async function pausePipelineLegacy(id, paused, btn) {
 }
 
 async function stopPipeline(id, btn) {
-  if (!confirm(`Stop the active execution of pipeline "${id}"?\n\nThis will gracefully terminate the current run (and kill any background jobs that don't respond to the abort signal within a few seconds). Checkpoints for completed stages will be preserved so you can Resume from Checkpoint later.`)) return;
+  const confirmed = await gtss.showConfirmDialog({
+    title: `Stop pipeline "${id}"?`,
+    body: `This will gracefully terminate the current run (and kill any background jobs that don't respond to the abort signal within a few seconds).\n\nCheckpoints for completed stages will be preserved so you can Resume from Checkpoint later.`,
+    confirmLabel: '■ Stop',
+    cancelLabel: 'Cancel',
+    danger: true,
+    icon: '■',
+  });
+  if (!confirmed) return;
   try {
     await withActionFeedback(id, 'Stop', btn,
       gtss.fetchJSON(`/api/pipelines/${id}/stop`, { method: 'POST' })
@@ -589,7 +859,15 @@ async function resumeFromCheckpoint(id, executionId, btn) {
  *   - Returns detailed info about what was cleared.
  */
 async function forceClearPipeline(id, btn) {
-  if (!confirm(`Force-clear pipeline "${id}"?\n\nThis will:\n  • Mark the current execution (and any stuck DB rows) as 'failed'\n  • Kill any background jobs registered for this pipeline\n  • Clear the pause flag\n  • Reset the pipeline to idle so you can Run / Retry / Resume\n\nUse this when the pipeline is stuck on "Running" forever and Retry / Resume / Stop are all refusing to work.`)) return;
+  const confirmed = await gtss.showConfirmDialog({
+    title: `Force-clear pipeline "${id}"?`,
+    body: `This will:\n  • Mark the current execution (and any stuck DB rows) as 'failed'\n  • Kill any background jobs registered for this pipeline\n  • Clear the pause flag\n  • Reset the pipeline to idle so you can Run / Retry / Resume\n\nUse this when the pipeline is stuck on "Running" forever and Retry / Resume / Stop are all refusing to work.`,
+    confirmLabel: '✕ Force Clear',
+    cancelLabel: 'Cancel',
+    danger: true,
+    icon: '⚠',
+  });
+  if (!confirmed) return;
   try {
     await withActionFeedback(id, 'Force Clear', btn,
       gtss.fetchJSON(`/api/pipelines/${id}/force-clear`, {
@@ -600,12 +878,18 @@ async function forceClearPipeline(id, btn) {
   } catch (_) { /* error already shown */ }
 }
 
-async function loadExecutions(id) {
+async function loadExecutions(id, btn) {
+  // Use withButtonFeedback so the History button shows a spinner while we
+  // fetch, then a brief success flash. Previously the button gave no
+  // feedback at all — the user clicked and had to wait and hope.
   try {
-    const data = await gtss.fetchJSON(`/api/pipelines/${id}/executions?limit=15`);
-    renderExecutionsModal(id, data.executions || []);
+    await withButtonFeedback(btn, 'Load history', () =>
+      gtss.fetchJSON(`/api/pipelines/${id}/executions?limit=15`)
+    , { successLabel: 'Loaded', silent: true }).then((data) => {
+      renderExecutionsModal(id, data.executions || []);
+    });
   } catch (err) {
-    gtss.showToast('Failed to load executions: ' + err.message, 'error');
+    gtss.showToast('Failed to load executions: ' + (err?.message || err), 'error');
   }
 }
 
@@ -632,12 +916,23 @@ async function loadLogs(id, filters = {}) {
   }
 }
 
-async function openLogsModal(id) {
+async function openLogsModal(id, btn) {
+  // Show a loading state on the Logs button while we open the modal and
+  // fetch the initial batch of logs.
   const root = document.getElementById('pipeline-modal-root');
   root.innerHTML = renderLogsModalShell(id);
   attachLogsModalListeners(id);
-  const data = await loadLogs(id, { limit: 200 });
-  refreshLogsModal(id, data);
+  try {
+    await withButtonFeedback(btn, 'Load logs', () =>
+      loadLogs(id, { limit: 200 })
+    , { successLabel: 'Loaded', silent: true }).then((data) => {
+      refreshLogsModal(id, data);
+    });
+  } catch (err) {
+    // loadLogs already shows a toast; just clear the modal loading text.
+    const list = document.getElementById('logs-list');
+    if (list) list.innerHTML = `<div style="padding:24px;text-align:center;color:#f87171">Failed to load logs.</div>`;
+  }
 }
 
 // ── Rendering helpers ────────────────────────────────────────────────────────
@@ -1230,6 +1525,20 @@ function renderPipelines(pipelines) {
     }
   });
 
+  // Initialize dirty-state tracking for every freshly-rendered card.
+  // We snapshot the "clean" values (after any restore above) and attach
+  // input/change listeners so the Save button gets a pulsing dot the
+  // moment the user edits anything. If a card previously had unsaved
+  // changes that we just restored, re-mark it dirty.
+  pipelines.forEach((p) => {
+    const card = container.querySelector(`[data-pipeline-id="${p.id}"]`);
+    if (!card) return;
+    snapshotCardCleanValues(card);
+    attachDirtyTracking(card);
+    // If we restored unsaved values, reflect the dirty state immediately.
+    recheckCardDirty(card);
+  });
+
   // Restore scroll. Avoid smooth — instant is what the user expects when
   // they didn't initiate a scroll.
   window.scrollTo(0, scrollY);
@@ -1408,8 +1717,8 @@ function attachActionBtnListeners(scope) {
       const stage = btn.dataset.stage;
       if (action === 'run') runNow(id, btn);
       else if (action === 'restart') restartPipeline(id, btn);
-      else if (action === 'executions') loadExecutions(id);
-      else if (action === 'logs') openLogsModal(id);
+      else if (action === 'executions') loadExecutions(id, btn);
+      else if (action === 'logs') openLogsModal(id, btn);
       else if (action === 'pause') pausePipeline(id, btn);
       else if (action === 'resume') resumePipeline(id, btn);
       else if (action === 'stop') stopPipeline(id, btn);
@@ -1466,8 +1775,8 @@ function attachCardListeners() {
       const stage = btn.dataset.stage;
       if (action === 'run') runNow(id, btn);
       else if (action === 'restart') restartPipeline(id, btn);
-      else if (action === 'executions') loadExecutions(id);
-      else if (action === 'logs') openLogsModal(id);
+      else if (action === 'executions') loadExecutions(id, btn);
+      else if (action === 'logs') openLogsModal(id, btn);
       else if (action === 'pause') pausePipeline(id, btn);
       else if (action === 'resume') resumePipeline(id, btn);
       else if (action === 'stop') stopPipeline(id, btn);
@@ -1492,6 +1801,14 @@ function attachCardListeners() {
 
       card.querySelectorAll('.cron-preset-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+
+      // Brief "applied" pulse so the user sees the preset was registered.
+      btn.classList.add('cron-preset-btn--applied');
+      setTimeout(() => btn.classList.remove('cron-preset-btn--applied'), 650);
+
+      // Mark the card dirty so the Save button shows its unsaved-changes
+      // indicator — the preset click changed the cron value.
+      recheckCardDirty(card);
 
       if (preset === 'custom' && cronInput) {
         cronInput.focus();
@@ -1829,22 +2146,33 @@ function attachLogsModalListeners(pipelineId) {
     }
   });
 
-  const refresh = async () => {
+  const refresh = async (btn) => {
     const search = document.getElementById('logs-search')?.value || '';
     const level = document.getElementById('logs-level')?.value || '';
     const stage = document.getElementById('logs-stage')?.value || '';
-    const data = await loadLogs(pipelineId, { search, level, stage, limit: 300 });
-    refreshLogsModal(pipelineId, data);
+    // When triggered by the Refresh button, wrap the fetch in button
+    // feedback so the user sees a spinner + a brief "✓ Refreshed" flash.
+    // When triggered by filter changes (no btn), just run the fetch.
+    const run = () => loadLogs(pipelineId, { search, level, stage, limit: 300 });
+    if (btn) {
+      try {
+        const data = await withButtonFeedback(btn, 'Refresh', run, { successLabel: 'Refreshed', silent: true });
+        refreshLogsModal(pipelineId, data);
+      } catch (_) { /* loadLogs already toasted */ }
+    } else {
+      const data = await run();
+      refreshLogsModal(pipelineId, data);
+    }
   };
 
-  document.getElementById('logs-refresh')?.addEventListener('click', refresh);
+  document.getElementById('logs-refresh')?.addEventListener('click', (e) => refresh(e.currentTarget));
   let searchTimer = null;
   document.getElementById('logs-search')?.addEventListener('input', () => {
     if (searchTimer) clearTimeout(searchTimer);
-    searchTimer = setTimeout(refresh, 300);
+    searchTimer = setTimeout(() => refresh(null), 300);
   });
-  document.getElementById('logs-level')?.addEventListener('change', refresh);
-  document.getElementById('logs-stage')?.addEventListener('change', refresh);
+  document.getElementById('logs-level')?.addEventListener('change', () => refresh(null));
+  document.getElementById('logs-stage')?.addEventListener('change', () => refresh(null));
 
   // Live tail via Socket.IO
   const liveCheckbox = document.getElementById('logs-live');

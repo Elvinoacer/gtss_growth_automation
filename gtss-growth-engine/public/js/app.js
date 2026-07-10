@@ -45,22 +45,166 @@ async function fetchJSON(url, options = {}) {
 }
 
 function showToast(message, type = "info", duration = 4000) {
+  // Pick an icon per type so the user gets an immediate visual signal of
+  // severity without having to read the message. This is especially
+  // helpful for error toasts that may stack up after a failed action.
+  const icons = {
+    success: "✓",
+    error: "✕",
+    warning: "⚠",
+    warn: "⚠",
+    info: "ℹ",
+  };
+  const icon = icons[type] || icons.info;
+
   const toast = document.createElement("div");
   toast.className = `gtss-toast ${type}`;
-  toast.innerHTML = `<span>${escapeHtml(message)}</span><span class="toast-progress" aria-hidden="true"></span>`;
+  // Sync the progress-bar animation with the actual duration so the bar
+  // doesn't finish early on long-lived error toasts (the previous default
+  // was a fixed 4000ms regardless of the `duration` argument).
+  toast.style.setProperty("--toast-duration", `${duration}ms`);
+  toast.innerHTML = `
+    <span class="gtss-toast__icon" aria-hidden="true">${icon}</span>
+    <span class="gtss-toast__msg">${escapeHtml(message)}</span>
+    <span class="toast-progress" aria-hidden="true"></span>
+    <button class="gtss-toast__close" type="button" aria-label="Dismiss notification">✕</button>
+  `;
   document.body.appendChild(toast);
 
-  // Allow click-to-dismiss so long-lived error toasts don't overstay.
-  toast.addEventListener("click", () => {
+  // Stack: nudge this toast above any others currently visible so multiple
+  // toasts don't overlap into an unreadable blob.
+  relayoutToasts();
+
+  // Click anywhere on the toast (or the explicit close button) dismisses
+  // it early — important for long-lived error toasts.
+  const dismiss = () => {
     toast.classList.remove("visible");
-    window.setTimeout(() => toast.remove(), 220);
+    window.setTimeout(() => {
+      toast.remove();
+      relayoutToasts();
+    }, 220);
+  };
+  toast.addEventListener("click", (e) => {
+    // Avoid double-handling when the close button is the click target.
+    if (e.target.closest(".gtss-toast__close")) return;
+    dismiss();
   });
+  toast.querySelector(".gtss-toast__close").addEventListener("click", dismiss);
 
   requestAnimationFrame(() => toast.classList.add("visible"));
-  window.setTimeout(() => {
-    toast.classList.remove("visible");
-    window.setTimeout(() => toast.remove(), 220);
-  }, duration);
+  window.setTimeout(dismiss, duration);
+}
+
+/**
+ * Re-position all visible toasts so they stack vertically without
+ * overlapping. Called whenever a toast is added or removed.
+ */
+function relayoutToasts() {
+  const toasts = Array.from(document.querySelectorAll(".gtss-toast.visible"));
+  // Also include toasts that are mid-removal so a freshly-added toast
+  // doesn't briefly overlap one that's fading out.
+  const all = Array.from(document.querySelectorAll(".gtss-toast"));
+  let offset = 0;
+  all.forEach((t) => {
+    t.style.setProperty("--toast-stack-offset", `${offset}px`);
+    offset += t.offsetHeight + 12;
+  });
+}
+
+/**
+ * Show a styled, Promise-based confirmation dialog and resolve with the
+ * user's choice (true = confirmed, false = cancelled).
+ *
+ * This replaces the jarring native `confirm()` calls used across the
+ * pipeline page (Stop / Restart / Force-Clear). The native dialog blocks
+ * the main thread, can't be styled, and gives no visual hierarchy for
+ * destructive actions. This version:
+ *   - matches the dark glassmorphism theme of the rest of the app
+ *   - supports a title + multi-line body
+ *   - supports a `danger` flag that turns the confirm button red
+ *   - supports custom confirm/cancel labels
+ *   - closes on Escape and on backdrop click (cancel)
+ *   - auto-focuses the confirm button so Enter works immediately
+ *
+ * @param {object} opts
+ * @param {string} opts.title - Short headline.
+ * @param {string} opts.body  - Detailed explanation (may contain \n).
+ * @param {string} [opts.confirmLabel='Confirm'] - Confirm button text.
+ * @param {string} [opts.cancelLabel='Cancel']   - Cancel button text.
+ * @param {boolean} [opts.danger=false]          - Red confirm button for destructive actions.
+ * @param {string} [opts.icon]                   - Optional emoji icon shown next to the title.
+ * @returns {Promise<boolean>}
+ */
+function showConfirmDialog({
+  title,
+  body = "",
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  danger = false,
+  icon = "",
+} = {}) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "gtss-confirm-overlay gtss-confirm-overlay--dialog";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-labelledby", "gtss-dialog-title");
+
+    const bodyHtml = escapeHtml(body).replace(/\n/g, "<br/>");
+
+    overlay.innerHTML = `
+      <div class="gtss-confirm-modal gtss-confirm-modal--dialog${danger ? " gtss-confirm-modal--danger" : ""}">
+        <div class="gtss-confirm-modal__head">
+          ${icon ? `<span class="gtss-confirm-modal__icon" aria-hidden="true">${icon}</span>` : ""}
+          <h3 id="gtss-dialog-title" class="gtss-confirm-modal__title">${escapeHtml(title || "Please confirm")}</h3>
+        </div>
+        ${body ? `<div class="gtss-confirm-modal__body">${bodyHtml}</div>` : ""}
+        <div class="gtss-confirm-modal__actions">
+          <button type="button" class="gtss-btn gtss-btn--ghost gtss-confirm-cancel">${escapeHtml(cancelLabel)}</button>
+          <button type="button" class="gtss-btn ${danger ? "gtss-btn--danger" : "gtss-btn--primary"} gtss-confirm-ok">${escapeHtml(confirmLabel)}</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    let settled = false;
+    const finish = (val) => {
+      if (settled) return;
+      settled = true;
+      overlay.classList.remove("visible");
+      window.setTimeout(() => overlay.remove(), 180);
+      resolve(val);
+    };
+
+    // Animate in.
+    requestAnimationFrame(() => overlay.classList.add("visible"));
+
+    const cancelBtn = overlay.querySelector(".gtss-confirm-cancel");
+    const okBtn = overlay.querySelector(".gtss-confirm-ok");
+
+    cancelBtn.addEventListener("click", () => finish(false));
+    okBtn.addEventListener("click", () => finish(true));
+
+    // Backdrop click = cancel.
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) finish(false);
+    });
+
+    // Escape = cancel.
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        finish(false);
+        document.removeEventListener("keydown", onKey);
+      } else if (e.key === "Enter") {
+        finish(true);
+        document.removeEventListener("keydown", onKey);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+
+    // Auto-focus the confirm button so keyboard users can press Enter.
+    requestAnimationFrame(() => okBtn.focus());
+  });
 }
 
 function initSSE(url, onMessage) {
@@ -502,6 +646,7 @@ document.addEventListener("DOMContentLoaded", initShell);
 const sharedApi = {
   fetchJSON,
   showToast,
+  showConfirmDialog,
   initSSE,
   initSocket,
   getSocket,

@@ -255,6 +255,100 @@
       details.pipeline-section > summary::-webkit-details-marker { display: none; }
       details.pipeline-section[open] .chevron { transform: rotate(90deg); }
       .chevron { transition: transform 200ms; }
+
+      /* ── User-feedback states (loading / success / error / dirty) ──────────
+         These give the user immediate, unambiguous visual confirmation that
+         their click was registered and what the outcome was. They layer on
+         top of the existing inline styles set by the action-style() helper
+         and the withActionFeedback / withButtonFeedback wrappers. */
+
+      /* Button is mid-fetch: subtle dim + spinner (spinner markup comes from
+         the JS that swaps innerHTML to include a .spinner span). */
+      .pipeline-btn--loading { cursor: wait !important; pointer-events: none; }
+      .pipeline-btn--loading .spinner { font-size: 1em; line-height: 1; }
+
+      /* Button action succeeded: brief green flash + check icon. Applied by
+         showButtonSuccess() and restored after ~1.4s. */
+      .pipeline-btn--success {
+        animation: pipeline-btn-success-pulse 1400ms ease-out;
+        border-color: rgba(34,197,94,0.5) !important;
+      }
+      @keyframes pipeline-btn-success-pulse {
+        0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.55); }
+        40%  { box-shadow: 0 0 0 6px rgba(34,197,94,0.18); }
+        100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+      }
+
+      /* Button action failed: brief red shake + flash. Applied by
+         withButtonFeedback() on error and by savePipeline on validation
+         failure. */
+      .pipeline-btn--error {
+        animation: pipeline-btn-error-shake 420ms cubic-bezier(.36,.07,.19,.97);
+        border-color: rgba(248,113,113,0.6) !important;
+        background: rgba(248,113,113,0.14) !important;
+      }
+      @keyframes pipeline-btn-error-shake {
+        10%, 90% { transform: translateX(-1px); }
+        20%, 80% { transform: translateX(2px); }
+        30%, 50%, 70% { transform: translateX(-3px); }
+        40%, 60% { transform: translateX(3px); }
+      }
+
+      /* Save button "dirty" indicator: a pulsing dot badge that appears
+         whenever the user has unsaved config changes (cron / limits /
+         platforms). Removes the ambiguity of "did I already save this?". */
+      .pipeline-save-btn--dirty {
+        position: relative;
+        border-color: rgba(245,158,11,0.5) !important;
+        background: rgba(245,158,11,0.14) !important;
+        color: #fbbf24 !important;
+        box-shadow: 0 0 12px rgba(245,158,11,0.18);
+      }
+      .pipeline-save-btn--dirty::after {
+        content: "";
+        position: absolute;
+        top: -3px; right: -3px;
+        width: 9px; height: 9px;
+        border-radius: 999px;
+        background: #f59e0b;
+        box-shadow: 0 0 0 2px rgba(15,23,42,1);
+        animation: pipeline-dirty-dot 1.4s ease-in-out infinite;
+      }
+      @keyframes pipeline-dirty-dot {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50%      { transform: scale(1.35); opacity: 0.65; }
+      }
+
+      /* Toggle switch "pending" state: a spinner overlay on the slider so
+         the user sees the enable/disable request is in flight, and a dimmed
+         track while we wait for the server. */
+      .pipeline-toggle--pending {
+        position: relative;
+        opacity: 0.6;
+        cursor: wait;
+      }
+      .pipeline-toggle--pending::after {
+        content: "⟳";
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        color: #fff;
+        animation: spin 1.2s linear infinite;
+        pointer-events: none;
+      }
+
+      /* Cron preset "applied" pulse: a quick ring that confirms the preset
+         was registered when the user clicks it. */
+      .cron-preset-btn--applied {
+        animation: cron-preset-applied 650ms ease-out;
+      }
+      @keyframes cron-preset-applied {
+        0%   { box-shadow: 0 0 0 0 rgba(56,189,248,0.5); }
+        60%  { box-shadow: 0 0 0 5px rgba(56,189,248,0.15); }
+        100% { box-shadow: 0 0 0 0 rgba(56,189,248,0); }
+      }
     </style>
   </head>
   <body data-page-title="Pipelines">
