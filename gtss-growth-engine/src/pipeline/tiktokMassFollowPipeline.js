@@ -447,7 +447,37 @@ async function runTikTokMassFollowPipelineNow(config = {}) {
         const page = browserState.page;
         checkAbort();
 
-        // Navigate + scrape.
+        // Navigate to the TikTok user-search page BEFORE scraping.
+        // scrapeUserCards() only scrolls + reads the DOM — it never calls
+        // page.goto(), so without this step the browser sits on about:blank
+        // and we discover zero cards every time. This mirrors what the
+        // preview-search endpoint and searchAndFollow() do.
+        const searchUrl = tiktokSearch.buildSearchUrl(searchQuery);
+        emit({
+          stage: "search",
+          message: `Navigating to TikTok search: ${searchUrl}`,
+        });
+        updateLifecycle("search", `Loading TikTok search results…`, 10, 0, 3);
+        try {
+          await page.goto(searchUrl, {
+            waitUntil: "domcontentloaded",
+            timeout: 30000,
+          });
+        } catch (navErr) {
+          emit({
+            stage: "search",
+            level: "error",
+            message: `Failed to load search page: ${navErr.message}`,
+          });
+          throw navErr;
+        }
+
+        // Give TikTok's React app a moment to hydrate + render the first
+        // batch of user cards before we start scrolling. The page typically
+        // paints cards within ~2s on a warm profile; 3s is a safe floor.
+        await new Promise((r) => setTimeout(r, 3000));
+
+        // Now scrape — the page is on the search URL, so cards will be in the DOM.
         cards = await tiktokSearch.scrapeUserCards(page, {
           maxScrolls,
           maxCards: Math.max(effectiveLimit * 3, 30),

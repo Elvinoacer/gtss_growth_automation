@@ -371,8 +371,21 @@ async function scrapeUserCards(page, opts = {}) {
     if (seen.size >= maxCards) break;
     if (scroll < maxScrolls) {
       if (emit) emit({ type: "info", message: `Scroll ${scroll + 1}/${maxScrolls}: ${seen.size} user(s) discovered so far` });
-      await humanScroll(page);
-      await humanDelay(1200, 2000);
+      try {
+        await humanScroll(page);
+        await humanDelay(1200, 2000);
+      } catch (scrollErr) {
+        // Page/browser was closed mid-scroll (user closed the window,
+        // tab crash, CDP disconnect, etc.). Return whatever we've
+        // collected so far instead of crashing the whole pipeline.
+        const code = scrollErr && scrollErr.code;
+        const msg = String(scrollErr && scrollErr.message || scrollErr);
+        if (code === "PAGE_CLOSED" || /Target page, context or browser has been closed|Browser has been closed|Page closed/i.test(msg)) {
+          if (emit) emit({ type: "warn", message: `Page closed mid-scroll — returning ${seen.size} card(s) discovered so far` });
+          break;
+        }
+        throw scrollErr;
+      }
     }
   }
 

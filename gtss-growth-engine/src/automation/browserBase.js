@@ -860,13 +860,31 @@ function normalizeHeadless(platform, requestedHeadless, options = {}) {
 
 /**
  * Scroll the page randomly 1-3 times with human-like delays.
+ *
+ * Defensive against a closed page/browser: if the user (or a tab crash)
+ * closes the page mid-scroll, Playwright throws "Target page, context or
+ * browser has been closed". We swallow that specific error so the caller
+ * can decide how to handle a missing page (e.g. the pipeline's abort
+ * path) instead of crashing the whole run with an uncaught exception.
  */
 async function humanScroll(page) {
   const scrolls = Math.floor(Math.random() * 3) + 1; // 1 to 3 scrolls
   for (let i = 0; i < scrolls; i++) {
     // Scroll a random amount between 200 and 800 pixels
     const scrollAmount = Math.floor(Math.random() * 600) + 200;
-    await page.mouse.wheel(0, scrollAmount);
+    try {
+      await page.mouse.wheel(0, scrollAmount);
+    } catch (err) {
+      // If the page/context/browser was closed mid-scroll, re-throw a
+      // typed error the caller can match on. Otherwise propagate.
+      const msg = String(err && err.message || err);
+      if (/Target page, context or browser has been closed|Browser has been closed|Page closed/i.test(msg)) {
+        const closedErr = new Error(`humanScroll: page closed mid-scroll (${msg})`);
+        closedErr.code = "PAGE_CLOSED";
+        throw closedErr;
+      }
+      throw err;
+    }
     await humanDelay(1000, 3000);
   }
 }

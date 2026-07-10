@@ -191,8 +191,13 @@ function makeFakePage(cards) {
     },
     // scrapeUserCards calls humanScroll(page) + humanDelay; the latter is
     // a real setTimeout, so we just let it run. humanScroll calls
-    // page.evaluate, which we stub here.
+    // page.mouse.wheel + page.evaluate, which we stub here.
     evaluate: async () => {},
+    // humanScroll calls page.mouse.wheel(0, n) — stub it so the test
+    // doesn't crash on the missing mouse property.
+    mouse: {
+      wheel: async () => {},
+    },
     url: () => "https://www.tiktok.com/search/user?q=test",
   };
 }
@@ -266,4 +271,34 @@ test("scrapeUserCards parses K-suffixed follower counts (12.1K)", async () => {
   const cards = await scrapeUserCards(fakePage, { maxScrolls: 0, maxCards: 10 });
   assert.equal(cards[0].followers, 12100);
   assert.equal(cards[0].likes, 106200);
+});
+
+// ── Regression: page closed mid-scroll ──────────────────────────────────────
+//
+// Reproduces the "mouse.wheel: Target page, context or browser has been
+// closed" failure seen in production. scrapeUserCards should return whatever
+// cards it already collected instead of throwing — so the pipeline can
+// transition cleanly to "stopping" rather than crashing.
+
+test("scrapeUserCards returns cards collected so far when the page closes mid-scroll", async () => {
+  const { scrapeUserCards } = require("../src/automation/tiktokSearch");
+  const fakePage = makeFakePage([
+    {
+      href: "/@survivor",
+      displayName: "Survivor User",
+      paragraphs: ["Survivor User", "survivor", "10", "Followers", "·", "5", "Likes"],
+      buttonLabel: "Follow",
+    },
+  ]);
+  // Override mouse.wheel to throw the same error Playwright throws when
+  // the page is closed mid-scroll.
+  fakePage.mouse.wheel = async () => {
+    const err = new Error("mouse.wheel: Target page, context or browser has been closed");
+    throw err;
+  };
+
+  const cards = await scrapeUserCards(fakePage, { maxScrolls: 3, maxCards: 10 });
+  // We should still have the 1 card that was scraped before the scroll failed.
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].username, "survivor");
 });
