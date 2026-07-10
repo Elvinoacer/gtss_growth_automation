@@ -479,31 +479,51 @@ function registerIpcHandlers({
   });
 
   // ─── Auto-update ─────────────────────────────────────────────────────────
+  //
+  // Channels:
+  //   - updater:status         → poll the current state (used on renderer init)
+  //   - updater:check          → user-initiated "Check for updates" (throws on
+  //                              throttle / network error so the renderer can
+  //                              surface it). Throttled to 30s between calls.
+  //   - updater:download       → start downloading the detected update
+  //   - updater:install        → quit, install, and restart the app
+  //   - updater:set-auto-download
+  //                            → toggle silent background downloads (kiosk mode)
+  //   - updater:state          → main → renderer push whenever state changes
 
   ipcMain.handle("updater:status", () => updater.getState());
 
   ipcMain.handle("updater:check", async () => {
     try {
-      updater.checkSilently();
-      return { ok: true };
+      await updater.checkForUpdates();
+      return { ok: true, state: updater.getState() };
     } catch (err) {
-      return { ok: false, error: err.message };
+      return { ok: false, error: err.message, state: updater.getState() };
     }
   });
 
   ipcMain.handle("updater:download", async () => {
     try {
       await updater.downloadAndInstall();
+      return { ok: true, state: updater.getState() };
+    } catch (err) {
+      return { ok: false, error: err.message, state: updater.getState() };
+    }
+  });
+
+  ipcMain.handle("updater:install", async () => {
+    try {
+      await updater.quitAndInstall();
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err.message };
     }
   });
 
-  ipcMain.handle("updater:install", async () => {
+  ipcMain.handle("updater:set-auto-download", async (_event, enabled) => {
     try {
-      updater.quitAndInstall();
-      return { ok: true };
+      updater.setAutoDownload(!!enabled);
+      return { ok: true, state: updater.getState() };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -515,6 +535,9 @@ function registerIpcHandlers({
       win.webContents.send("updater:state", state);
     }
   });
+
+  // Start periodic background checks (every 4h by default). Safe no-op in dev.
+  updater.startPeriodicChecks();
 
   // ─── Open folders in OS file explorer ──────────────────────────────────
 

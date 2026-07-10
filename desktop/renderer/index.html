@@ -33,11 +33,18 @@
           <span class="sessions-badge-dot"></span>
           <span class="sessions-badge-label">—</span>
         </button>
-        <div id="update-indicator" class="update-indicator hidden">
+        <!-- ─── Update indicator ─────────────────────────────────────────
+             Compact pill in the topbar that reflects the updater state.
+             Clicking opens the dedicated update modal (see #update-modal
+             below). Visible whenever status is one of:
+               available | downloading | downloaded | error
+             Hidden when idle / checking (checking is too brief to show). -->
+        <button id="update-indicator" class="update-indicator hidden"
+                title="Open the update panel">
           <span class="update-dot"></span>
           <span class="update-label">Update available</span>
-          <button id="update-action" class="btn btn-mini">Install</button>
-        </div>
+          <span class="update-progress hidden"></span>
+        </button>
       </div>
     </header>
 
@@ -202,17 +209,110 @@
               <span>Data folder</span>
               <span id="about-data-folder" class="mono">—</span>
             </div>
+            <div class="about-row">
+              <span>Update status</span>
+              <span id="about-update-status" class="mono">—</span>
+            </div>
+            <div class="about-row">
+              <span>Last checked</span>
+              <span id="about-update-checked" class="mono">—</span>
+            </div>
           </div>
           <div class="about-actions">
             <button id="about-check-updates" class="btn btn-secondary">Check for updates</button>
             <button id="about-open-data" class="btn btn-secondary">Open data folder</button>
           </div>
+          <p class="about-update-footnote">
+            The app also checks for updates automatically every 4 hours.
+            When a new version is found, an indicator appears in the top bar —
+            click it to review the release notes and install at your convenience.
+          </p>
         </div>
       </section>
     </main>
 
     <!-- Toast container for transient notifications -->
     <div id="toast-container" class="toast-container"></div>
+
+    <!-- ───────── Update modal ─────────
+         A dedicated modal that walks the user through the entire update
+         lifecycle: release notes → download (with progress) → install &
+         restart. Driven by the updater state machine in renderer.js.
+         The modal stays open across state transitions so the user always
+         sees what's happening. Closing the modal mid-download does NOT
+         cancel the download — it just hides the UI; the download
+         continues in the background and the topbar indicator reflects
+         the latest state. -->
+    <div id="update-modal-backdrop" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="update-modal-title">
+      <div class="modal update-modal">
+        <div class="modal-head">
+          <h2 id="update-modal-title">Update available</h2>
+          <button id="update-modal-close" class="modal-close" aria-label="Close update panel">×</button>
+        </div>
+        <div class="modal-body update-modal-body">
+
+          <!-- Status hero — icon + version + state label -->
+          <div class="update-status-hero">
+            <div class="update-status-icon" id="update-status-icon">↓</div>
+            <div class="update-status-text">
+              <div class="update-status-label" id="update-status-label">A new version is available</div>
+              <div class="update-status-meta" id="update-status-meta">Currently on v<span id="update-current-version">—</span></div>
+            </div>
+          </div>
+
+          <!-- Release notes (collapsed if long) -->
+          <div id="update-release-notes-wrap" class="update-release-notes-wrap hidden">
+            <div class="update-section-label">Release notes</div>
+            <div id="update-release-notes" class="update-release-notes"></div>
+          </div>
+
+          <!-- Progress bar — visible while downloading -->
+          <div id="update-progress-wrap" class="update-progress-wrap hidden">
+            <div class="update-progress-head">
+              <span class="update-section-label">Downloading</span>
+              <span id="update-progress-pct" class="update-progress-pct">0%</span>
+            </div>
+            <div class="update-progress-bar">
+              <div id="update-progress-fill" class="update-progress-fill" style="width: 0%"></div>
+            </div>
+            <div class="update-progress-meta">
+              <span id="update-progress-bytes">0 MB / 0 MB</span>
+              <span aria-hidden="true">·</span>
+              <span id="update-progress-rate">0 MB/s</span>
+              <span aria-hidden="true">·</span>
+              <span id="update-progress-eta">—</span>
+            </div>
+          </div>
+
+          <!-- Error message — visible if download / check fails -->
+          <div id="update-error-wrap" class="update-error-wrap hidden">
+            <div class="update-error-icon">!</div>
+            <div>
+              <div class="update-error-title">Update failed</div>
+              <div id="update-error-message" class="update-error-message">Something went wrong.</div>
+            </div>
+          </div>
+
+          <!-- Restart prompt — visible after download completes -->
+          <div id="update-restart-wrap" class="update-restart-wrap hidden">
+            <div class="update-restart-icon">⟳</div>
+            <div>
+              <div class="update-restart-title">Ready to install</div>
+              <div class="update-restart-message">
+                The update has been downloaded. Click <strong>Install &amp; restart</strong>
+                to apply it — the app will close, install the new version, and relaunch automatically.
+                Any running automation will be paused.
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <div class="modal-foot update-modal-foot">
+          <button id="update-modal-cancel" class="btn btn-secondary">Close</button>
+          <button id="update-modal-action" class="btn btn-primary">Download</button>
+        </div>
+      </div>
+    </div>
 
     <!-- ───────── Sign-in nudge (lightweight) ─────────
          The full sign-in modal now lives on the web app's root page ("/"),

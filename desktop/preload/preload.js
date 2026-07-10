@@ -126,11 +126,31 @@ contextBridge.exposeInMainWorld("gtss", {
   },
 
   // ─── Auto-updater ───────────────────────────────────────────────────────
+  //
+  // State machine: idle → checking → available → downloading → downloaded
+  //                       → installing → (app restarts) → idle
+  // Errors recoverable: from "error" the user can retry check or download.
+  //
+  // `check()` is user-initiated and may throw (throttle / network). The
+  // periodic silent check (every 4h) is fired by the main process and
+  // never surfaces errors.
+  //
+  // `download()` starts the download. Progress arrives via `onState` —
+  // state.status = "downloading", state.progress (0-100),
+  // state.transferredBytes, state.totalBytes, state.bytesPerSecond,
+  // state.etaSeconds.
+  //
+  // `install()` quits the app, applies the update, and restarts. MUST be
+  // called from an explicit user click — never automatically.
+  //
+  // `setAutoDownload(true)` enables silent background downloads (kiosk
+  // mode). Off by default — the user must consent.
   updater: {
     status: () => ipcRenderer.invoke("updater:status"),
     check: () => ipcRenderer.invoke("updater:check"),
     download: () => ipcRenderer.invoke("updater:download"),
     install: () => ipcRenderer.invoke("updater:install"),
+    setAutoDownload: (enabled) => ipcRenderer.invoke("updater:set-auto-download", enabled),
     onState: (cb) => {
       const listener = (_event, state) => cb(state);
       ipcRenderer.on("updater:state", listener);

@@ -65,8 +65,63 @@
         pointer-events: none;
         z-index: 0;
       }
+      /* ─── Page hero header ─────────────────────────────────────────────
+         A clear, calm header that orients the user before they dive into
+         the dense form sections below. Sits above the nav + content grid. */
+      .settings-hero {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        padding: 24px 26px;
+        border-radius: var(--settings-radius);
+        background:
+          linear-gradient(135deg, rgba(59, 130, 246, 0.10), rgba(139, 92, 246, 0.06) 60%, transparent 100%),
+          var(--settings-surface);
+        border: 1px solid var(--settings-border);
+        box-shadow: 0 18px 40px var(--settings-shadow);
+        position: relative;
+        z-index: 1;
+        animation: fadeUp 0.4s ease both;
+      }
+      .settings-hero-text h1 {
+        margin: 0 0 6px;
+        font-family: "Geist", sans-serif;
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--gtss-text);
+        letter-spacing: -0.01em;
+      }
+      .settings-hero-text p {
+        margin: 0;
+        font-size: 13px;
+        color: var(--gtss-muted);
+        max-width: 720px;
+        line-height: 1.55;
+      }
+      .settings-hero-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid var(--settings-border);
+        font-size: 12px;
+        color: var(--gtss-muted);
+        font-weight: 600;
+      }
+      .settings-hero-badge .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: var(--settings-success);
+        box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.18);
+      }
       .settings-section {
-        padding: 22px;
+        padding: 26px 24px;
         border-radius: var(--settings-radius);
         background: var(--settings-surface);
         border: 1px solid var(--settings-border);
@@ -74,34 +129,76 @@
         position: relative;
         z-index: 1;
         animation: fadeUp 0.5s ease both;
+        transition: border-color 0.2s, box-shadow 0.2s;
       }
-      .settings-section:nth-child(odd) {
-        animation-delay: 0.05s;
+      .settings-section:hover {
+        border-color: rgba(96, 165, 250, 0.32);
+        box-shadow: 0 18px 44px rgba(2, 6, 23, 0.55);
       }
-      .settings-section:nth-child(even) {
-        animation-delay: 0.1s;
-      }
+      .settings-section:nth-child(odd)  { animation-delay: 0.05s; }
+      .settings-section:nth-child(even) { animation-delay: 0.10s; }
+
+      /* ─── Section header — accent bar + tighter spacing ─────────────── */
       .section-head {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        margin-bottom: 18px;
-        padding-bottom: 12px;
-        border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+        margin-bottom: 20px;
+        padding-bottom: 14px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+      }
+      .section-head h2 {
+        margin: 0;
+        color: var(--gtss-text);
+        font-family: "Geist", sans-serif;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: -0.005em;
+        position: relative;
+        padding-left: 14px;
+      }
+      .section-head h2::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 3px;
+        height: 18px;
+        border-radius: 2px;
+        background: linear-gradient(180deg, var(--gtss-primary), #8b5cf6);
       }
       .settings-page h2,
       .settings-page h3 {
-        font-family: "Geist", serif;
+        font-family: "Geist", sans-serif;
         letter-spacing: 0.01em;
       }
-      .section-head h2,
       .settings-card h3 {
-        margin: 0;
+        margin: 0 0 8px;
         color: var(--gtss-text);
+        font-size: 14px;
+        font-weight: 700;
       }
-      .section-head h2 {
-        font-size: 20px;
+      /* Normalize the noisy inline h3 styles that repeat across sections.
+         The inline styles still apply for backwards compatibility, but we
+         tighten the visual treatment here so all sub-headings feel
+         consistent regardless of how they were authored. */
+      .settings-section h3[style*="text-transform: uppercase"],
+      .settings-section h3[style*="letter-spacing"] {
+        margin: 0 0 14px !important;
+        font-size: 12px !important;
+        font-weight: 700 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.08em !important;
+        color: var(--gtss-muted) !important;
+        padding-bottom: 8px;
+        border-bottom: 1px dashed rgba(148, 163, 184, 0.16);
+      }
+      .settings-section h3[style*="border-bottom: 1px dashed"] {
+        color: var(--gtss-primary) !important;
+        font-size: 13px !important;
+        font-weight: 700 !important;
       }
       .muted {
         color: rgba(148, 163, 184, 0.85);
@@ -112,11 +209,16 @@
         gap: 14px;
       }
       .settings-card {
-        padding: 16px;
+        padding: 18px;
         border: 1px solid var(--settings-border);
         border-radius: calc(var(--gtss-radius) + 2px);
         background: var(--settings-surface-2);
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        transition: border-color 0.2s, transform 0.15s;
+      }
+      .settings-card:hover {
+        border-color: rgba(96, 165, 250, 0.32);
+        transform: translateY(-1px);
       }
       .session-card {
         display: grid;
@@ -144,22 +246,33 @@
       }
       .form-grid {
         display: grid;
-        gap: 14px;
+        gap: 16px;
       }
       .form-row {
         display: flex;
         flex-wrap: wrap;
-        gap: 10px;
+        gap: 12px;
         align-items: end;
       }
       .field {
         display: grid;
         gap: 8px;
         color: var(--gtss-muted);
-        font-size: 13px;
+        font-size: 12px;
         font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
         flex: 1;
         min-width: 220px;
+      }
+      .field > span.muted,
+      .field > span:not([class]) {
+        text-transform: none;
+        letter-spacing: 0;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--gtss-muted);
+        margin-top: -4px;
       }
       .field input,
       .field textarea,
@@ -414,6 +527,22 @@
     <!-- SHELL -->
     <main class="page-content">
       <div class="settings-page">
+        <!-- ─── Page hero ─── -->
+        <header class="settings-hero">
+          <div class="settings-hero-text">
+            <h1>Settings</h1>
+            <p>
+              Configure brand context, platform sessions, AI keys, rate limits,
+              pipelines, and security. Changes are saved per-section — use the
+              navigation on the left to jump to a specific area.
+            </p>
+          </div>
+          <div class="settings-hero-badge">
+            <span class="dot"></span>
+            <span>Local-first · data stays on this machine</span>
+          </div>
+        </header>
+
         <nav class="settings-nav" aria-label="Settings sections">
           <a href="#context-section">Brand Context</a>
           <a href="#platform-sessions">Platform Sessions</a>

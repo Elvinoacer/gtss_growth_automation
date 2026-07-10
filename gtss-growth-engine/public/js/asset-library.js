@@ -6,6 +6,10 @@
 //   - Labeling groups and choosing post type (carousel/video/single)
 //   - Per-asset tags, rename, delete
 //   - Toggling the content pipeline's asset source (AI vs library)
+//
+// Refined to match the polished asset-library.html layout: header stats,
+// toolbar with primary/secondary actions, hover-to-reveal remove buttons,
+// dedicated empty states, and consistent card design.
 
 const assetState = {
   assets: [],
@@ -31,23 +35,38 @@ async function loadAll() {
   document.getElementById("asset-media-type").value =
     assetState.settings.content_library_media_type || "image";
 
-  const nextEl = document.getElementById("asset-next");
-  if (assetState.stats.nextGroup) {
-    nextEl.textContent = `Next up: group "${assetState.stats.nextGroup.group.name}" (${assetState.stats.nextGroup.assets.length} asset(s))`;
-  } else if (assetState.stats.next) {
-    nextEl.textContent = `Next up: ${assetState.stats.next.name}`;
-  } else {
-    nextEl.textContent = "No library assets yet";
-  }
-
+  updateHeaderStats();
   renderGroups();
   renderAssets();
+}
+
+function updateHeaderStats() {
+  const nextEl = document.getElementById("asset-next");
+  const nextHeaderEl = document.getElementById("stat-next");
+  const assetsEl = document.getElementById("stat-assets");
+  const groupsEl = document.getElementById("stat-groups");
+
+  let nextLabel = "No library assets yet";
+  if (assetState.stats.nextGroup) {
+    nextLabel = `Next: "${assetState.stats.nextGroup.group.name}" (${assetState.stats.nextGroup.assets.length} asset${assetState.stats.nextGroup.assets.length === 1 ? "" : "s"})`;
+  } else if (assetState.stats.next) {
+    nextLabel = `Next: ${assetState.stats.next.name}`;
+  }
+
+  if (nextEl) nextEl.textContent = nextLabel;
+  if (nextHeaderEl) nextHeaderEl.textContent = nextLabel;
+  if (assetsEl) assetsEl.textContent = String(assetState.assets.length || 0);
+  if (groupsEl) groupsEl.textContent = String(assetState.groups.length || 0);
 }
 
 function renderGroups() {
   const container = document.getElementById("groups-list");
   if (!assetState.groups || assetState.groups.length === 0) {
-    container.innerHTML = `<div class="group-empty">No groups yet. Create one above to start grouping assets for multi-image posts.</div>`;
+    container.innerHTML = `
+      <div class="group-empty">
+        <div style="font-size: 13px; color: var(--gtss-text); font-weight: 600; margin-bottom: 4px;">No groups yet</div>
+        <div>Create one above to start grouping assets for multi-image posts.</div>
+      </div>`;
     return;
   }
   container.innerHTML = assetState.groups
@@ -71,7 +90,11 @@ function renderGroups() {
             <div>
               <h3>${window.gtss.escapeHtml(group.name)} <span class="group-badge">${group.post_type}</span></h3>
               ${group.label && group.label !== group.name ? `<div class="asset-meta">${window.gtss.escapeHtml(group.label)}</div>` : ""}
-              <div class="asset-meta">used ${group.times_used || 0} time(s) · ${assets.length} asset(s)</div>
+              <div class="group-meta-row">
+                <span>used ${group.times_used || 0} time${(group.times_used || 0) === 1 ? "" : "s"}</span>
+                <span aria-hidden="true">·</span>
+                <span>${assets.length} asset${assets.length === 1 ? "" : "s"}</span>
+              </div>
             </div>
             <div class="group-actions">
               <button type="button" data-rename-group="${group.id}">Rename</button>
@@ -88,7 +111,12 @@ function renderGroups() {
 function renderAssets() {
   const grid = document.getElementById("asset-grid");
   if (!assetState.assets || assetState.assets.length === 0) {
-    grid.innerHTML = `<div class="asset-card asset-meta">No assets uploaded.</div>`;
+    grid.innerHTML = `
+      <div class="asset-empty-state">
+        <div class="icon" aria-hidden="true">📁</div>
+        <div class="title">No assets uploaded yet</div>
+        <div class="desc">Use the upload field above to add images or videos. Uploaded assets will appear here, ready to be grouped for carousels.</div>
+      </div>`;
     return;
   }
   // Build a list of group options for the assign dropdown.
@@ -105,13 +133,21 @@ function renderAssets() {
         ? `<span class="group-tag">in group #${asset.group_id}</span>`
         : "";
       const currentGroup = asset.group_id ? asset.group_id : "";
+      const tags = (asset.tags || [])
+        .map((t) => `<span class="asset-tag-pill">${window.gtss.escapeHtml(t)}</span>`)
+        .join("");
+      const mediaTypeLabel = asset.media_type === "video" ? "Video" : "Image";
       return `
         <article class="asset-card" data-asset-id="${asset.id}">
-          ${media}
-          <strong>${window.gtss.escapeHtml(asset.name)}</strong>
-          <span class="asset-meta">${asset.media_type} | used ${asset.times_used || 0} times</span>
-          <span class="asset-meta">tags: ${(asset.tags || []).map(window.gtss.escapeHtml).join(", ") || "—"}</span>
-          ${groupTag}
+          <div class="asset-media">${media}</div>
+          <strong title="${window.gtss.escapeHtml(asset.name)}">${window.gtss.escapeHtml(asset.name)}</strong>
+          <div class="asset-meta-row">
+            <span class="asset-meta">${mediaTypeLabel}</span>
+            <span aria-hidden="true">·</span>
+            <span class="asset-meta">used ${asset.times_used || 0}×</span>
+            ${groupTag}
+          </div>
+          <div class="asset-meta-row">${tags || '<span class="asset-meta">no tags</span>'}</div>
           <div class="asset-actions">
             <select class="assign-select" data-assign-asset="${asset.id}">
               <option value="">— assign to group —</option>
