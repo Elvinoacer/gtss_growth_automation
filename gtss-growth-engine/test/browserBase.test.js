@@ -111,12 +111,81 @@ test("stale browser locks are cleaned up", () => {
 });
 
 test("headless is disabled for social platforms unless explicitly allowed", () => {
+  // Snapshot CDP_VISIBLE_DEFAULT so this test is hermetic regardless of
+  // what the host machine's .env contains. The new normalizeHeadless
+  // treats CDP_VISIBLE_DEFAULT=false as "user chose Background mode in
+  // Settings" and allows headless for pipeline runs — so we must make
+  // sure it's unset here to preserve the test's original intent.
+  const snap = snapshotEnv(["CDP_VISIBLE_DEFAULT"]);
+  delete process.env.CDP_VISIBLE_DEFAULT;
+
   process.env.ALLOW_HEADLESS_SOCIAL = "false";
   assert.equal(normalizeHeadless("linkedin", true), false);
   assert.equal(normalizeHeadless("local", true), true);
 
   process.env.ALLOW_HEADLESS_SOCIAL = "true";
   assert.equal(normalizeHeadless("linkedin", true), true);
+
+  restoreEnv(snap);
+});
+
+test("loginSession always forces a visible browser regardless of headless preference", () => {
+  // A login session must NEVER be headless, no matter what env vars say.
+  // This is the predictability contract for user-initiated sign-in flows.
+  const snap = snapshotEnv([
+    "ALLOW_HEADLESS_SOCIAL",
+    "CDP_VISIBLE_DEFAULT",
+  ]);
+  delete process.env.ALLOW_HEADLESS_SOCIAL;
+  delete process.env.CDP_VISIBLE_DEFAULT;
+
+  // Even when headless is explicitly requested AND the user has opted
+  // into headless social automation, a login session returns false.
+  assert.equal(
+    normalizeHeadless("linkedin", true, { loginSession: true }),
+    false,
+  );
+  assert.equal(
+    normalizeHeadless("linkedin", true, {
+      loginSession: true,
+      allowHeadlessSocial: true,
+    }),
+    false,
+  );
+
+  process.env.ALLOW_HEADLESS_SOCIAL = "true";
+  assert.equal(
+    normalizeHeadless("x", true, { loginSession: true }),
+    false,
+  );
+
+  process.env.CDP_VISIBLE_DEFAULT = "false";
+  assert.equal(
+    normalizeHeadless("facebook", true, { loginSession: true }),
+    false,
+  );
+
+  restoreEnv(snap);
+});
+
+test("pipelines respect CDP_VISIBLE_DEFAULT=false as user's background preference", () => {
+  // When the user has chosen "Background" mode in Settings (which writes
+  // CDP_VISIBLE_DEFAULT=false), pipeline runs are allowed to be headless
+  // even for known social platforms. This is the user's explicit
+  // preference — we honor it for non-login runs.
+  const snap = snapshotEnv([
+    "ALLOW_HEADLESS_SOCIAL",
+    "CDP_VISIBLE_DEFAULT",
+  ]);
+  delete process.env.ALLOW_HEADLESS_SOCIAL;
+
+  process.env.CDP_VISIBLE_DEFAULT = "false";
+  assert.equal(normalizeHeadless("linkedin", true), true);
+  assert.equal(normalizeHeadless("instagram", true), true);
+  // Non-social platforms are unaffected by the social-specific guard.
+  assert.equal(normalizeHeadless("local", true), true);
+
+  restoreEnv(snap);
 });
 
 test("shared CDP takes precedence over persistent browser mode for social platforms", () => {

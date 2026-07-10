@@ -10,6 +10,27 @@ const PLATFORM_TABLES = [
 ];
 const PLATFORM_JSON_TABLES = ["posts", "discovery_runs"];
 
+// ─── Built-in platforms ──────────────────────────────────────────────────
+//
+// These are ALWAYS recognized by isKnownPlatform() / getPlatformKeys() even
+// before any DB row or daily-limit entry exists for them. This matters for
+// the very first login: when the user clicks "Login / Re-authenticate" on
+// the dashboard's sign-in modal for Google / Gemini, the API route
+// /api/sessions/authenticate/:platform validates the platform key against
+// getPlatformKeys(). Before any session has ever been saved, the catalog
+// only contained platforms discovered from the DB — so `google` and
+// `gemini` were rejected with "Unknown platform", blocking the very first
+// Gemini login. The built-in list below guarantees every platform the
+// automation layer can drive is accepted from day one.
+const BUILT_IN_PLATFORMS = [
+  "linkedin",
+  "x",
+  "facebook",
+  "instagram",
+  "google",
+  "gemini",
+];
+
 function normalizePlatformKey(platform) {
   return String(platform || "")
     .trim()
@@ -23,6 +44,8 @@ function formatPlatformLabel(platform) {
   if (key === "linkedin") return "LinkedIn";
   if (key === "instagram") return "Instagram";
   if (key === "facebook") return "Facebook";
+  if (key === "google") return "Google / Gemini";
+  if (key === "gemini") return "Gemini";
 
   return key
     .split(/[-_\s]+/)
@@ -42,6 +65,14 @@ function getPlatformCatalog() {
     discovered.add(key);
     orderedKeys.push(key);
   };
+
+  // Seed with the built-in platforms FIRST so the catalog always contains
+  // every platform the automation layer can drive — even on a fresh
+  // database with zero rows. DB-discovered and limit-configured platforms
+  // are appended afterwards (and deduplicated by the Set). This ordering
+  // also keeps the sign-in modal's platform grid stable across runs
+  // instead of reordering itself as DB rows accumulate.
+  BUILT_IN_PLATFORMS.forEach(addKey);
 
   const storedLimits = getDailyLimits();
   Object.keys(storedLimits).forEach(addKey);
@@ -88,6 +119,10 @@ function getPlatformCatalog() {
   });
 
   const catalogKeys = orderedKeys.slice();
+  // BUILT_IN_PLATFORMS guarantees orderedKeys is never empty, so the
+  // legacy "fall back to storedLimits" branch below is now dead code.
+  // Kept as a defensive safety net in case BUILT_IN_PLATFORMS is ever
+  // emptied by a future edit.
   if (catalogKeys.length === 0) {
     Object.keys(storedLimits).forEach(addKey);
   }

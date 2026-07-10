@@ -927,3 +927,169 @@ and pointing future contributors to `schedulerService.publishPost`.
 - Backward-compat preserved: `closeBrowserContext(platform, browserState)`
   still works (the new `options` arg defaults to `{}`).
 - `.git/` directory untouched.
+
+---
+
+## L. Login-session browser visibility & Gemini platform support
+
+**Problem:** Three intertwined issues reported by the operator:
+
+1. **"Sometimes the browser shows, sometimes it doesn't"** — when a login
+   session is initiated from the dashboard's sign-in modal, the automation
+   browser tab sometimes opens visibly (user can log in) and sometimes
+   opens invisibly inside a headless background Chrome (user stares at a
+   "Opening browser..." spinner until the 5-minute timeout). This is
+   unpredictable and blocks the critical sign-in flow.
+
+2. **Gemini shows "Unknown platform"** — clicking Login / Re-authenticate
+   on the Google / Gemini card in the sign-in modal returns HTTP 404
+   `{ error: "Unknown platform" }` because the platform catalog only
+   contained platforms discovered from the DB, and on a fresh install
+   neither `google` nor `gemini` had any DB rows yet.
+
+3. **Login sessions navigated to /login URLs** — `authenticatePlatform`
+   hard-coded login-page URLs (`/login`, `/i/flow/login`) instead of the
+   platform home page. The operator's contract is: navigate to the home
+   page and let the platform itself redirect to its login form (or to the
+   feed if already authenticated). This avoids sending an already-logged-in
+   user to a login page (which some platforms flag as suspicious) and
+   avoids maintaining fragile per-platform login URLs.
+
+**Root cause analysis:**
+
+- **Issue 1** — `authenticatePlatform` called `createBrowser(platform,
+  { headless: false })`. In CDP mode, `createBrowser` connects to the
+  EXISTING shared Chrome via `connectOverCDP`. If that Chrome was started
+  headless by the desktop launcher (because the user chose "Background"
+  mode in Settings → Automation Browser, i.e. `CDP_VISIBLE_DEFAULT=false`),
+  the login tab opens INSIDE the headless Chrome — invisible to the user.
+  The server process can't restart CDP itself (it doesn't own the Chrome
+  child process; only the Electron launcher's `CdpManager` does).
+
+- **Issue 2** — `getPlatformKeys()` in `platformCatalog.js` discovered
+  platforms exclusively from DB tables (`platform_sessions`, `daily_actions`,
+  etc.) and from the `daily_limits` settings row. On a fresh install with
+  zero rows, neither `google` nor `gemini` appeared, so the API route
+  `/api/sessions/authenticate/:platform` rejected them with 404.
+
+- **Issue 3** — `authenticatePlatform` used `https://www.${platform}.com/login`
+  as the default, with special cases only for `linkedin` and `x`. Gemini
+  has no `/login` page at all, and the operator's contract is to navigate
+  to the home page regardless.
+
+**Fix — four coordinated changes:**
+
+### `gtss-growth-engine/src/services/platformCatalog.js`
+
+- New `BUILT_IN_PLATFORMS` constant (`linkedin`, `x`, `facebook`,
+  `instagram`, `google`, `gemini`). `getPlatformCatalog()` now seeds its
+  ordered key list with these FIRST, before DB/limits discovery. This
+  guarantees `isKnownPlatform('google')` / `isKnownPlatform('gemini')`
+  return `true` from day one, so the API route accepts the very first
+  Gemini login on a fresh install.
+- `formatPlatformLabel` now has explicit cases for `google` ("Google /
+  Gemini") and `gemini` ("Gemini") so the UI renders the right label.
+
+### `gtss-growth-engine/src/automation/browserBase.js`
+
+- **`normalizeHeadless` — login sessions are ALWAYS visible.** New
+  `options.loginSession` flag short-circuits to `return false` before
+  any env-var checks. This is the single, predictable contract: a
+  user-initiated sign-in flow shows the browser window, period.
+
+- **`normalizeHeadless` — pipelines respect the user's preference.** In
+  addition to the legacy `ALLOW_HEADLESS_SOCIAL` escape hatch, we now
+  also treat `CDP_VISIBLE_DEFAULT=false` (the user's "Background" choice
+  in Settings → Automation Browser) as permission to run pipelines
+  headless. This makes the user's Settings preference apply to
+  persistent / standalone browser mode too, not just CDP mode. When
+  NEITHER env var is set, the historical safety default is preserved
+  (force visible for known social platforms).
+
+- **`createBrowser` — login-session visibility guarantee in CDP mode.**
+  When `options.loginSession === true` AND mode is `cdp`, we call the
+  new `ensureCdpVisibleViaBridge()` helper BEFORE `connectOverCDP()`.
+  This probes the desktop launcher's bridge (ports 9224–9227) and asks
+  it to ensure the shared Chrome is running visibly. If the bridge
+  confirms, we proceed with CDP mode — the login tab opens in a visible
+  Chrome window. If the bridge is NOT reachable (standalone server, no
+  launcher), we fall back to PERSISTENT mode with `headless:false`, which
+  launches a fresh visible Chrome window. Either way, the login window
+  is ALWAYS shown — eliminating the "sometimes shows, sometimes doesn't"
+  abnormality.
+
+- **New helpers `findBridgeBase()` and `ensureCdpVisibleViaBridge()`** —
+  localhost-only HTTP probes of the bridge. Cached after the first probe
+  so repeated login sessions in the same process don't re-probe. Uses
+  lazy `require("http")` so the module remains importable in test
+  environments.
+
+### `gtss-growth-engine/src/automation/executor.js`
+
+- **`authenticatePlatform` — passes `loginSession: true`** to
+  `createBrowser()`. This is the single flag that triggers the visibility
+  guarantee above.
+
+- **`authenticatePlatform` — navigates to the HOME page, not /login.**
+  New `getLoginSessionHomeUrl(platform)` helper returns:
+  - linkedin → `https://www.linkedin.com/`
+  - x → `https://x.com/`
+  - facebook → `https://www.facebook.com/`
+  - instagram → `https://www.instagram.com/`
+  - google / gemini → `https://gemini.google.com/`
+  The platform itself redirects to its login form if unauthenticated,
+  and to the feed if already signed in. `page.goto()` now uses
+  `waitUntil: "domcontentloaded"` with a 60s timeout and a `.catch()`
+  so a slow redirect never blocks the login-wait loop.
+
+- **`isManualAuthComplete` — handles google / gemini.** Returns `true`
+  when the URL is on `gemini.google.com` (the post-login landing page)
+  and `false` while the URL is still on `accounts.google.com` (the
+  Google sign-in flow in progress).
+
+### `desktop/main/bridge-server.js`
+
+- **New endpoint `POST /api/bridge/cdp/ensure-visible`** — the counterpart
+  to `ensureCdpVisibleViaBridge()` on the server side. It:
+  - Starts CDP visibly if not running.
+  - Restarts CDP visibly if running headless (`startedVisible === false`).
+  - No-ops if already running visibly.
+  Returns `{ ok, cdpState, cdpEndpoint }`. On failure returns
+  `{ ok: false, error }` so the server-side caller can fall back to a
+  visible persistent browser. Endpoint documented in the file's top-of-
+  file endpoint table.
+
+### Tests updated
+
+- `test/browserBase.test.js`:
+  - Existing "headless is disabled for social platforms" test now
+    snapshots/deletes `CDP_VISIBLE_DEFAULT` so it's hermetic.
+  - New test: `loginSession always forces a visible browser regardless
+    of headless preference` — verifies the login-session contract under
+    every combination of `ALLOW_HEADLESS_SOCIAL`, `CDP_VISIBLE_DEFAULT`,
+    and `options.allowHeadlessSocial`.
+  - New test: `pipelines respect CDP_VISIBLE_DEFAULT=false as user's
+    background preference` — verifies the user's Settings choice is
+    honored for non-login runs.
+
+- `test/authenticatePlatform.test.js`:
+  - New test: `manual auth detection accepts Gemini/Google post-login
+    urls` — verifies `isManualAuthComplete` returns `true` for
+    `gemini.google.com` URLs and `false` for `accounts.google.com` URLs,
+    for both the `google` and `gemini` platform keys.
+  - New test: `manual auth detection accepts LinkedIn and X post-login
+    urls` — fills the coverage gap for the two platforms that were
+    previously untested.
+
+### Verification
+
+- `node --test test/authenticatePlatform.test.js` — 3/3 pass.
+- `node --test test/browserBase.test.js` — 8/8 pass (5 original + 3 new).
+- `node --test test/platformAdapter.test.js test/platformPolicies.test.js
+  test/pipelineGeneralization.test.js` — 5/5 pass (no regressions from
+  the `platformCatalog.js` changes).
+- Manual smoke check: `getPlatformKeys()` now returns
+  `[linkedin, x, facebook, instagram, google, gemini]` on a fresh DB.
+- Manual smoke check: `normalizeHeadless` returns `false` for login
+  sessions under every env-var combination.
+- `.git/` directory untouched.

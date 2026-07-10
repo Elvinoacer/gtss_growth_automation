@@ -43,6 +43,14 @@
  *   GET  /api/bridge/cdp/sessions
  *        → { ok, sessions, running }
  *
+ *   POST /api/bridge/cdp/ensure-visible
+ *        Ensures the shared CDP Chrome is running VISIBLY. If CDP is not
+ *        running, starts it visibly. If CDP is running headless, restarts
+ *        it visibly. If already visible, no-op. Used by the server-side
+ *        createBrowser() when a login session is launched in CDP mode —
+ *        guarantees the login tab is always shown to the user.
+ *        → { ok, cdpState, cdpEndpoint }
+ *
  *   POST /api/bridge/cdp/open-login   body: { platform: "linkedin"|... }
  *        Ensures CDP is running VISIBLY (starts it if needed), then opens
  *        the platform's login URL in a new tab of the CDP Chrome. Returns
@@ -249,6 +257,76 @@ class BridgeServer {
       }
       const sessions = await this.cdp.checkSessions();
       return { ok: true, sessions, running: true };
+    }
+
+    // ─── Ensure CDP is visible (login-session helper) ────────────────────
+    //
+    // Called by the server-side createBrowser() when a LOGIN session is
+    // being launched in CDP mode. The server can't restart CDP itself
+    // (it doesn't own the Chrome child process), so it asks the bridge
+    // to make sure Chrome is running VISIBLY before the login tab opens.
+    //
+    // This is the heart of the "login sessions always show the browser"
+    // contract:
+    //   - If CDP is NOT running → start it visibly.
+    //   - If CDP is running but headless (startedVisible === false) →
+    //     restart it visibly so the login tab appears in a window the
+    //     user can interact with.
+    //   - If CDP is already running visibly → no-op (return ok).
+    //
+    // Cookies set during the login land directly in the CDP Chrome's
+    // profile — the same one automation uses — so no profile clone is
+    // needed for the session to "take".
+    //
+    // Returns { ok: true } on success, { ok: false, error } on failure.
+    // The caller (createBrowser) treats a false/missing ok as "bridge
+    // could not make CDP visible" and falls back to a visible persistent
+    // browser so the login window is STILL shown.
+    if (method === "POST" && pathname === "/api/bridge/cdp/ensure-visible") {
+      try {
+        if (!this.cdp.isRunning()) {
+          this.log.append("lifecycle", "Bridge: starting CDP visibly for login session...");
+          await this.cdp.start({
+            skipProfileCopy: false,
+            visible: true,
+            onProgress: (_stage, message) => {
+              try { this.log.append("cdp", message); } catch (_) {}
+            },
+          });
+          this.env.upsert("CDP_ENDPOINT", `http://127.0.0.1:${this.cdp.port}`);
+          this.env.upsert("BROWSER_MODE", "cdp");
+        } else if (this.cdp.startedVisible === false) {
+          // CDP is running headless — restart visibly so the user can
+          // see the login tab. This is the key fix for the "sometimes
+          // the browser shows, sometimes it doesn't" abnormality: when
+          // the launcher started Chrome in background mode (per the
+          // user's Settings → Automation Browser = "Background" choice)
+          // and the user then clicks Login / Re-authenticate on the
+          // dashboard modal, we bring Chrome to the foreground so the
+          // login tab is visible.
+          this.log.append("lifecycle", "Bridge: bringing headless Chrome to the foreground for login session...");
+          await this.cdp.stop("bridge-login-visibility");
+          await this.cdp.start({
+            visible: true,
+            onProgress: (_stage, message) => {
+              try { this.log.append("cdp", message); } catch (_) {}
+            },
+          });
+        } else {
+          // Already running visibly — nothing to do.
+          this.log.append("lifecycle", "Bridge: CDP already visible for login session.");
+        }
+        return {
+          ok: true,
+          cdpState: this.cdp.getState(),
+          cdpEndpoint: this.cdp.isRunning()
+            ? `http://127.0.0.1:${this.cdp.port}`
+            : null,
+        };
+      } catch (err) {
+        this.log.append("lifecycle:stderr", `Bridge: ensure-visible failed: ${err.message}`);
+        return { ok: false, error: err.message };
+      }
     }
 
     // ─── Open a platform login tab in the CDP Chrome ─────────────────────

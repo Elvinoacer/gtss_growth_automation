@@ -672,6 +672,17 @@ function isManualAuthComplete(page, platform) {
       !url.includes("/accounts/onetap")
     );
   }
+  // Google / Gemini — the user signs into their Google account and lands
+  // on gemini.google.com when authentication succeeds. While the Google
+  // sign-in flow is in progress, the URL stays under accounts.google.com
+  // (or myaccount.google.com for the account picker). Once Gemini loads,
+  // we treat the session as authenticated.
+  if (platform === "google" || platform === "gemini") {
+    return (
+      url.includes("gemini.google.com") &&
+      !url.includes("/accounts.google.com")
+    );
+  }
 
   return (
     !url.includes("/login") &&
@@ -1441,14 +1452,45 @@ function enqueueActionQueue(jobId, sseRes, options = {}) {
 async function authenticatePlatform(platform) {
   logger.info("AUTH", `Starting manual auth for ${platform}`);
 
-  const browserState = await createBrowser(platform, { headless: false });
+  // ─── loginSession flag ────────────────────────────────────────────────
+  //
+  // This is the single source of truth that tells createBrowser() (and
+  // normalizeHeadless()) that the browser MUST be visible, no matter what
+  // the user's background-mode preference is. Critical, user-initiated
+  // sign-in flows always need a visible window so the user can type
+  // credentials, solve CAPTCHAs, and approve 2FA prompts. Pipeline /
+  // automation runs do NOT set this flag, so they continue to respect
+  // the user's CDP_VISIBLE_DEFAULT / ALLOW_HEADLESS_SOCIAL preference.
+  //
+  // In CDP mode, createBrowser() also uses this flag to ask the desktop
+  // launcher's bridge to bring the shared Chrome to the foreground (or
+  // restart it visibly) before opening the login tab — eliminating the
+  // "sometimes the browser shows, sometimes it doesn't" abnormality that
+  // happened when CDP was already running headless in the background.
+  const browserState = await createBrowser(platform, {
+    headless: false,
+    loginSession: true,
+  });
   const { page } = browserState;
 
-  let loginUrl = `https://www.${platform}.com/login`;
-  if (platform === "linkedin") loginUrl = "https://www.linkedin.com/login";
-  else if (platform === "x") loginUrl = "https://x.com/i/flow/login";
-
-  await page.goto(loginUrl);
+  // ─── Navigate to the platform HOME PAGE, not the login page ───────────
+  //
+  // Per the project's login-session contract: every platform's own home
+  // page already redirects unauthenticated visitors to its login form,
+  // and re-redirects authenticated visitors to their feed/timeline. We
+  // therefore navigate to the home page and let the platform handle the
+  // routing — this avoids hard-coding login URLs that change frequently
+  // (X's /i/flow/login, LinkedIn's /login, etc.) and avoids sending the
+  // user to a login page when their session is already valid (which
+  // some platforms interpret as a suspicious signal).
+  //
+  // Gemini (Google) is special: it has no dedicated login endpoint at
+  // all. Navigating to https://gemini.google.com/ either shows the chat
+  // UI (if the Google session is valid) or redirects to
+  // accounts.google.com for sign-in. isManualAuthComplete() above
+  // treats "URL is on gemini.google.com" as the success signal.
+  const loginUrl = getLoginSessionHomeUrl(platform);
+  await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
 
   return new Promise((resolve, reject) => {
     let checkInterval;
@@ -1504,6 +1546,38 @@ async function authenticatePlatform(platform) {
       } catch (err) {}
     }, 3000);
   });
+}
+
+/**
+ * Resolve the home-page URL to navigate to during a login session.
+ *
+ * Per the login-session contract: we navigate to the platform's HOME page
+ * (not its /login page). The platform itself redirects to the login form
+ * if the visitor is unauthenticated, and to the feed/timeline if they're
+ * already signed in. This keeps the automation layer agnostic to each
+ * platform's login-URL churn and avoids treating an already-valid session
+ * as a fresh login (which some platforms flag as suspicious).
+ *
+ * Gemini (Google) has no dedicated login endpoint; its home page IS the
+ * entry point and redirects to accounts.google.com when not signed in.
+ */
+function getLoginSessionHomeUrl(platform) {
+  switch (platform) {
+    case "linkedin":
+      return "https://www.linkedin.com/";
+    case "x":
+    case "twitter":
+      return "https://x.com/";
+    case "facebook":
+      return "https://www.facebook.com/";
+    case "instagram":
+      return "https://www.instagram.com/";
+    case "google":
+    case "gemini":
+      return "https://gemini.google.com/";
+    default:
+      return `https://www.${platform}.com/`;
+  }
 }
 
 module.exports = {

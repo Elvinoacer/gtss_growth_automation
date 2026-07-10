@@ -57,6 +57,109 @@ function shouldAllowStandaloneBrowserLaunch() {
   return !isTruthyEnv(process.env.TEST_NO_BROWSER_LAUNCH);
 }
 
+// ─── Bridge probe (login-session visibility) ───────────────────────────────
+//
+// The desktop launcher (Electron main process) runs a tiny localhost-only
+// HTTP "bridge" server on port 9224 (auto-incrementing to 9225/9226/9227
+// if taken). The bridge is the only thing that can reliably restart a
+// headless CDP Chrome visibly — it OWNS the Chrome child process via
+// CdpManager, so it can stop() and start({visible:true}) it.
+//
+// From the server side (this file runs in the forked Node server, not in
+// Electron), we can't restart CDP ourselves — we don't own the process.
+// So for login sessions, we probe the bridge and ask IT to bring Chrome
+// to the foreground before we connectOverCDP(). If the bridge is not
+// reachable (standalone server, no launcher), we fall back to a visible
+// persistent browser so the login window is ALWAYS shown — eliminating
+// the "sometimes the browser shows, sometimes it doesn't" abnormality.
+const BRIDGE_PORTS = [9224, 9225, 9226, 9227];
+const BRIDGE_PROBE_CACHE = { base: null, checked: false };
+
+async function findBridgeBase() {
+  if (BRIDGE_PROBE_CACHE.checked) return BRIDGE_PROBE_CACHE.base;
+  BRIDGE_PROBE_CACHE.checked = true;
+  // http is required lazily so this module remains importable in test
+  // environments that stub out Node's http (and to avoid paying the
+  // require cost when no login session ever runs).
+  const http = require("http");
+  for (const port of BRIDGE_PORTS) {
+    const reachable = await new Promise((resolve) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: "/api/bridge/health",
+          method: "GET",
+          timeout: 600,
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode === 200);
+        },
+      );
+      req.on("error", () => resolve(false));
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(false);
+      });
+      req.end();
+    });
+    if (reachable) {
+      BRIDGE_PROBE_CACHE.base = `http://127.0.0.1:${port}`;
+      return BRIDGE_PROBE_CACHE.base;
+    }
+  }
+  return null;
+}
+
+/**
+ * Ask the desktop launcher's bridge to ensure the shared CDP Chrome is
+ * running VISIBLY. Used ONLY by login sessions (createBrowser with
+ * options.loginSession === true and mode === "cdp").
+ *
+ * Returns true if the bridge confirmed CDP is visible (or made it
+ * visible). Returns false if the bridge is not reachable — in that case
+ * the caller MUST fall back to a visible persistent browser so the
+ * login window is still shown.
+ */
+async function ensureCdpVisibleViaBridge() {
+  const base = await findBridgeBase();
+  if (!base) return false;
+  const http = require("http");
+  const ok = await new Promise((resolve) => {
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port: Number(base.split(":").pop()),
+        path: "/api/bridge/cdp/ensure-visible",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        timeout: 20000,
+      },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => {
+          try {
+            const data = body ? JSON.parse(body) : {};
+            resolve(Boolean(data && data.ok));
+          } catch (_) {
+            resolve(false);
+          }
+        });
+      },
+    );
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.end(JSON.stringify({}));
+  });
+  return ok;
+}
+
 async function launchCdpChrome(port = 9222) {
   if (!shouldAutoLaunchCdp()) {
     logger.info(
@@ -707,10 +810,46 @@ function trackBrowserState(state) {
 
 function normalizeHeadless(platform, requestedHeadless, options = {}) {
   const { isKnownPlatform } = require("../services/platformCatalog");
-  const allowHeadless =
+
+  // ─── Login sessions are ALWAYS visible ─────────────────────────────────
+  //
+  // The single, predictable contract for user-initiated sign-in flows:
+  // the browser window is shown, no matter what the user's background-mode
+  // preference is. This eliminates the "sometimes the browser shows,
+  // sometimes it doesn't" abnormality that happened when CDP was already
+  // running headless in the background and the login tab opened invisibly.
+  // Pipeline / automation runs do NOT set this flag, so they continue to
+  // respect the user's preference below.
+  if (options.loginSession === true) {
+    return false;
+  }
+
+  // ─── Pipeline / automation runs respect the user's preference ──────────
+  //
+  // The user expresses their preference via two env vars (both written by
+  // the desktop launcher's Settings → Automation Browser section):
+  //
+  //   ALLOW_HEADLESS_SOCIAL=true  — explicitly opts in to headless social
+  //     automation (legacy escape hatch, kept for backwards compat).
+  //
+  //   CDP_VISIBLE_DEFAULT=false   — the user chose "Background" mode in
+  //     Settings. This means they want automation (pipelines, scheduled
+  //     posts, warmup, etc.) to run WITHOUT popping up a visible window.
+  //     We treat this as equivalent to ALLOW_HEADLESS_SOCIAL=true for
+  //     non-login runs, so the user's Settings preference is honored in
+  //     persistent / standalone browser mode too (not just CDP mode).
+  //
+  // When NEITHER is set, we keep the historical safety default: force
+  // visible for known social platforms so a misconfigured environment
+  // never silently runs outreach headless (which platforms detect and
+  // penalize). Login sessions bypass this entirely via the early return
+  // above.
+  const userAllowsHeadless =
     options.allowHeadlessSocial === true ||
-    process.env.ALLOW_HEADLESS_SOCIAL === "true";
-  if (requestedHeadless && isKnownPlatform(platform) && !allowHeadless) {
+    isTruthyEnv(process.env.ALLOW_HEADLESS_SOCIAL) ||
+    String(process.env.CDP_VISIBLE_DEFAULT || "").toLowerCase() === "false";
+
+  if (requestedHeadless && isKnownPlatform(platform) && !userAllowsHeadless) {
     logger.warn("BROWSER", "Headless mode disabled for social automation", {
       platform,
     });
@@ -1213,14 +1352,63 @@ async function createBrowser(platform, options = {}) {
     options,
   );
   const userAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-  const mode = getBrowserMode(platform, options);
-  const cdpEndpoint =
+  let mode = getBrowserMode(platform, options);
+  let cdpEndpoint =
     options.cdpEndpoint || getPlatformEnv(platform, "CDP_ENDPOINT");
   let lock = null;
+
+  // ─── Login-session visibility guarantee ─────────────────────────────────
+  //
+  // THE FIX for the "sometimes the browser shows, sometimes it doesn't"
+  // abnormality. When this is a login session (options.loginSession ===
+  // true) AND we'd normally use CDP mode, we MUST make sure the shared
+  // CDP Chrome is visible BEFORE we connectOverCDP() — otherwise the
+  // login tab opens inside a headless background Chrome and the user
+  // can't see it.
+  //
+  // Only the desktop launcher's bridge can make CDP visible (it owns
+  // the Chrome child process). So:
+  //
+  //   1. Ask the bridge to ensure CDP is visible (ensureCdpVisibleViaBridge).
+  //   2. If the bridge confirms → proceed with CDP mode as normal. The
+  //      login tab will now open in a visible Chrome window.
+  //   3. If the bridge is NOT reachable (standalone server, no launcher)
+  //      → fall back to PERSISTENT mode with headless:false. This
+  //      launches a fresh visible Chrome window whose profile is the
+  //      platform's persistent profile (PROFILES_DIR/<platform>/).
+  //      Automation that runs in standalone mode also uses persistent
+  //      mode, so the login cookies land in the right profile.
+  //
+  // Step 3 is the predictability guarantee: no matter what state the
+  // shared CDP Chrome is in, a login session ALWAYS shows a visible
+  // browser window. Pipelines and other non-login runs are unaffected
+  // — they keep using CDP mode with whatever visibility the launcher
+  // gave Chrome (per the user's Settings → Automation Browser choice).
+  if (options.loginSession === true && mode === "cdp") {
+    const bridgeOk = await ensureCdpVisibleViaBridge();
+    if (!bridgeOk) {
+      logger.warn(
+        "BROWSER",
+        `Login session for ${platform}: bridge not reachable — falling back to visible persistent browser so the login window is always shown.`,
+      );
+      // Force persistent mode for this call only. We do NOT mutate
+      // options.mode (the caller's options object) — we use local
+      // `mode` / `cdpEndpoint` variables instead, so the rest of
+      // createBrowser routes through the persistent branch below.
+      mode = "persistent";
+      cdpEndpoint = null;
+    } else {
+      logger.info(
+        "BROWSER",
+        `Login session for ${platform}: bridge confirmed CDP Chrome is visible.`,
+      );
+    }
+  }
 
   logger.info("BROWSER", `Launching browser for ${platform}`, {
     headless,
     mode,
+    loginSession: options.loginSession === true,
   });
 
   if (mode === "cdp") {
