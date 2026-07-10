@@ -44,11 +44,13 @@ const router = express.Router();
 
 const ALLOWED_CONTENT_PLATFORMS = new Set(['instagram', 'linkedin', 'x', 'facebook']);
 const ALLOWED_OUTREACH_PLATFORMS = new Set(['instagram', 'linkedin', 'x', 'facebook']);
+const ALLOWED_MASS_FOLLOW_PLATFORMS = new Set(['instagram', 'linkedin', 'x', 'facebook', 'tiktok']);
 
 const PIPELINE_STAGES = {
   outreach: ['discovery', 'qualification', 'messages', 'send'],
   content: ['image_gen', 'caption_gen', 'post_record', 'publish'],
   dm_check: ['scan'],
+  mass_follow: ['select_targets', 'follow', 'report'],
 };
 
 function parseJsonObject(value, fallback = {}) {
@@ -161,6 +163,10 @@ function normalizeLimits(id, limits) {
     'max_dms_per_run',
     'max_connections_per_run',
     'max_posts_per_run',
+    'max_follows_per_run',
+    'follow_interval_min_seconds',
+    'follow_interval_max_seconds',
+    'max_retries_per_target',
   ]) {
     if (next[key] !== undefined) {
       const numeric = Number(next[key]);
@@ -215,6 +221,33 @@ function normalizeLimits(id, limits) {
     }
     if (next.timezone !== undefined) next.timezone = String(next.timezone).trim() || 'UTC';
     if (next.prompt !== undefined) next.prompt = String(next.prompt);
+  }
+
+  if (id === 'mass_follow') {
+    if (next.platforms !== undefined) {
+      if (!Array.isArray(next.platforms)) {
+        throw new Error('platforms must be an array');
+      }
+      next.platforms = next.platforms
+        .map((platform) => String(platform).trim().toLowerCase())
+        .filter((platform) => ALLOWED_MASS_FOLLOW_PLATFORMS.has(platform));
+      if (next.platforms.length === 0) {
+        throw new Error('Select at least one mass-follow platform');
+      }
+    }
+    // follow_interval_min_seconds must not exceed follow_interval_max_seconds
+    if (
+      next.follow_interval_min_seconds !== undefined &&
+      next.follow_interval_max_seconds !== undefined &&
+      Number(next.follow_interval_min_seconds) > Number(next.follow_interval_max_seconds)
+    ) {
+      throw new Error('follow_interval_min_seconds cannot exceed follow_interval_max_seconds');
+    }
+    for (const key of ['respect_active_window', 'skip_already_following']) {
+      if (next[key] !== undefined) {
+        next[key] = next[key] === true || next[key] === 'true' || next[key] === 1 || next[key] === '1';
+      }
+    }
   }
 
   return next;
@@ -1171,7 +1204,261 @@ router.get('/:id/history', (req, res) => {
     return res.json({ runs: rows });
   }
 
+  if (id === 'mass_follow') {
+    const rows = db.prepare(`
+      SELECT id, trigger, status, current_stage, current_message, progress,
+             total_steps, completed_steps, error_message, started_at, finished_at, duration_ms
+      FROM pipeline_executions
+      WHERE pipeline_id = 'mass_follow'
+      ORDER BY started_at DESC
+      LIMIT ?
+    `).all(limit);
+    return res.json({ runs: rows });
+  }
+
   res.json({ runs: [] });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mass-Follow Pipeline — Target management endpoints
+//
+// The mass_follow pipeline operates on rows in `mass_follow_targets`. These
+// endpoints let the user (or the wizard UI) add targets one-by-one or in
+// bulk, list/filter them, retry failed ones, and remove them. The pipeline
+// itself never modifies which targets exist — it only flips status — so
+// these endpoints are the only way the table gets populated.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Validate a (platform, profileUrl) pair for mass-follow. Rejects empty
+ * URLs and unsupported platforms. Returns the normalized pair.
+ */
+function normalizeMassFollowTarget(platform, profileUrl, handle, source) {
+  const normPlatform = String(platform || '').trim().toLowerCase();
+  if (!ALLOWED_MASS_FOLLOW_PLATFORMS.has(normPlatform)) {
+    throw new Error(`Unsupported mass-follow platform: ${platform}`);
+  }
+  const url = String(profileUrl || '').trim();
+  if (!url) {
+    throw new Error('profile_url is required');
+  }
+  // Basic URL sanity check — accept full URLs and bare handles (e.g. @acme).
+  if (!/^https?:\/\//i.test(url) && !/^@?[\w.\-]+$/i.test(url)) {
+    throw new Error(`Invalid profile_url: ${url}`);
+  }
+  return {
+    platform: normPlatform,
+    profile_url: url,
+    handle: handle ? String(handle).trim().slice(0, 200) : null,
+    source: source ? String(source).trim().slice(0, 50) : 'manual',
+  };
+}
+
+// ── GET /api/pipelines/mass-follow/targets ── list with optional filters
+router.get('/mass-follow/targets', (req, res) => {
+  const db = getDb();
+  const platform = req.query.platform ? String(req.query.platform).trim().toLowerCase() : null;
+  const status = req.query.status ? String(req.query.status).trim().toLowerCase() : null;
+  const limit = Math.min(Number(req.query.limit) || 200, 1000);
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+
+  const where = [];
+  const args = [];
+  if (platform && ALLOWED_MASS_FOLLOW_PLATFORMS.has(platform)) {
+    where.push('platform = ?');
+    args.push(platform);
+  }
+  const validStatuses = new Set(['pending', 'running', 'sent', 'accepted', 'skipped', 'failed']);
+  if (status && validStatuses.has(status)) {
+    where.push('status = ?');
+    args.push(status);
+  }
+  const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+
+  const rows = db
+    .prepare(
+      `SELECT id, platform, profile_url, handle, status, source, campaign_id, lead_id,
+              error_message, retry_count, max_retries, next_retry_at, attempted_at, sent_at,
+              created_at, updated_at
+       FROM mass_follow_targets
+       ${whereClause}
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(...args, limit, offset);
+
+  const totalRow = db
+    .prepare(`SELECT COUNT(*) AS count FROM mass_follow_targets ${whereClause}`)
+    .get(...args);
+
+  // Summary counts for the UI
+  const summary = db
+    .prepare(
+      `SELECT platform, status, COUNT(*) AS count
+       FROM mass_follow_targets
+       ${whereClause ? whereClause + ' AND ' : 'WHERE '} 1=1
+       GROUP BY platform, status`,
+    )
+    .all(...args);
+
+  const summaryMap = {};
+  for (const row of summary) {
+    if (!summaryMap[row.platform]) summaryMap[row.platform] = {};
+    summaryMap[row.platform][row.status] = row.count;
+  }
+
+  res.json({ targets: rows, total: totalRow ? totalRow.count : 0, summary: summaryMap });
+});
+
+// ── POST /api/pipelines/mass-follow/targets ── add one or many targets
+//
+// Body: { targets: [{ platform, profile_url, handle?, source? }, ...] }
+//   OR  { platform, profile_url, handle?, source? }  (single-target shorthand)
+//
+// Idempotent on (platform, profile_url) — re-adding an existing target is a
+// no-op (returns its existing id, not an error). Failed targets that are
+// re-added are reset to 'pending' so the next run retries them.
+router.post('/mass-follow/targets', (req, res) => {
+  const db = getDb();
+  let incoming;
+  if (Array.isArray(req.body.targets)) {
+    incoming = req.body.targets;
+  } else if (req.body && req.body.platform && req.body.profile_url) {
+    incoming = [req.body];
+  } else {
+    return res.status(400).json({ error: 'Provide a `targets` array or a single {platform, profile_url} object' });
+  }
+
+  const inserted = [];
+  const updated = [];
+  const errors = [];
+
+  const insertStmt = db.prepare(
+    `INSERT INTO mass_follow_targets (platform, profile_url, handle, source, status, max_retries)
+     VALUES (?, ?, ?, ?, 'pending', 3)
+     ON CONFLICT(platform, profile_url) DO UPDATE SET
+       handle = COALESCE(excluded.handle, mass_follow_targets.handle),
+       source = COALESCE(excluded.source, mass_follow_targets.source),
+       status = CASE WHEN mass_follow_targets.status IN ('sent','accepted') THEN mass_follow_targets.status ELSE 'pending' END,
+       error_message = NULL,
+       retry_count = 0,
+       next_retry_at = NULL,
+       updated_at = CURRENT_TIMESTAMP
+     RETURNING id, (changes() > 0) AS was_inserted`,
+  );
+
+  for (let i = 0; i < incoming.length; i++) {
+    const item = incoming[i];
+    try {
+      const normalized = normalizeMassFollowTarget(
+        item.platform,
+        item.profile_url,
+        item.handle,
+        item.source,
+      );
+      const row = insertStmt.get(
+        normalized.platform,
+        normalized.profile_url,
+        normalized.handle,
+        normalized.source,
+      );
+      if (row && row.was_inserted) {
+        inserted.push({ id: row.id, ...normalized });
+      } else if (row) {
+        updated.push({ id: row.id, ...normalized });
+      }
+    } catch (err) {
+      errors.push({ index: i, input: item, error: err.message });
+    }
+  }
+
+  logActivity({
+    activityType: 'mass_follow_target_added',
+    entityType: 'pipeline',
+    entityId: 'mass_follow',
+    actor: req.user?.id || 'system',
+    status: errors.length === 0 ? 'success' : 'partial',
+    summary: `Added ${inserted.length} new mass-follow target(s), updated ${updated.length}, ${errors.length} error(s)`,
+    details: { inserted: inserted.length, updated: updated.length, errors: errors.length },
+  });
+
+  res.status(201).json({
+    inserted: inserted.length,
+    updated: updated.length,
+    errors: errors.length,
+    inserted_ids: inserted.map((t) => t.id),
+    updated_ids: updated.map((t) => t.id),
+    errors_detail: errors,
+  });
+});
+
+// ── DELETE /api/pipelines/mass-follow/targets/:id ── remove a single target
+router.delete('/mass-follow/targets/:id', (req, res) => {
+  const db = getDb();
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: 'Invalid target id' });
+  }
+  const result = db.prepare('DELETE FROM mass_follow_targets WHERE id = ?').run(id);
+  if (result.changes === 0) {
+    return res.status(404).json({ error: 'Target not found' });
+  }
+  res.json({ deleted: true, id });
+});
+
+// ── POST /api/pipelines/mass-follow/targets/:id/retry ── reset a failed target back to pending
+router.post('/mass-follow/targets/:id/retry', (req, res) => {
+  const db = getDb();
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: 'Invalid target id' });
+  }
+  const result = db
+    .prepare(
+      `UPDATE mass_follow_targets
+       SET status = 'pending', retry_count = 0, next_retry_at = NULL,
+           error_message = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status = 'failed'`,
+    )
+    .run(id);
+  if (result.changes === 0) {
+    return res.status(404).json({ error: 'Target not found or not in failed status' });
+  }
+  res.json({ retried: true, id });
+});
+
+// ── POST /api/pipelines/mass-follow/targets/clear ── bulk delete by filter
+//
+// Body: { platform?, status?, older_than_days? }
+// Useful for clearing out a stale campaign before re-importing a fresh target list.
+router.post('/mass-follow/targets/clear', (req, res) => {
+  const db = getDb();
+  const platform = req.body?.platform ? String(req.body.platform).trim().toLowerCase() : null;
+  const status = req.body?.status ? String(req.body.status).trim().toLowerCase() : null;
+  const olderThanDays = Number(req.body?.older_than_days) || 0;
+
+  const where = [];
+  const args = [];
+  if (platform && ALLOWED_MASS_FOLLOW_PLATFORMS.has(platform)) {
+    where.push('platform = ?');
+    args.push(platform);
+  }
+  const validStatuses = new Set(['pending', 'running', 'sent', 'accepted', 'skipped', 'failed']);
+  if (status && validStatuses.has(status)) {
+    where.push('status = ?');
+    args.push(status);
+  }
+  if (olderThanDays > 0) {
+    where.push("datetime(created_at) < datetime('now', ?)");
+    args.push(`-${olderThanDays} days`);
+  }
+  if (where.length === 0) {
+    return res.status(400).json({ error: 'Provide at least one filter (platform, status, or older_than_days)' });
+  }
+  const result = db
+    .prepare(`DELETE FROM mass_follow_targets WHERE ${where.join(' AND ')}`)
+    .run(...args);
+  res.json({ deleted: result.changes });
 });
 
 module.exports = router;

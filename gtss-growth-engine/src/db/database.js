@@ -797,6 +797,7 @@ function seedDefaultSettings(database) {
     pipeline_outreach_paused: "false",
     pipeline_content_paused: "false",
     pipeline_dm_check_paused: "false",
+    pipeline_mass_follow_paused: "false",
     pipeline_discovery_paused: "false",
     content_asset_source: "ai",
     content_library_media_type: "image",
@@ -862,6 +863,24 @@ function seedDefaultPipelineSchedules(database) {
       1,
       '*/30 * * * *',
       '{"active_hours_start": 8, "active_hours_end": 22, "timezone": "Africa/Nairobi", "platforms": ["instagram", "linkedin", "x", "facebook"], "prompt": ""}'
+    )
+  `).run();
+
+  // Mass-Follow pipeline — disabled by default until the user adds targets
+  // and configures platforms. Cron runs every 30 minutes; each run pulls a
+  // batch of pending mass_follow_targets rows, follows them via the platform
+  // adapter (which respects per-platform active windows, daily limits, and
+  // human-like delays), and writes a summary back to the pipeline logs.
+  database.prepare(`
+    INSERT OR IGNORE INTO pipeline_schedules
+      (id, name, description, enabled, cron, limits_json)
+    VALUES (
+      'mass_follow',
+      'Mass-Follow Pipeline',
+      'Bulk-follow target accounts across X, LinkedIn, Facebook, Instagram, and TikTok with human-like scheduling',
+      0,
+      '*/30 * * * *',
+      '{"platforms": ["instagram", "x", "linkedin", "facebook", "tiktok"], "max_follows_per_run": 20, "follow_interval_min_seconds": 40, "follow_interval_max_seconds": 110, "respect_active_window": true, "skip_already_following": true, "max_retries_per_target": 3}'
     )
   `).run();
 }

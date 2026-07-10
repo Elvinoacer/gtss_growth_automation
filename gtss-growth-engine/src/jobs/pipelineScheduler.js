@@ -16,6 +16,7 @@ const cronRegistry = require('./cronRegistry');
 const jobRegistry = require('./jobRegistry');
 const { runFullPipeline } = require('../pipeline/pipelineRunner');
 const { runContentPipeline } = require('../pipeline/contentPipeline');
+const { runMassFollowPipeline } = require('../pipeline/massFollowPipeline');
 const { detectReplies } = require('../services/replyDetector');
 const { checkInbox, isCheckingInbox } = require('../services/instagramReplyChecker');
 const { isSessionValid } = require('../automation/sessionManager');
@@ -49,6 +50,31 @@ const RUNNERS = {
         (Array.isArray(result.runs) && result.runs.every((run) => run.success === false)));
     if (failed) {
       throw new Error(result.error || 'Content pipeline failed');
+    }
+  },
+  mass_follow: async (limits, options = {}) => {
+    const result = await runMassFollowPipeline({
+      ...limits,
+      trigger: options.trigger || 'cron',
+      executionId: options.executionId,
+      resumeFrom: options.resumeFrom,
+    });
+    if (result && result.success === false) {
+      // 'No supported platforms configured' and 'No eligible targets' are
+      // treated as soft-skips — we don't want to flip the pipeline to
+      // 'failed' just because the user hasn't added targets yet. Only throw
+      // on genuine errors.
+      const softErrors = new Set([
+        'No supported platforms configured',
+        'No eligible targets',
+      ]);
+      if (!softErrors.has(result.error)) {
+        throw new Error(result.error || 'Mass-follow pipeline failed');
+      }
+      logger.info(
+        'PIPELINE-SCHEDULER',
+        `Mass-follow pipeline soft-skipped: ${result.error}`,
+      );
     }
   },
   dm_check: async (limits = {}, options = {}) => {
@@ -299,7 +325,7 @@ async function runPipelineWithLifecycle(pipelineId, trigger, limits, options = {
     }
   }
 
-  const totalSteps = pipelineId === 'outreach' ? 4 : pipelineId === 'content' ? 4 : 1;
+  const totalSteps = pipelineId === 'outreach' ? 4 : pipelineId === 'content' ? 4 : pipelineId === 'mass_follow' ? 3 : 1;
   const exec = pipelineState.createExecution(pipelineId, trigger, {
     startMessage: `Initializing ${pipelineId} pipeline…`,
     totalSteps,

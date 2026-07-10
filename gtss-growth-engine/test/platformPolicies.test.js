@@ -22,6 +22,11 @@ function runPolicyTest() {
 
   assert.strictEqual(limits.facebook.dms, 10, "Facebook DMs daily limit mismatch.");
   assert.strictEqual(limits.facebook.likes, 10, "Facebook likes daily limit mismatch.");
+
+  // TikTok limits (newly added in the mass-follow pipeline overhaul)
+  assert.strictEqual(limits.tiktok.follows, 25, "TikTok follows daily limit mismatch.");
+  assert.strictEqual(limits.tiktok.likes, 20, "TikTok likes daily limit mismatch.");
+  assert.strictEqual(limits.tiktok.dms, 10, "TikTok DMs daily limit mismatch.");
   console.log("✅ T1: Backward compatibility daily limits match perfectly.");
 
   // 2. Verify nested hourly properties in limits.js
@@ -31,11 +36,14 @@ function runPolicyTest() {
   assert.strictEqual(limits.x.hourly.dms, 2, "X hourly DM limit mismatch.");
   assert.strictEqual(limits.instagram.hourly.follows, 4, "Instagram hourly follow limit mismatch.");
   assert.strictEqual(limits.facebook.hourly.likes, 2, "Facebook hourly like limit mismatch.");
+  assert.strictEqual(limits.tiktok.hourly.follows, 4, "TikTok hourly follow limit mismatch.");
+  assert.strictEqual(limits.tiktok.hourly.likes, 4, "TikTok hourly like limit mismatch.");
+  assert.strictEqual(limits.tiktok.hourly.dms, 2, "TikTok hourly DM limit mismatch.");
   console.log("✅ T2: Nested hourly/queue limits mapped perfectly.");
 
   // 3. Verify platformPolicies.js properties and layout
   console.log("Verifying platformPolicies.js rules schema...");
-  const platforms = ["linkedin", "x", "instagram", "facebook"];
+  const platforms = ["linkedin", "x", "instagram", "facebook", "tiktok"];
   for (const platform of platforms) {
     const policy = platformPolicies[platform];
     assert(policy, `Policy for platform '${platform}' is missing.`);

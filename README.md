@@ -3,6 +3,13 @@
 Local-first social-media growth and outreach automation for SMEs. Runs entirely
 on your computer — your data never leaves your machine.
 
+Supported social platforms: **LinkedIn, X (Twitter), Instagram, Facebook,
+TikTok**. The engine drives per-platform automation (follows, connection
+invites, DMs, likes) through a unified pipeline architecture — including a
+dedicated **Mass-Follow Pipeline** for scheduling bulk follows across all five
+platforms with human-like delays, per-platform daily/hourly rate caps, active
+windows, and retry/backoff.
+
 This repository contains:
 
 - **`gtss-growth-engine/`** — the Node.js + Express + Playwright backend that

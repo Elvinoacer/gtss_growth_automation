@@ -1093,3 +1093,297 @@ and pointing future contributors to `schedulerService.publishPost`.
 - Manual smoke check: `normalizeHeadless` returns `false` for login
   sessions under every env-var combination.
 - `.git/` directory untouched.
+
+## N. Mass-Follow Pipeline + TikTok Platform
+
+**Problem:** The engine had no first-class pipeline for bulk-following
+accounts across social platforms. The closest existing thing —
+`src/campaign/connectionQueue.js` — only followed leads already attached to
+a campaign, so the user could not point the engine at an arbitrary list of
+handles/URLs and say "follow all of these, slowly, across platforms."
+Additionally, TikTok was not a supported platform at all: no automation
+module, no entry in `BUILT_IN_PLATFORMS`, no policy profile, no rate-limit
+block, and the `platformAdapter` rejected it as "Unsupported platform."
+
+**Fix — introduced a new `mass_follow` pipeline and added TikTok as a
+fully-supported platform, end-to-end (automation module → adapter →
+catalog → policies → limits → DB seed → scheduler → routes → UI).**
+
+### `gtss-growth-engine/src/automation/tiktok.js` (NEW)
+
+1. New automation module mirroring `src/automation/x.js` shape: a
+   `SELECTORS` map (each list ordered most-stable → most-fragile), helper
+   functions (`firstVisible`, `getProfileHeader`, `firstVisibleOnProfile`,
+   `pageContainsAny`, `detectActionWarning`, `checkAccountStatus`,
+   `typeLikeHuman`, `verifyDmSent`), and three public functions:
+   - `followUser(page, profileUrl, emit)` → `{ outcome: 'sent' | 'already_connected' | 'failed', reason, failCategory }`
+   - `sendDirectMessage(page, profileUrl, message, emit)` → `{ outcome, reason, failCategory }`
+   - `likeRecentPost(page, profileUrl, emit)` → `{ outcome, reason }`
+2. `sendConnectionRequest` is aliased to `followUser` (same convention as
+   `x.js`) so the existing `executor.js` connect/follow dispatch keeps
+   working without a special case.
+3. Outcomes use the same vocabulary the rest of the engine already speaks
+   (`'sent'`, `'already_connected'`, `'failed'`, `'not_connected'`), and
+   `failCategory` uses the same set (`'suspended'`, `'not_found'`,
+   `'rate_limited'`) so `platformAdapter` can normalize them with no new
+   branches.
+4. TikTok-specific safety: DMs return `not_connected` (not `failed`) when
+   the Message button is hidden — TikTok only allows DMs to mutual
+   follows, so this is a soft-skip rather than a hard error.
+
+### `gtss-growth-engine/src/campaign/platformAdapter.js`
+
+1. Added `require("../automation/tiktok")`.
+2. Extended the runtime allowlist in BOTH `runConnectionAction` AND
+   `runDmAction` from `["linkedin", "instagram", "x", "facebook"]` to
+   `["linkedin", "instagram", "x", "facebook", "tiktok"]`. Without this,
+   the adapter returned `{ outcome: "failed", error: "Unsupported
+   platform: tiktok" }` for every TikTok action.
+3. Added a `if (normPlatform === "tiktok")` branch to both functions,
+   dispatching to `tiktok.followUser` / `tiktok.sendDirectMessage` and
+   normalizing the result into the standard
+   `{ outcome, error, metadata, retryable }` shape with the same
+   `suspended` / `not_found` / `rate_limited` metadata categories the
+   other platforms already use.
+4. Each branch ends with a `classifyAndNormalizeError` fallback so an
+   unexpected outcome string never returns `undefined` (the same
+   defensive pattern used for X and Facebook).
+
+### `gtss-growth-engine/src/services/platformCatalog.js`
+
+1. Added `"tiktok"` to `BUILT_IN_PLATFORMS` so it's recognized from day
+   one, even before any DB row exists for it. Without this, the very
+   first `/api/sessions/authenticate/tiktok` call would have been
+   rejected as "Unknown platform" — the exact bug that previously blocked
+   the first Gemini login (see the existing comment in this file).
+2. Added `if (key === "tiktok") return "TikTok";` to
+   `formatPlatformLabel` so the UI shows "TikTok" instead of "Tiktok".
+3. The label fix propagates everywhere `formatPlatformLabel` is used:
+   the sign-in modal, the Settings → Limits table, the Pipelines page
+   platform checkboxes, and the new Mass-Follow target manager modal.
+
+### `gtss-growth-engine/src/config/limits.js`
+
+1. Added a `tiktok` block with daily `follows: 25`, `likes: 20`,
+   `dms: 10` (conservative — TikTok is aggressive on follow-spam), and
+   nested `hourly: { follows: 4, likes: 4, dms: 2 }`. These limits are
+   consumed by both the mass-follow pipeline (via
+   `getEffectiveDailyLimit` / `getEffectiveHourlyLimit`) and the existing
+   `database.isWithinLimit` fallback.
+
+### `gtss-growth-engine/src/config/platformPolicies.js`
+
+1. Added a `tiktok` policy profile with
+   `activeWindow: { startHour: 9, endHour: 22 }`,
+   `delays: { actionMinSeconds: 40, actionMaxSeconds: 110,
+   sessionPauseMinutes: 15 }`,
+   `warmup: { enabled: true, startDailyCount: 3, dailyIncrement: 2,
+   warmupDays: 14 }`, and
+   `hourlyLimits: { follows: 4, likes: 4, dms: 2 }`.
+2. Updated the file-header comment to list TikTok alongside the other
+   platforms.
+
+### `gtss-growth-engine/src/pipeline/massFollowPipeline.js` (NEW)
+
+1. New pipeline runner mirroring `contentPipeline.js`'s shape. Three
+   stages: `select_targets → follow → report`.
+2. `select_targets` pulls a batch of pending `mass_follow_targets` rows,
+   filtered by:
+   - Supported platform (the pipeline config's `platforms` array).
+   - Active window (skipped if `respect_active_window` is true and the
+     platform's policy says we're outside the active window).
+   - Daily limit (skipped if `daily_actions` count for the platform's
+     `follows`/`connections` action is already at the configured ceiling).
+   - Hourly limit (same, but rolling 1-hour window).
+   - Retry eligibility (failed targets are only re-picked once their
+     `next_retry_at` backoff window has elapsed).
+   Per-platform caps distribute `max_follows_per_run` across the eligible
+   platforms so no single platform starves the others. The chosen batch
+   is saved as a checkpoint so `resume-from-checkpoint` re-runs only the
+   follow stage against the same targets.
+3. `follow` launches a browser per platform (reusing
+   `browserBase.createBrowser` / `createInstagramBrowser`), then for
+   each target: claims it atomically (`status='running'`), dispatches
+   through `platformAdapter.runConnectionAction`, persists the outcome
+   via `recordOutcome`, and sleeps a human-like
+   `randomBetween(follow_interval_min_seconds, follow_interval_max_seconds)`
+   before the next target. Honors `pipelineState.throwIfAborted` /
+   `awaitResume` so Pause/Stop/Resume work mid-batch.
+4. `report` writes a summary checkpoint (counts per platform / outcome)
+   and a final pipeline log entry.
+5. `recordOutcome` (exported as `_internal.recordOutcome` for tests)
+   maps adapter outcomes to target lifecycle states:
+   - `sent` → target `sent`, +1 daily_actions row, +1 touchpoint
+   - `skipped` → target `skipped`, +1 daily_actions row (outcome='skipped')
+   - `blocked` → target `failed` (permanent — suspended/restricted)
+   - `session_required` → target `pending` (transient — re-auth needed)
+   - `failed` → increment `retry_count`; if under `max_retries`,
+     schedule exponential backoff (`2^retry` minutes) and keep
+     `pending`; if at/over cap, mark terminal `failed`.
+6. Public API: `runMassFollowPipeline(config)` wraps the actual run in
+   `enqueuePipelineRun("mass_follow", ...)` so only one pipeline runs
+   process-wide at a time (mirrors `contentPipeline.runContentPipeline`).
+7. Exports `MASS_FOLLOW_STAGES`, `SUPPORTED_PLATFORMS`, and `_internal`
+   for tests.
+
+### `gtss-growth-engine/src/db/schema.sql`
+
+1. Added a new `mass_follow_targets` table:
+   - `id`, `platform`, `profile_url`, `handle`, `status`, `source`,
+     `campaign_id` (FK → campaigns), `lead_id` (FK → leads),
+     `error_message`, `retry_count`, `max_retries`, `next_retry_at`,
+     `attempted_at`, `sent_at`, `created_at`, `updated_at`.
+   - `UNIQUE(platform, profile_url)` for idempotent re-adds.
+   - Indexes on `status`, `platform`, `campaign_id`, and
+     `(status, next_retry_at)` for the queue queries.
+2. Updated the `pipeline_schedules.id` and `pipeline_executions.pipeline_id`
+   column comments to list `mass_follow` alongside the other pipeline ids.
+3. Updated `pipeline_events.job_type` comment to include `mass_follow`.
+
+### `gtss-growth-engine/src/db/database.js`
+
+1. Added a 4th `INSERT OR IGNORE INTO pipeline_schedules` block in
+   `seedDefaultPipelineSchedules` for the `mass_follow` pipeline:
+   - `cron: '*/30 * * * *'` (every 30 minutes)
+   - `enabled: 0` (off until the user adds targets)
+   - `limits_json` defaults: all 5 platforms, `max_follows_per_run: 20`,
+     `follow_interval_min_seconds: 40`, `follow_interval_max_seconds: 110`,
+     `respect_active_window: true`, `skip_already_following: true`,
+     `max_retries_per_target: 3`.
+2. Added `pipeline_mass_follow_paused: "false"` to the default settings
+   seed so the pause-flag lookup works before the user first opens the
+   Pipelines page.
+
+### `gtss-growth-engine/src/jobs/pipelineScheduler.js`
+
+1. Required `runMassFollowPipeline` from the new pipeline module.
+2. Added a `mass_follow` entry to the `RUNNERS` map. Soft-errors
+   (`'No supported platforms configured'` and `'No eligible targets'`)
+   are logged as info and don't flip the pipeline to `failed` — this
+   matches the user's mental model that an empty target list is not a
+   pipeline failure. Genuine errors propagate so `markExecutionFailed`
+   fires.
+3. Updated `runPipelineWithLifecycle`'s `totalSteps` computation to
+   return `3` for `mass_follow` (matching the 3 stages).
+
+### `gtss-growth-engine/src/routes/pipelines.js`
+
+1. Added `ALLOWED_MASS_FOLLOW_PLATFORMS` set
+   (`['instagram', 'linkedin', 'x', 'facebook', 'tiktok']`) — separate
+   from the existing outreach/content sets so adding TikTok to
+   mass-follow doesn't force TikTok into the outreach/content pipelines
+   (where the user might not yet have a TikTok automation flow tested).
+2. Added `mass_follow: ['select_targets', 'follow', 'report']` to
+   `PIPELINE_STAGES` so the UI's stage-pill renderer works for the new
+   pipeline.
+3. Extended the numeric-limit validator in `normalizeLimits` to also
+   validate `max_follows_per_run`, `follow_interval_min_seconds`,
+   `follow_interval_max_seconds`, and `max_retries_per_target`.
+4. Added a dedicated `if (id === 'mass_follow')` branch in
+   `normalizeLimits` that:
+   - Validates the `platforms` array against
+     `ALLOWED_MASS_FOLLOW_PLATFORMS`.
+   - Rejects configurations where
+     `follow_interval_min_seconds > follow_interval_max_seconds`.
+   - Coerces `respect_active_window` and `skip_already_following` from
+     any reasonable input (`true`/`'true'`/`1`/`'1'`) to a real boolean.
+5. Added a `mass_follow` branch to the legacy `GET /:id/history` route
+   so the History modal works for the new pipeline.
+6. Added five new endpoints under `/api/pipelines/mass-follow/targets`:
+   - `GET    /targets` — list with `platform` / `status` filters +
+     pagination, returns per-platform status summary.
+   - `POST   /targets` — add one or many targets (single-object
+     shorthand OR `{ targets: [...] }` array). Idempotent on
+     `(platform, profile_url)`; re-adding a failed target resets it to
+     `pending`.
+   - `DELETE /targets/:id` — remove a single target.
+   - `POST   /targets/:id/retry` — reset a single failed target back to
+     `pending`.
+   - `POST   /targets/clear` — bulk delete by filter (`platform` /
+     `status` / `older_than_days`). Refuses to run with no filter as a
+     footgun-prevention.
+7. Added a `normalizeMassFollowTarget` validator used by the POST
+   endpoint. Accepts full URLs and bare handles (`@acme`).
+
+### `gtss-growth-engine/public/js/pipelines.js`
+
+1. Added `mass_follow` to `PIPELINE_META` with `icon: '🟣'`,
+   `color: '#a855f7'`, the three stages, and six `limitFields`:
+   `max_follows_per_run`, `follow_interval_min_seconds`,
+   `follow_interval_max_seconds`, `max_retries_per_target`,
+   `respect_active_window`, `skip_already_following`. The render code
+   is fully data-driven, so no new rendering code was needed — the card
+   appears automatically.
+2. Added `'tiktok'` to `ALL_PLATFORMS` so the platform-checkbox
+   renderer shows it on every pipeline card that has `platformField:
+   true`.
+3. Updated `renderPlatformCheckboxes`'s fallback list for `mass_follow`
+   so the checkboxes default to all 5 platforms selected.
+4. Updated `savePipeline`'s platform-collection branch to include
+   `mass_follow` (otherwise saving the mass-follow card would have
+   sent an empty `platforms` array).
+5. Added a `🎯 Manage Targets` button to `renderActionButtons` for any
+   pipeline with `meta.isMassFollow === true`. The button is wired to
+   `openMassFollowTargetsModal` in both click-binding sites.
+6. Added a full target-manager modal (`openMassFollowTargetsModal`
+   plus helpers `renderMassFollowTargetsModal`, `loadMassFollowTargets`,
+   `renderMassFollowTable`, `renderMassFollowSummary`,
+   `refreshMassFollowTable`, `massFollowStatusBadge`). The modal is
+   intentionally step-by-step:
+   - **Step 1** — pick a platform (radio buttons for IG / X / LinkedIn /
+     Facebook / TikTok), paste handles/URLs (one per line), click Add.
+     Bulk-add via the `targets: [...]` array endpoint; idempotent.
+   - **Step 2** — review the targets in a filterable table
+     (`platform` / `status` dropdowns). Per-row Retry (failed only) and
+     Delete buttons. Bulk Clear button with a `confirm()` guard and an
+     optional minimum-age prompt.
+   - **Step 3** — Run Now button (hits the same
+     `/api/pipelines/mass_follow/run` endpoint as the parent card's
+     Run button) + a "Back to Pipelines" link.
+   The modal closes on ✕, click-outside, or ESC.
+
+### `gtss-growth-engine/public/pages/pipelines.html`
+
+1. Updated the `<meta name="description">` to mention the Mass-Follow
+   pipeline alongside the existing three.
+
+### `gtss-growth-engine/test/platformPolicies.test.js`
+
+1. Added TikTok to the assertions in T1 (daily limits) and T2 (hourly
+   limits).
+2. Added `'tiktok'` to the `platforms` array in T3 so the policy-shape
+   loop also validates the new TikTok policy block.
+
+### `gtss-growth-engine/test/massFollowPipeline.test.js` (NEW)
+
+1. 16 tests using the modern `node:test` style with a hermetic
+   in-memory SQLite DB (`process.env.DB_PATH = path.join(root, "gtss.db")`).
+2. Coverage:
+   - `MASS_FOLLOW_STAGES` and `SUPPORTED_PLATFORMS` constants.
+   - `selectTargetsBatch` — pending rows, unsupported-platform skip,
+     backoff-window respect.
+   - `recordOutcome` — sent / skipped / retry-with-backoff /
+     terminal-failed / session_required.
+   - `runMassFollowPipelineNow` — empty-queue soft-success, no-platforms
+     hard-error, full happy-path with stubbed adapter + stubbed
+     `browserBase` (so no real browser is launched).
+   - TikTok automation module export shape (matches `x.js`).
+   - `platformAdapter.runConnectionAction` dispatches to
+     `tiktok.followUser` (with the adapter's tiktok branch verified).
+   - `platformCatalog.isKnownPlatform('tiktok')` and
+     `formatPlatformLabel('tiktok') === 'TikTok'`.
+3. Stubs are restored in `finally` blocks so test pollution can't leak
+   into the rest of the suite.
+
+### Validation
+
+- `node --check` passes for every modified/new `.js` file (12 files).
+- `node --test test/massFollowPipeline.test.js` — 16/16 pass.
+- `node --test test/platformAdapter.test.js test/platformPolicies.test.js
+  test/pipelineQueue.test.js test/pipelineGeneralization.test.js
+  test/pipelineControls.test.js` — all pass (no regressions from the
+  platform-catalog / adapter / scheduler / database changes).
+- `node scripts/validate-js.js` — 14/14 desktop files OK (the existing
+  validator only walks `desktop/`; the engine has no equivalent
+  validator, but `node --test` is the engine's safety net).
+- `.git/` directory untouched.

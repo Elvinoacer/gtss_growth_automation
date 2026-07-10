@@ -12,6 +12,7 @@
  *   - X (formerly Twitter)
  *   - Instagram
  *   - Facebook
+ *   - TikTok
  */
 
 module.exports = {
@@ -120,6 +121,32 @@ module.exports = {
     hourlyLimits: {
       dms: 2,
       likes: 2,
+    },
+  },
+
+  // ── TIKTOK POLICY PROFILE ─────────────────────────────────────────────────
+  tiktok: {
+    name: "TikTok",
+    activeWindow: {
+      startHour: 9,
+      endHour: 22,
+      timezone: "local",
+    },
+    delays: {
+      actionMinSeconds: 40,
+      actionMaxSeconds: 110,
+      sessionPauseMinutes: 15,
+    },
+    warmup: {
+      enabled: true,
+      startDailyCount: 3,
+      dailyIncrement: 2,
+      warmupDays: 14,
+    },
+    hourlyLimits: {
+      follows: 4,
+      likes: 4,
+      dms: 2,
     },
   },
 };

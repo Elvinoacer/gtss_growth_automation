@@ -27,6 +27,7 @@ const BUILT_IN_PLATFORMS = [
   "x",
   "facebook",
   "instagram",
+  "tiktok",
   "google",
   "gemini",
 ];
@@ -44,6 +45,7 @@ function formatPlatformLabel(platform) {
   if (key === "linkedin") return "LinkedIn";
   if (key === "instagram") return "Instagram";
   if (key === "facebook") return "Facebook";
+  if (key === "tiktok") return "TikTok";
   if (key === "google") return "Google / Gemini";
   if (key === "gemini") return "Gemini";
 

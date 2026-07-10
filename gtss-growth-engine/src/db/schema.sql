@@ -207,8 +207,40 @@ CREATE TABLE IF NOT EXISTS ig_discovery_queue (
 
 CREATE INDEX IF NOT EXISTS idx_ig_discovery_queue_username ON ig_discovery_queue(ig_username);
 
+-- ── Mass-Follow Pipeline target queue ───────────────────────────────────────
+-- One row per (platform, profile_url) the user wants to follow via the
+-- mass_follow pipeline. Lifecycle: pending → running → sent | accepted |
+-- skipped | failed. Idempotent on (platform, profile_url) so re-adding a
+-- target does not duplicate work. The mass-follow pipeline reads this table
+-- in 'select_targets' stage, performs the follow in 'follow' stage via
+-- platformAdapter.runConnectionAction, and writes a summary in 'report'.
+CREATE TABLE IF NOT EXISTS mass_follow_targets (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  platform      TEXT NOT NULL,                 -- 'linkedin' | 'instagram' | 'x' | 'facebook' | 'tiktok'
+  profile_url   TEXT NOT NULL,                 -- canonical profile URL
+  handle        TEXT,                          -- optional display handle (e.g. @acme, ig:acme)
+  status        TEXT NOT NULL DEFAULT 'pending', -- pending | running | sent | accepted | skipped | failed
+  source        TEXT,                          -- how the target was added: 'manual' | 'csv' | 'discovery' | 'campaign'
+  campaign_id   INTEGER REFERENCES campaigns(id) ON DELETE SET NULL,
+  lead_id       INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+  error_message TEXT,
+  retry_count   INTEGER NOT NULL DEFAULT 0,
+  max_retries   INTEGER NOT NULL DEFAULT 3,
+  next_retry_at TEXT,
+  attempted_at  DATETIME,
+  sent_at       DATETIME,
+  created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(platform, profile_url)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mass_follow_status ON mass_follow_targets(status);
+CREATE INDEX IF NOT EXISTS idx_mass_follow_platform ON mass_follow_targets(platform);
+CREATE INDEX IF NOT EXISTS idx_mass_follow_campaign ON mass_follow_targets(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_mass_follow_retry ON mass_follow_targets(status, next_retry_at);
+
 CREATE TABLE IF NOT EXISTS pipeline_schedules (
-  id          TEXT PRIMARY KEY,          -- 'outreach' | 'content' | 'dm_check'
+  id          TEXT PRIMARY KEY,          -- 'outreach' | 'content' | 'dm_check' | 'mass_follow'
   name        TEXT NOT NULL,
   description TEXT,
   enabled     INTEGER NOT NULL DEFAULT 0,
@@ -233,10 +265,10 @@ CREATE TABLE IF NOT EXISTS pipeline_schedules (
   updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- ── Per-execution lifecycle tracking (covers all 3 pipelines: outreach, content, dm_check) ──
+-- ── Per-execution lifecycle tracking (covers all pipelines: outreach, content, dm_check, mass_follow) ──
 CREATE TABLE IF NOT EXISTS pipeline_executions (
   id              TEXT PRIMARY KEY,         -- UUID
-  pipeline_id     TEXT NOT NULL,            -- 'outreach' | 'content' | 'dm_check'
+  pipeline_id     TEXT NOT NULL,            -- 'outreach' | 'content' | 'dm_check' | 'mass_follow'
   trigger         TEXT NOT NULL,            -- 'cron' | 'manual' | 'api' | 'retry' | 'resume'
   status          TEXT NOT NULL DEFAULT 'pending',  -- pending | running | paused | resuming | stopping | stopped | completed | failed | retrying
   state           TEXT NOT NULL DEFAULT 'idle',     -- mirror of status (kept for UI compatibility)
@@ -307,7 +339,7 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_logs_created ON pipeline_logs(created_at
 
 CREATE TABLE IF NOT EXISTS pipeline_events (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  job_type     TEXT NOT NULL,  -- 'outreach' | 'content' | 'dm_check' | 'discovery' | 'scheduled_post' | 'campaign_dm' | 'campaign_connection'
+  job_type     TEXT NOT NULL,  -- 'outreach' | 'content' | 'dm_check' | 'mass_follow' | 'discovery' | 'scheduled_post' | 'campaign_dm' | 'campaign_connection'
   job_id       TEXT,           -- pipeline run ID or cron job UUID
   stage        TEXT,
   level        TEXT NOT NULL,  -- 'info' | 'warn' | 'error' | 'retry'

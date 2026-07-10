@@ -68,5 +68,20 @@ module.exports = {
       dms: 2,              // Max direct messages per hour
       likes: 2             // Max likes per hour
     }
+  },
+
+  // ── TIKTOK ENGAGEMENT LIMITS ─────────────────────────────────────────────
+  tiktok: {
+    // Preserved Daily Limit Thresholds (Backward Compatible)
+    follows: 25,           // Max account follows per day (conservative — TikTok is aggressive on follow-spam)
+    likes: 20,             // Max videos liked per day
+    dms: 10,               // Max direct messages per day (DMs require mutual follow on TikTok)
+
+    // Queue-Specific/Hourly Limits Extension
+    hourly: {
+      follows: 4,          // Max follows per hour
+      likes: 4,            // Max likes per hour
+      dms: 2               // Max direct messages per hour
+    }
   }
 };

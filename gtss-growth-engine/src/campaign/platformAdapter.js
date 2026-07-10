@@ -13,6 +13,7 @@ const linkedin = require("../automation/linkedin");
 const instagram = require("../automation/instagram");
 const x = require("../automation/x");
 const facebook = require("../automation/facebook");
+const tiktok = require("../automation/tiktok");
 const logger = require("../utils/logger");
 const { resolveInstagramUsername } = require("../utils/instagramUsername");
 const { classifyOutcome, queueLog } = require("./utils/campaignUtils");
@@ -121,7 +122,7 @@ async function runConnectionAction(platform, page, lead, message, emitter) {
   );
 
   // Runtime validation for unsupported platforms
-  if (!["linkedin", "instagram", "x", "facebook"].includes(normPlatform)) {
+  if (!["linkedin", "instagram", "x", "facebook", "tiktok"].includes(normPlatform)) {
     return {
       outcome: "failed",
       error: `Unsupported platform: ${platform}`,
@@ -307,6 +308,60 @@ async function runConnectionAction(platform, page, lead, message, emitter) {
         res.reason || `Facebook connection returned unhandled outcome: ${res.outcome}`,
       );
     }
+
+    if (normPlatform === "tiktok") {
+      const res = await tiktok.followUser(page, lead.profile_url, emit);
+      if (res.outcome === "sent") {
+        return { outcome: "sent", error: null, metadata: {}, retryable: false };
+      }
+      if (res.outcome === "already_connected") {
+        return {
+          outcome: "skipped",
+          error: null,
+          metadata: {},
+          retryable: false,
+        };
+      }
+      if (res.outcome === "failed") {
+        if (res.failCategory === "suspended") {
+          return {
+            outcome: "blocked",
+            error: res.reason,
+            metadata: { category: "suspended" },
+            retryable: false,
+          };
+        }
+        if (res.failCategory === "not_found") {
+          return {
+            outcome: "failed",
+            error: res.reason,
+            metadata: { category: "not_found" },
+            retryable: false,
+          };
+        }
+        if (res.failCategory === "rate_limited") {
+          return {
+            outcome: "failed",
+            error: res.reason,
+            metadata: { category: "rate_limited" },
+            retryable: true,
+          };
+        }
+        return classifyAndNormalizeError(
+          "tiktok",
+          "connection",
+          res.reason || "TikTok connection failed",
+        );
+      }
+      // Fallback for any other outcome (e.g. "skipped", "session_required",
+      // or a future outcome string). Without this, the function would return
+      // `undefined`, causing `res.outcome` in the caller to throw a TypeError.
+      return classifyAndNormalizeError(
+        "tiktok",
+        "connection",
+        res.reason || `TikTok connection returned unhandled outcome: ${res.outcome}`,
+      );
+    }
   } catch (err) {
     return classifyAndNormalizeError(normPlatform, "connection", err);
   }
@@ -334,7 +389,7 @@ async function runDmAction(platform, page, lead, message, emitter) {
   );
 
   // Runtime validation for unsupported platforms
-  if (!["linkedin", "instagram", "x", "facebook"].includes(normPlatform)) {
+  if (!["linkedin", "instagram", "x", "facebook", "tiktok"].includes(normPlatform)) {
     return {
       outcome: "failed",
       error: `Unsupported platform: ${platform}`,
@@ -528,6 +583,65 @@ async function runDmAction(platform, page, lead, message, emitter) {
         "facebook",
         "dm",
         res.reason || `Facebook DM returned unhandled outcome: ${res.outcome}`,
+      );
+    }
+
+    if (normPlatform === "tiktok") {
+      const res = await tiktok.sendDirectMessage(
+        page,
+        lead.profile_url,
+        message,
+        emit,
+      );
+      if (res.outcome === "sent") {
+        return { outcome: "sent", error: null, metadata: {}, retryable: false };
+      }
+      if (res.outcome === "not_connected") {
+        return {
+          outcome: "skipped",
+          error: res.reason,
+          metadata: {},
+          retryable: false,
+        };
+      }
+      if (res.outcome === "failed") {
+        if (res.failCategory === "suspended") {
+          return {
+            outcome: "blocked",
+            error: res.reason,
+            metadata: { category: "suspended" },
+            retryable: false,
+          };
+        }
+        if (res.failCategory === "not_found") {
+          return {
+            outcome: "failed",
+            error: res.reason,
+            metadata: { category: "not_found" },
+            retryable: false,
+          };
+        }
+        if (res.failCategory === "rate_limited") {
+          return {
+            outcome: "failed",
+            error: res.reason,
+            metadata: { category: "rate_limited" },
+            retryable: true,
+          };
+        }
+        return classifyAndNormalizeError(
+          "tiktok",
+          "dm",
+          res.reason || "TikTok DM failed",
+        );
+      }
+      // Fallback for any other outcome (e.g. "skipped", "session_required",
+      // or a future outcome string). Without this, the function would return
+      // `undefined`, causing `res.outcome` in the caller to throw a TypeError.
+      return classifyAndNormalizeError(
+        "tiktok",
+        "dm",
+        res.reason || `TikTok DM returned unhandled outcome: ${res.outcome}`,
       );
     }
   } catch (err) {
