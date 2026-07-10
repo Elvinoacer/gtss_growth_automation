@@ -706,6 +706,17 @@ async function togglePipeline(id, enabled) {
   // and the user knows the request is in flight.
   if (slider) slider.classList.add('pipeline-toggle--pending');
 
+  // Optimistically update the visual style of the slider to match the new state
+  if (slider) {
+    slider.style.background = enabled ? '#22c55e' : 'rgba(148,163,184,0.3)';
+    slider.style.boxShadow = enabled ? '0 0 12px rgba(34,197,94,0.3)' : 'none';
+    const knob = slider.querySelector('span');
+    if (knob) {
+      knob.style.left = enabled ? '' : '3px';
+      knob.style.right = enabled ? '3px' : '';
+    }
+  }
+
   try {
     const result = await gtss.fetchJSON(`/api/pipelines/${id}`, {
       method: 'PATCH',
