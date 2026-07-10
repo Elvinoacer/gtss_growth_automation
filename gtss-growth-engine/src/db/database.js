@@ -798,6 +798,7 @@ function seedDefaultSettings(database) {
     pipeline_content_paused: "false",
     pipeline_dm_check_paused: "false",
     pipeline_mass_follow_paused: "false",
+    pipeline_tiktok_mass_follow_paused: "false",
     pipeline_discovery_paused: "false",
     content_asset_source: "ai",
     content_library_media_type: "image",
@@ -881,6 +882,27 @@ function seedDefaultPipelineSchedules(database) {
       0,
       '*/30 * * * *',
       '{"platforms": ["instagram", "x", "linkedin", "facebook", "tiktok"], "max_follows_per_run": 20, "follow_interval_min_seconds": 40, "follow_interval_max_seconds": 110, "respect_active_window": true, "skip_already_following": true, "max_retries_per_target": 3}'
+    )
+  `).run();
+
+  // TikTok Mass-Follow pipeline — a dedicated, search-driven pipeline that
+  // navigates to TikTok's /search/user page, scrapes the visible user cards,
+  // and clicks Follow directly on each card (data-e2e="follow-back"). This
+  // is independent of the generic mass_follow pipeline (which operates on
+  // pre-populated targets and navigates to each profile). The user sets:
+  //   - search_query: the TikTok user-search query (e.g. "restaurant owners")
+  //   - max_follows_per_run: the per-run follow limit (user-settable)
+  // Disabled by default until the user configures a search query.
+  database.prepare(`
+    INSERT OR IGNORE INTO pipeline_schedules
+      (id, name, description, enabled, cron, limits_json)
+    VALUES (
+      'tiktok_mass_follow',
+      'TikTok Mass-Follow Pipeline',
+      'Search TikTok for users by query and follow them directly from the search results page',
+      0,
+      '*/30 * * * *',
+      '{"search_query": "restaurant owners", "max_follows_per_run": 20, "follow_interval_min_seconds": 40, "follow_interval_max_seconds": 110, "max_scrolls": 3, "respect_active_window": true}'
     )
   `).run();
 }

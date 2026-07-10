@@ -1387,3 +1387,174 @@ catalog → policies → limits → DB seed → scheduler → routes → UI).**
   validator only walks `desktop/`; the engine has no equivalent
   validator, but `node --test` is the engine's safety net).
 - `.git/` directory untouched.
+
+---
+
+## Z. TikTok Mass-Follow Pipeline — search-driven, independently testable
+
+**Problem:** The generic `mass_follow` pipeline operates on pre-populated
+`mass_follow_targets` rows and follows each target by navigating to its
+profile page. For TikTok specifically, this is wasteful: TikTok's
+`/search/user` page renders user cards inline, each with its own Follow
+button (`data-e2e="follow-back"`) — so we can follow N users from a single
+page load instead of N page loads. The user asked for a TikTok-first
+mass-follow pipeline that:
+  1. Searches TikTok for users by a configurable query (e.g. "restaurant owners")
+  2. Scrapes the search-results DOM (verified against the real TikTok markup)
+  3. Follows users directly from the search page (no per-profile navigation)
+  4. Honors a user-set follow limit per run
+  5. Is independently testable (its own pipeline card, Run button, health metrics)
+
+**Solution — a dedicated `tiktok_mass_follow` pipeline that runs alongside
+the generic one, with zero changes to existing platform code:**
+
+### New files
+
+#### `gtss-growth-engine/src/automation/tiktokSearch.js`
+New TikTok search-page automation module. Public API:
+- `buildSearchUrl(query)` — encodes a query into `https://www.tiktok.com/search/user?q=…`
+- `scrapeUserCards(page, opts)` — scrapes visible user cards from the
+  search page. Each card yields `{ username, displayName, profileUrl,
+  followers, likes, followState, cardIndex }`. De-duplicates by username
+  across scroll passes. Parses K/M-suffixed stats ("12.1K" → 12100).
+- `followUserCard(page, card, emit)` — re-locates a card's follow button
+  by username (survives DOM re-renders), classifies its state, clicks it,
+  verifies the state transition (Follow → Following / Requested), and
+  detects TikTok action warnings (rate limit, temporary block).
+- `searchAndFollow(page, query, opts, emit)` — high-level driver: navigate
+  → scrape → follow up to `opts.limit` cards, with human-like delays,
+  retries on transient failures, and a `shouldStop()` hook for Pause/Stop.
+
+Selector strategy: every selector list is ordered most-stable → most-fragile.
+The primary follow-button selector is `button[data-e2e="follow-back"]` —
+TikTok's own test hook, which survives class-name rotations. Verified
+against the real TikTok DOM (see `scripts/verify-dom-shape.js`): 20 user
+cards, 20 follow-back buttons (18 "Follow" + 2 "Following"), 100% match.
+
+#### `gtss-growth-engine/src/pipeline/tiktokMassFollowPipeline.js`
+New pipeline module. Mirrors the lifecycle pattern of `massFollowPipeline.js`:
+- 3 stages: `search` → `follow` → `report`
+- Checkpoint support (resume-from-checkpoint re-runs only the follow stage
+  against the cached card list)
+- Pause/Stop/Resume honored via `pipelineState.throwIfAborted` / `awaitResume`
+- Daily/hourly cap enforcement (clamps the per-run limit to remaining headroom)
+- Active-window check (skips the run if TikTok is outside its configured
+  9 AM–10 PM window, unless `respect_active_window: false`)
+- Rate-limit detection (stops the run early if TikTok returns a
+  "following too fast" / "action blocked" warning, so we don't burn the
+  daily cap on guaranteed failures)
+- Records each follow as a `daily_actions` row (for rate-limit counting)
+  + an audit log entry (for the activity feed)
+
+Config shape (from `limits_json`):
+```
+{
+  search_query:               "restaurant owners",  // required
+  max_follows_per_run:        20,                    // user-set limit
+  follow_interval_min_seconds: 40,
+  follow_interval_max_seconds: 110,
+  max_scrolls:                3,                     // discovery scroll passes
+  respect_active_window:      true
+}
+```
+
+#### `gtss-growth-engine/scripts/migrate-tiktok-mass-follow.js`
+One-shot migration that adds the `tiktok_mass_follow` pipeline schedule
+row + the `pipeline_tiktok_mass_follow_paused` setting to existing
+databases. Fresh databases get these for free via
+`seedDefaultPipelineSchedules`. Idempotent (uses `INSERT OR IGNORE`).
+
+Run with: `node scripts/migrate-tiktok-mass-follow.js`
+
+#### `gtss-growth-engine/scripts/verify-dom-shape.js`
+Dev tool that confirms `tiktokSearch.js` selectors still match the real
+TikTok search DOM. Pass a path to a `people.html` export (or let it
+auto-discover one in the project root). Reports: anchor count, button
+count, button-label distribution (Follow vs Following), and whether the
+selectors match.
+
+Run with: `node scripts/verify-dom-shape.js [path/to/people.html]`
+
+#### `gtss-growth-engine/test/tiktokSearch.test.js`
+Unit tests for the pure helpers (`buildSearchUrl`, `usernameFromHref`,
+`parseStatCount`, selector shape) + the `scrapeUserCards` function (fed
+a minimal mocked Playwright page). Mirrors the test style of
+`massFollowPipeline.test.js`. 9 tests covering:
+- URL encoding (plain, unicode, special chars, empty)
+- Username extraction (valid handles, non-profile hrefs, empty input)
+- Stat parsing (plain, K, M, comma-separated, empty, unparseable)
+- Selector ordering (followButton[0] must target `data-e2e="follow-back"`)
+- Card scraping (display name, username, followers, likes, follow state)
+- De-duplication across scroll passes
+- K-suffixed follower counts (12.1K → 12100)
+
+### Modified files
+
+#### `gtss-growth-engine/src/jobs/pipelineScheduler.js`
+- Imported `runTikTokMassFollowPipeline` from the new pipeline module.
+- Registered a `tiktok_mass_follow` runner in the `RUNNERS` map. Soft-skips
+  on "No search_query configured" or `summary.skipped` (active window /
+  rate cap) so the pipeline doesn't flip to 'failed' just because the user
+  hasn't configured a query yet or the run was outside the active window.
+- Updated `totalSteps` calculation: `tiktok_mass_follow` has 3 stages
+  (search, follow, report), matching `mass_follow`.
+
+#### `gtss-growth-engine/src/routes/pipelines.js`
+- Added `tiktok_mass_follow` to `PIPELINE_STAGES` (`['search', 'follow', 'report']`).
+- Added `tiktok_mass_follow` block to `normalizeLimits()` — validates
+  `search_query` (string, max 200 chars), `respect_active_window` (boolean),
+  clamps `max_follows_per_run` to 1–200, and enforces
+  `follow_interval_min_seconds ≤ follow_interval_max_seconds`.
+- Added `max_scrolls` to the global numeric-field validation list.
+- Added `search_query`-required guards to both the `POST /:id/run` and
+  `POST /:id/restart` endpoints (returns 400 if the query is empty).
+- Added `tiktok_mass_follow` branch to the `GET /:id/history` endpoint
+  (returns recent `pipeline_executions` rows for the new pipeline).
+- New endpoint: `POST /api/pipelines/tiktok-mass-follow/preview-search`
+  Launches a TikTok browser, navigates to `/search/user?q=<query>`,
+  scrapes the visible user cards, returns them as JSON. No follows are
+  performed. Used by the "🔍 Preview Search" button in the UI to let the
+  user sanity-check a query before committing a follow run.
+
+#### `gtss-growth-engine/src/db/database.js`
+- Seeded the `tiktok_mass_follow` pipeline schedule row in
+  `seedDefaultPipelineSchedules()`. Default config:
+  `{"search_query": "restaurant owners", "max_follows_per_run": 20,
+   "follow_interval_min_seconds": 40, "follow_interval_max_seconds": 110,
+   "max_scrolls": 3, "respect_active_window": true}`, disabled by default
+  (cron `*/30 * * * *`).
+- Added `pipeline_tiktok_mass_follow_paused: "false"` to the default
+  settings map (so the pause flag exists from day one).
+
+#### `gtss-growth-engine/public/js/pipelines.js`
+- Added `tiktok_mass_follow` entry to `PIPELINE_META` with:
+  - icon `⚫`, color `#fe2c55` (TikTok brand red)
+  - stages `['search', 'follow', 'report']`
+  - limit fields: `search_query` (text), `max_follows_per_run` (number —
+    the user-set follow limit), `follow_interval_min_seconds`,
+    `follow_interval_max_seconds`, `max_scrolls`, `respect_active_window`
+  - `isTiktokMassFollow: true` flag (drives the "🔍 Preview Search" button)
+- Added a "🔍 Preview Search" button to the pipeline card actions,
+  rendered only when `meta.isTiktokMassFollow` is true. Wired to
+  `openTikTokSearchPreviewModal(id, btn)` in both action-handler locations.
+- New modal: `renderTikTokSearchPreviewModal(id)` + `renderTikTokSearchResultsTable(cards)`
+  + `openTikTokSearchPreviewModal(id, btn)`. The modal lets the user:
+  1. Enter/edit the search query (pre-filled from the saved config)
+  2. Click "🔍 Preview" to call the preview-search endpoint and see the
+     discovered user cards in a table (name, @username, followers, likes,
+     follow state, profile link)
+  3. Set the follow limit for the run (pre-filled from saved config)
+  4. "💾 Save query + limit" — PATCHes the pipeline config
+  5. "▶ Run pipeline now" — saves then triggers `POST /:id/run`
+- ESC closes the modal; click-outside closes; Back to Pipelines link closes.
+
+### Verification
+
+- `node --check` passes for all 7 modified/new `.js` files.
+- `node scripts/verify-dom-shape.js` against the user-provided
+  `people.html` (real TikTok search DOM) confirms selectors match:
+  20 user-card anchors, 20 follow-back buttons (18 Follow + 2 Following),
+  100% selector match.
+- Pure-helper logic verified in isolation: `buildSearchUrl`,
+  `usernameFromHref`, `parseStatCount` all produce expected outputs.
+- `.git/` directory untouched.

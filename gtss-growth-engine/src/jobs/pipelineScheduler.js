@@ -17,6 +17,7 @@ const jobRegistry = require('./jobRegistry');
 const { runFullPipeline } = require('../pipeline/pipelineRunner');
 const { runContentPipeline } = require('../pipeline/contentPipeline');
 const { runMassFollowPipeline } = require('../pipeline/massFollowPipeline');
+const { runTikTokMassFollowPipeline } = require('../pipeline/tiktokMassFollowPipeline');
 const { detectReplies } = require('../services/replyDetector');
 const { checkInbox, isCheckingInbox } = require('../services/instagramReplyChecker');
 const { isSessionValid } = require('../automation/sessionManager');
@@ -74,6 +75,29 @@ const RUNNERS = {
       logger.info(
         'PIPELINE-SCHEDULER',
         `Mass-follow pipeline soft-skipped: ${result.error}`,
+      );
+    }
+  },
+  tiktok_mass_follow: async (limits, options = {}) => {
+    const result = await runTikTokMassFollowPipeline({
+      ...limits,
+      trigger: options.trigger || 'cron',
+      executionId: options.executionId,
+      resumeFrom: options.resumeFrom,
+    });
+    if (result && result.success === false) {
+      // Soft-skip conditions — don't flip the pipeline to 'failed' just
+      // because the user hasn't configured a search query yet, or the run
+      // was outside the active window, or the daily/hourly cap was hit.
+      const softErrors = new Set([
+        'No search_query configured',
+      ]);
+      if (!softErrors.has(result.error) && !(result.summary && result.summary.skipped)) {
+        throw new Error(result.error || 'TikTok mass-follow pipeline failed');
+      }
+      logger.info(
+        'PIPELINE-SCHEDULER',
+        `TikTok mass-follow pipeline soft-skipped: ${result.error || (result.summary && result.summary.reason) || 'skipped'}`,
       );
     }
   },
@@ -325,7 +349,7 @@ async function runPipelineWithLifecycle(pipelineId, trigger, limits, options = {
     }
   }
 
-  const totalSteps = pipelineId === 'outreach' ? 4 : pipelineId === 'content' ? 4 : pipelineId === 'mass_follow' ? 3 : 1;
+  const totalSteps = pipelineId === 'outreach' ? 4 : pipelineId === 'content' ? 4 : (pipelineId === 'mass_follow' || pipelineId === 'tiktok_mass_follow') ? 3 : 1;
   const exec = pipelineState.createExecution(pipelineId, trigger, {
     startMessage: `Initializing ${pipelineId} pipeline…`,
     totalSteps,

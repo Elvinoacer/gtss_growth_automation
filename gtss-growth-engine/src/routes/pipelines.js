@@ -51,6 +51,7 @@ const PIPELINE_STAGES = {
   content: ['image_gen', 'caption_gen', 'post_record', 'publish'],
   dm_check: ['scan'],
   mass_follow: ['select_targets', 'follow', 'report'],
+  tiktok_mass_follow: ['search', 'follow', 'report'],
 };
 
 function parseJsonObject(value, fallback = {}) {
@@ -167,6 +168,7 @@ function normalizeLimits(id, limits) {
     'follow_interval_min_seconds',
     'follow_interval_max_seconds',
     'max_retries_per_target',
+    'max_scrolls',
   ]) {
     if (next[key] !== undefined) {
       const numeric = Number(next[key]);
@@ -247,6 +249,32 @@ function normalizeLimits(id, limits) {
       if (next[key] !== undefined) {
         next[key] = next[key] === true || next[key] === 'true' || next[key] === 1 || next[key] === '1';
       }
+    }
+  }
+
+  if (id === 'tiktok_mass_follow') {
+    // search_query is the TikTok user-search query (e.g. "restaurant owners").
+    // It's required to run the pipeline but may be empty when the schedule
+    // is first created — we only validate shape here, not presence.
+    if (next.search_query !== undefined) {
+      next.search_query = String(next.search_query).trim().slice(0, 200);
+    }
+    // follow_interval_min_seconds must not exceed follow_interval_max_seconds
+    if (
+      next.follow_interval_min_seconds !== undefined &&
+      next.follow_interval_max_seconds !== undefined &&
+      Number(next.follow_interval_min_seconds) > Number(next.follow_interval_max_seconds)
+    ) {
+      throw new Error('follow_interval_min_seconds cannot exceed follow_interval_max_seconds');
+    }
+    if (next.respect_active_window !== undefined) {
+      next.respect_active_window = next.respect_active_window === true || next.respect_active_window === 'true' || next.respect_active_window === 1 || next.respect_active_window === '1';
+    }
+    // max_follows_per_run is the user-set follow limit per run. It's already
+    // validated as a positive integer above; we just clamp it to a sane
+    // ceiling (200) so a typo doesn't request 10,000 follows in one go.
+    if (next.max_follows_per_run !== undefined) {
+      next.max_follows_per_run = Math.min(200, Math.max(1, next.max_follows_per_run));
     }
   }
 
@@ -397,6 +425,12 @@ router.post('/:id/run', async (req, res) => {
     });
   }
 
+  if (id === 'tiktok_mass_follow' && (!limits.search_query || !String(limits.search_query).trim())) {
+    return res.status(400).json({
+      error: 'A TikTok search query is required before running the TikTok Mass-Follow Pipeline',
+    });
+  }
+
   // Respond immediately; run in background via the lifecycle service
   res.json({ ok: true, message: `Pipeline "${row.name}" triggered manually` });
 
@@ -476,6 +510,12 @@ router.post('/:id/restart', async (req, res) => {
   if (id === 'content' && (!limits.topic || !String(limits.topic).trim())) {
     return res.status(400).json({
       error: 'A content topic is required before restarting the Auto-Content Pipeline',
+    });
+  }
+
+  if (id === 'tiktok_mass_follow' && (!limits.search_query || !String(limits.search_query).trim())) {
+    return res.status(400).json({
+      error: 'A TikTok search query is required before restarting the TikTok Mass-Follow Pipeline',
     });
   }
 
@@ -1216,6 +1256,18 @@ router.get('/:id/history', (req, res) => {
     return res.json({ runs: rows });
   }
 
+  if (id === 'tiktok_mass_follow') {
+    const rows = db.prepare(`
+      SELECT id, trigger, status, current_stage, current_message, progress,
+             total_steps, completed_steps, error_message, started_at, finished_at, duration_ms
+      FROM pipeline_executions
+      WHERE pipeline_id = 'tiktok_mass_follow'
+      ORDER BY started_at DESC
+      LIMIT ?
+    `).all(limit);
+    return res.json({ runs: rows });
+  }
+
   res.json({ runs: [] });
 });
 
@@ -1459,6 +1511,77 @@ router.post('/mass-follow/targets/clear', (req, res) => {
     .prepare(`DELETE FROM mass_follow_targets WHERE ${where.join(' AND ')}`)
     .run(...args);
   res.json({ deleted: result.changes });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TikTok Mass-Follow Pipeline — search preview endpoint
+//
+// Lets the user preview what a TikTok user-search query would return
+// BEFORE running the full pipeline. Launches a TikTok browser, navigates
+// to /search/user?q=<query>, scrapes the visible user cards, and returns
+// them as JSON. The browser is closed immediately after — no follows are
+// performed. Useful for sanity-checking a query ("restaurant owners" →
+// 24 cards) before committing a follow run.
+//
+// POST /api/pipelines/tiktok-mass-follow/preview-search
+//   body: { query: string, max_scrolls?: number, max_cards?: number }
+//   → { ok: true, query, cards: [{ username, displayName, profileUrl, followers, likes, followState }] }
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/tiktok-mass-follow/preview-search', async (req, res) => {
+  const query = String(req.body?.query || '').trim();
+  if (!query) {
+    return res.status(400).json({ error: 'query is required' });
+  }
+  const maxScrolls = Math.max(0, Math.min(10, Number(req.body?.max_scrolls) || 2));
+  const maxCards = Math.max(1, Math.min(50, Number(req.body?.max_cards) || 20));
+
+  const tiktokSearch = require('../automation/tiktokSearch');
+  const browserBase = require('../automation/browserBase');
+
+  let browserState = null;
+  try {
+    browserState = await browserBase.createBrowser('tiktok', {
+      headless: process.env.ALLOW_HEADLESS_SOCIAL === 'true',
+    });
+    const page = browserState.page;
+    const url = tiktokSearch.buildSearchUrl(query);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await new Promise((r) => setTimeout(r, 2500));
+
+    const cards = await tiktokSearch.scrapeUserCards(page, { maxScrolls, maxCards });
+    return res.json({
+      ok: true,
+      query,
+      cardCount: cards.length,
+      cards: cards.map((c) => ({
+        username: c.username,
+        displayName: c.displayName,
+        profileUrl: c.profileUrl,
+        followers: c.followers,
+        likes: c.likes,
+        followState: c.followState,
+      })),
+    });
+  } catch (err) {
+    logger.error('PIPELINES-API', `TikTok search preview failed: ${err.message}`, err);
+    return res.status(500).json({ error: err.message });
+  } finally {
+    if (browserState) {
+      try {
+        await browserBase.closeBrowser(
+          browserState.browser,
+          'tiktok',
+          browserState.context,
+          {
+            mode: browserState.mode,
+            tracePath: browserState.tracePath,
+            shouldCloseBrowser: browserState.shouldCloseBrowser,
+            lock: browserState.lock,
+          },
+        );
+      } catch (_) {}
+    }
+  }
 });
 
 module.exports = router;
