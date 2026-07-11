@@ -425,6 +425,16 @@ router.post('/:id/run', async (req, res) => {
     });
   }
 
+  // DISABLED — see RUNNERS.tiktok_mass_follow in pipelineScheduler.js for why.
+  // This blocks manual/API triggers independent of the paused flag, so the
+  // pipeline can't be run even if pipeline_tiktok_mass_follow_paused were
+  // ever flipped back via a direct settings write.
+  if (id === 'tiktok_mass_follow') {
+    return res.status(403).json({
+      error: 'TikTok mass-follow pipeline is disabled and cannot be run.',
+    });
+  }
+
   if (id === 'tiktok_mass_follow' && (!limits.search_query || !String(limits.search_query).trim())) {
     return res.status(400).json({
       error: 'A TikTok search query is required before running the TikTok Mass-Follow Pipeline',

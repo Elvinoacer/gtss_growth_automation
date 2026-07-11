@@ -905,6 +905,22 @@ function seedDefaultPipelineSchedules(database) {
       '{"search_query": "restaurant owners", "max_follows_per_run": 20, "follow_interval_min_seconds": 40, "follow_interval_max_seconds": 110, "max_scrolls": 3, "respect_active_window": true}'
     )
   `).run();
+
+  // DISABLED — see src/pipeline/tiktokMassFollowPipeline.js header comment
+  // and RUNNERS.tiktok_mass_follow in src/jobs/pipelineScheduler.js, which
+  // now refuses to execute this pipeline unconditionally. This forces the
+  // row to enabled=0 + paused on every startup (not just INSERT OR IGNORE
+  // on first seed) so an existing install with the row already enabled from
+  // before this change gets disabled too, and cron.unregister() drops any
+  // already-registered schedule for it.
+  database.prepare(`
+    UPDATE pipeline_schedules SET enabled = 0, next_run_at = NULL
+    WHERE id = 'tiktok_mass_follow'
+  `).run();
+  database.prepare(`
+    INSERT INTO settings (key, value) VALUES ('pipeline_tiktok_mass_follow_paused', 'true')
+    ON CONFLICT(key) DO UPDATE SET value = 'true'
+  `).run();
 }
 
 const db = openDatabase();
