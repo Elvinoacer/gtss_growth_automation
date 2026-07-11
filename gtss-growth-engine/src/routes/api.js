@@ -138,8 +138,11 @@ router.get(
     });
 
     Object.entries(byPlatform).forEach(([platform, bucket]) => {
-      bucket.limit = Object.values(limitsByPlatform[platform] || {}).reduce(
-        (sum, value) => sum + Number(value || 0),
+      bucket.limit = Object.entries(limitsByPlatform[platform] || {}).reduce(
+        (sum, [key, value]) => {
+          if (key === 'hourly') return sum;
+          return sum + (Number(value) || 0);
+        },
         0,
       );
     });

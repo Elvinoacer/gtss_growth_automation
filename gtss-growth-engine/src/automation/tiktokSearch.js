@@ -65,7 +65,9 @@ const SEARCH_SELECTORS = {
   // The Follow / Following button lives inside each card.
   followButton: [
     'button[data-e2e="follow-back"]',
+    'button[data-e2e="search-follow-button"]',
     'button[data-testid="tux-web-button"][data-e2e="follow-back"]',
+    'button[data-testid="tux-web-button"]:has-text("Follow")',
   ],
   // The card's inner container — used to scope text lookups (name, handle,
   // stats) so we don't accidentally read text from an adjacent card.
@@ -359,7 +361,7 @@ async function scrapeUserCards(page, opts = {}) {
       // the previous `xpath=ancestor::div[...]` here was wrong and silently
       // fell through to the `anchor` fallback). Use a CSS descendant selector
       // to scope text/button lookups to this card only.
-      let cardScope = anchor;
+      let cardScope = null;
       try {
         const container = anchor.locator(
           'div[data-fmp="true"], div[class*="DivSearchUserItemContainer"], div[class*="DivSearchItemContainer"]',
@@ -367,8 +369,12 @@ async function scrapeUserCards(page, opts = {}) {
         if (await container.count().catch(() => 0)) {
           cardScope = container;
         }
-      } catch (_) {
-        // Fall back to the anchor as the scope.
+      } catch (_) {}
+
+      // If we didn't find the search result container inside this anchor,
+      // it's a structural false-positive (e.g., the sidebar profile link).
+      if (!cardScope) {
+        continue;
       }
 
       // Display name = the bold <p> (weight-bold class).
@@ -556,53 +562,43 @@ async function followUserCard(page, card, emit) {
     let clickOk = false;
     let clickErrMessage = null;
     try {
-      clickOk = await button.evaluate((btn) => {
-        // Walk up to the enclosing anchor and intercept the next click in
-        // the capture phase so the browser doesn't navigate.
-        const anchor = btn.closest("a[href]");
-        const blocker = (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-        };
-        if (anchor) {
-          anchor.addEventListener("click", blocker, { capture: true, once: true });
+      // 1. Temporarily disable the anchor to prevent any navigation drift 
+      // when we click the button inside it.
+      await button.evaluate((btn) => {
+        const anchor = btn.closest("a");
+        if (anchor && anchor.hasAttribute("href")) {
+          // We add a lightweight click interceptor that prevents default
+          // but crucially DOES NOT stop propagation (React needs the event).
+          // Do not remove the href attribute, as that causes React to re-render.
+          anchor._navBlocker = (e) => e.preventDefault();
+          anchor.addEventListener("click", anchor._navBlocker);
         }
-        // Fire the click on the button itself.
-        btn.click();
-        // Cleanup: if the anchor listener didn't fire (it should have),
-        // remove it after a tick so we don't accumulate dead listeners.
+      });
+
+      // 2. Dispatch a trusted click directly on the button.
+      // We use force: true to bypass any transparent overlays that might 
+      // intercept the click (which is why the original author had trouble).
+      await button.click({ force: true, delay: 50 });
+      
+      // 3. Restore the anchor.
+      await button.evaluate((btn) => {
+        const anchor = btn.closest("a");
         if (anchor) {
-          setTimeout(() => anchor.removeEventListener("click", blocker, { capture: true }), 500);
+          if (anchor._navBlocker) {
+            anchor.removeEventListener("click", anchor._navBlocker);
+            delete anchor._navBlocker;
+          }
         }
-        return true;
-      }).catch(() => false);
+      });
+      clickOk = true;
     } catch (err) {
       clickErrMessage = err.message;
+      clickOk = false;
     }
 
     if (!clickOk) {
-      // Fallback: Playwright force-click. We also install a route blocker
-      // for the profile URL in case the anchor navigation does fire.
-      _emit("warn", `JS click failed for @${card.username}${clickErrMessage ? ` (${clickErrMessage})` : ""} — retrying with force-click`);
-      try {
-        // Block any accidental navigation to the profile page for the next
-        // 3 seconds. This protects the force-click path.
-        try {
-          await page.route(`**/@${card.username}*`, (route) => {
-            const url = route.request().url();
-            // Only block top-frame navigations to the profile; let XHRs through.
-            if (route.request().isNavigationRequest()) {
-              return route.abort();
-            }
-            return route.continue();
-          }, { times: 1 }).catch(() => {});
-        } catch (_) {}
-
-        await button.click({ force: true, timeout: 3000 });
-      } catch (forceErr) {
-        _emit("error", `Click failed for @${card.username}: ${forceErr.message}`);
-        return { outcome: "failed", reason: `Click failed: ${forceErr.message}`, failCategory: null };
-      }
+      _emit("error", `Click failed for @${card.username}: ${clickErrMessage}`);
+      return { outcome: "failed", reason: `Click failed: ${clickErrMessage}`, failCategory: null };
     }
     await humanDelay(1500, 2800);
 

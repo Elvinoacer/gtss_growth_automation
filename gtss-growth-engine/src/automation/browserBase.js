@@ -812,42 +812,24 @@ function normalizeHeadless(platform, requestedHeadless, options = {}) {
   const { isKnownPlatform } = require("../services/platformCatalog");
 
   // ─── Login sessions are ALWAYS visible ─────────────────────────────────
-  //
-  // The single, predictable contract for user-initiated sign-in flows:
-  // the browser window is shown, no matter what the user's background-mode
-  // preference is. This eliminates the "sometimes the browser shows,
-  // sometimes it doesn't" abnormality that happened when CDP was already
-  // running headless in the background and the login tab opened invisibly.
-  // Pipeline / automation runs do NOT set this flag, so they continue to
-  // respect the user's preference below.
   if (options.loginSession === true) {
     return false;
   }
 
-  // ─── Pipeline / automation runs respect the user's preference ──────────
-  //
-  // The user expresses their preference via two env vars (both written by
-  // the desktop launcher's Settings → Automation Browser section):
-  //
-  //   ALLOW_HEADLESS_SOCIAL=true  — explicitly opts in to headless social
-  //     automation (legacy escape hatch, kept for backwards compat).
-  //
-  //   CDP_VISIBLE_DEFAULT=false   — the user chose "Background" mode in
-  //     Settings. This means they want automation (pipelines, scheduled
-  //     posts, warmup, etc.) to run WITHOUT popping up a visible window.
-  //     We treat this as equivalent to ALLOW_HEADLESS_SOCIAL=true for
-  //     non-login runs, so the user's Settings preference is honored in
-  //     persistent / standalone browser mode too (not just CDP mode).
-  //
-  // When NEITHER is set, we keep the historical safety default: force
-  // visible for known social platforms so a misconfigured environment
-  // never silently runs outreach headless (which platforms detect and
-  // penalize). Login sessions bypass this entirely via the early return
-  // above.
+  // If the user explicitly configured CDP_VISIBLE_DEFAULT, that's their global preference
+  // for automation runs (Background vs Visible).
+  const visibleDefault = String(process.env.CDP_VISIBLE_DEFAULT || "").toLowerCase();
+  
+  if (visibleDefault === "true") {
+    return false; // Force visible
+  } else if (visibleDefault === "false") {
+    return true; // Force headless (Background)
+  }
+
+  // Fallback to legacy behavior
   const userAllowsHeadless =
     options.allowHeadlessSocial === true ||
-    isTruthyEnv(process.env.ALLOW_HEADLESS_SOCIAL) ||
-    String(process.env.CDP_VISIBLE_DEFAULT || "").toLowerCase() === "false";
+    isTruthyEnv(process.env.ALLOW_HEADLESS_SOCIAL);
 
   if (requestedHeadless && isKnownPlatform(platform) && !userAllowsHeadless) {
     logger.warn("BROWSER", "Headless mode disabled for social automation", {
@@ -1375,36 +1357,13 @@ async function createBrowser(platform, options = {}) {
     options.cdpEndpoint || getPlatformEnv(platform, "CDP_ENDPOINT");
   let lock = null;
 
-  // ─── Login-session visibility guarantee ─────────────────────────────────
-  //
-  // THE FIX for the "sometimes the browser shows, sometimes it doesn't"
-  // abnormality. When this is a login session (options.loginSession ===
-  // true) AND we'd normally use CDP mode, we MUST make sure the shared
-  // CDP Chrome is visible BEFORE we connectOverCDP() — otherwise the
-  // login tab opens inside a headless background Chrome and the user
-  // can't see it.
-  //
-  // Only the desktop launcher's bridge can make CDP visible (it owns
-  // the Chrome child process). So:
-  //
-  //   1. Ask the bridge to ensure CDP is visible (ensureCdpVisibleViaBridge).
-  //   2. If the bridge confirms → proceed with CDP mode as normal. The
-  //      login tab will now open in a visible Chrome window.
-  //   3. If the bridge is NOT reachable (standalone server, no launcher)
-  //      → fall back to PERSISTENT mode with headless:false. This
-  //      launches a fresh visible Chrome window whose profile is the
-  //      platform's persistent profile (PROFILES_DIR/<platform>/).
-  //      Automation that runs in standalone mode also uses persistent
-  //      mode, so the login cookies land in the right profile.
-  //
-  // Step 3 is the predictability guarantee: no matter what state the
-  // shared CDP Chrome is in, a login session ALWAYS shows a visible
-  // browser window. Pipelines and other non-login runs are unaffected
-  // — they keep using CDP mode with whatever visibility the launcher
-  // gave Chrome (per the user's Settings → Automation Browser choice).
-  if (options.loginSession === true && mode === "cdp") {
+  // ─── Visibility guarantee ─────────────────────────────────
+  // If we need the browser to be visible (headless === false) AND we are in CDP mode,
+  // we MUST ask the bridge to ensure it's visible. Otherwise, Playwright's connectOverCDP
+  // will just connect to the background Chrome and it won't be visible.
+  if (headless === false && mode === "cdp") {
     const bridgeOk = await ensureCdpVisibleViaBridge();
-    if (!bridgeOk) {
+    if (!bridgeOk && options.loginSession === true) {
       logger.warn(
         "BROWSER",
         `Login session for ${platform}: bridge not reachable — falling back to visible persistent browser so the login window is always shown.`,
