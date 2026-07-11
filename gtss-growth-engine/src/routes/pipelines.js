@@ -1548,7 +1548,24 @@ router.post('/tiktok-mass-follow/preview-search', async (req, res) => {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await new Promise((r) => setTimeout(r, 2500));
 
-    const cards = await tiktokSearch.scrapeUserCards(page, { maxScrolls, maxCards });
+    let cards = await tiktokSearch.scrapeUserCards(page, { maxScrolls, maxCards });
+
+    // Refresh-if-empty safety net (mirrors the pipeline's behavior):
+    // TikTok's SPA sometimes paints zero cards on the first navigation.
+    // scrapeUserCards already retries internally, but if it still returns
+    // 0 we reload the page once more and re-scrape so the preview modal
+    // shows the real cards instead of an empty result.
+    if (cards.length === 0) {
+      logger.info('PIPELINES-API', `TikTok search preview: 0 cards on first scrape — reloading and retrying`);
+      try {
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+        await new Promise((r) => setTimeout(r, 2500));
+        cards = await tiktokSearch.scrapeUserCards(page, { maxScrolls, maxCards });
+      } catch (retryErr) {
+        logger.warn('PIPELINES-API', `TikTok search preview retry failed: ${retryErr.message}`);
+      }
+    }
+
     return res.json({
       ok: true,
       query,

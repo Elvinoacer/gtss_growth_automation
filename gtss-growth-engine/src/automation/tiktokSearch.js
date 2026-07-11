@@ -274,6 +274,51 @@ async function scrapeUserCards(page, opts = {}) {
     // Non-fatal — the page may already be on the Users tab.
   }
 
+  // ── Refresh-if-empty guard ────────────────────────────────────────────────
+  //
+  // TikTok's /search/user SPA frequently renders ZERO cards on the very first
+  // navigation — the React app boots, fires the search XHR, but the response
+  // sometimes arrives after the initial paint. A manual page.reload() forces
+  // a second paint cycle that almost always surfaces the cards. Without this
+  // guard, scrapeUserCards returns [] and the pipeline exits with "no cards
+  // discovered" — the exact "we are not doing any work of following" symptom
+  // the user reported.
+  //
+  // We probe for the presence of any user-card anchor. If none are visible
+  // after a short wait, we reload once and probe again. Only then do we enter
+  // the scroll/collect loop.
+  try {
+    const probeLocator = page.locator(SEARCH_SELECTORS.userCardLink[0]);
+    let probeCount = await probeLocator.count().catch(() => 0);
+    if (probeCount === 0) {
+      if (emit) emit({ type: "info", message: "No user cards on first paint — waiting for SPA hydration…" });
+      // Give the SPA ~3.5s to finish hydrating + firing the search XHR.
+      await humanDelay(2500, 3500);
+      probeCount = await probeLocator.count().catch(() => 0);
+    }
+    if (probeCount === 0) {
+      if (emit) emit({ type: "info", message: "Search results still empty — reloading page to force a fresh paint…" });
+      try {
+        await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+      } catch (reloadErr) {
+        if (emit) emit({ type: "warn", message: `Reload failed (${reloadErr.message}) — continuing with whatever cards are in the DOM` });
+      }
+      // Re-click the Users tab after reload (TikTok sometimes resets to "Top").
+      try {
+        const usersTab2 = await firstVisibleIn(page, SEARCH_SELECTORS.usersTab, 2000);
+        if (usersTab2) {
+          await usersTab2.locator.click({ timeout: 1500 }).catch(() => {});
+          await humanDelay(800, 1400);
+        }
+      } catch (_) {}
+      await humanDelay(2000, 3000);
+      probeCount = await probeLocator.count().catch(() => 0);
+      if (emit) emit({ type: "info", message: `After reload: ${probeCount} user-card anchor(s) visible` });
+    }
+  } catch (_) {
+    // Non-fatal — the scroll loop below will handle the empty case.
+  }
+
   // Scroll a few times to trigger lazy-loaded cards, collecting card anchors
   // as they appear. We de-duplicate by username so a card that persists
   // across scrolls is only collected once.
@@ -296,16 +341,28 @@ async function scrapeUserCards(page, opts = {}) {
       const username = usernameFromHref(href);
       if (!username || seen.has(username)) continue;
 
-      // Scope follow-button + text lookups to this card's container. We
-      // walk up from the anchor to the nearest card container div, then
-      // query inside it. This prevents the follow-button search from
-      // matching a button in an adjacent card.
+      // Scope follow-button + text lookups to this card's container.
+      //
+      // DOM reality (verified against usersresult.html, July 2026):
+      //   <a class="link-a11y-focus" href="/@<username>">
+      //     <div data-fmp="true" class="...DivSearchItemContainer...">
+      //       <div class="...DivSearchUserItemContainer...">
+      //         <div>avatar + name + stats</div>
+      //         <div data-testid="tux-web-button-container">
+      //           <button data-e2e="follow-back">…Follow…</button>
+      //         </div>
+      //       </div>
+      //     </div>
+      //   </a>
+      //
+      // The card container is a DESCENDANT of the anchor (not an ancestor —
+      // the previous `xpath=ancestor::div[...]` here was wrong and silently
+      // fell through to the `anchor` fallback). Use a CSS descendant selector
+      // to scope text/button lookups to this card only.
       let cardScope = anchor;
       try {
         const container = anchor.locator(
-          `xpath=ancestor::div[${SEARCH_SELECTORS.cardContainer
-            .map((s) => `contains(@class, "DivSearchUserItemContainer") or @data-fmp="true"`)
-            .join(" or ")}][1]`,
+          'div[data-fmp="true"], div[class*="DivSearchUserItemContainer"], div[class*="DivSearchItemContainer"]',
         ).first();
         if (await container.count().catch(() => 0)) {
           cardScope = container;
@@ -429,10 +486,29 @@ async function followUserCard(page, card, emit) {
     } catch (_) {}
 
     // Find the follow button inside this card. The button is a sibling of
-    // the avatar/name block, both inside the card container. We walk up to
-    // the container and then down to the button.
+    // the avatar/name block, both inside the card container. We walk down
+    // to the card container (DESCENDANT — the container is inside the anchor,
+    // not above it) and then down to the button.
+    //
+    // DOM reality (usersresult.html): the Follow button is wrapped inside
+    //   <a class="link-a11y-focus" href="/@<username>">
+    //     <div data-fmp="true">
+    //       <div class="...DivSearchUserItemContainer...">
+    //         <div>avatar + name + stats</div>
+    //         <div data-testid="tux-web-button-container">
+    //           <button data-e2e="follow-back" data-testid="tux-web-button">
+    //             <div>…<div>Follow</div></div>
+    //           </button>
+    //         </div>
+    //       </div>
+    //     </div>
+    //   </a>
+    //
+    // The previous code used `xpath=ancestor::div[...]` which is wrong — the
+    // container is a descendant of the anchor, not an ancestor. CSS descendant
+    // selector is correct here.
     const cardContainer = anchor.locator(
-      'xpath=ancestor::div[@data-fmp="true" or contains(@class, "DivSearchUserItemContainer")][1]',
+      'div[data-fmp="true"], div[class*="DivSearchUserItemContainer"], div[class*="DivSearchItemContainer"]',
     ).first();
     const scope = (await cardContainer.count().catch(() => 0)) ? cardContainer : anchor;
 
@@ -459,20 +535,95 @@ async function followUserCard(page, card, emit) {
     }
 
     // Click the Follow button.
+    //
+    // CRITICAL: the button lives INSIDE <a href="/@<username>">. A naive
+    // Playwright `button.click()` simulates a real mouse event that bubbles
+    // up to the anchor and triggers navigation to the profile page — which
+    // would yank us off /search/user and break every subsequent follow.
+    //
+    // We sidestep this by:
+    //   1. Installing a one-time capture-phase click listener on the parent
+    //      anchor that calls preventDefault() + stopPropagation(). This
+    //      swallows the navigation without affecting the button's own React
+    //      click handler (which fires in the bubble phase, after capture).
+    //   2. Calling `button.click()` directly via page.evaluate — this
+    //      dispatches a trusted click event on the button itself, which
+    //      TikTok's React handler picks up to perform the follow.
+    //   3. As a belt-and-suspenders fallback, if the evaluate-based click
+    //      reports failure, we retry with Playwright's force-click.
     _emit("info", `Clicking Follow on @${card.username}…`);
+
+    let clickOk = false;
+    let clickErrMessage = null;
     try {
-      await button.click({ timeout: 3000 });
-    } catch (clickErr) {
-      // Retry via Playwright's force-click as a fallback (TikTok sometimes
-      // overlays an invisible interceptor).
+      clickOk = await button.evaluate((btn) => {
+        // Walk up to the enclosing anchor and intercept the next click in
+        // the capture phase so the browser doesn't navigate.
+        const anchor = btn.closest("a[href]");
+        const blocker = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        };
+        if (anchor) {
+          anchor.addEventListener("click", blocker, { capture: true, once: true });
+        }
+        // Fire the click on the button itself.
+        btn.click();
+        // Cleanup: if the anchor listener didn't fire (it should have),
+        // remove it after a tick so we don't accumulate dead listeners.
+        if (anchor) {
+          setTimeout(() => anchor.removeEventListener("click", blocker, { capture: true }), 500);
+        }
+        return true;
+      }).catch(() => false);
+    } catch (err) {
+      clickErrMessage = err.message;
+    }
+
+    if (!clickOk) {
+      // Fallback: Playwright force-click. We also install a route blocker
+      // for the profile URL in case the anchor navigation does fire.
+      _emit("warn", `JS click failed for @${card.username}${clickErrMessage ? ` (${clickErrMessage})` : ""} — retrying with force-click`);
       try {
-        await button.click({ force: true, timeout: 2000 });
-      } catch (_) {
-        _emit("error", `Click failed for @${card.username}: ${clickErr.message}`);
-        return { outcome: "failed", reason: `Click failed: ${clickErr.message}`, failCategory: null };
+        // Block any accidental navigation to the profile page for the next
+        // 3 seconds. This protects the force-click path.
+        try {
+          await page.route(`**/@${card.username}*`, (route) => {
+            const url = route.request().url();
+            // Only block top-frame navigations to the profile; let XHRs through.
+            if (route.request().isNavigationRequest()) {
+              return route.abort();
+            }
+            return route.continue();
+          }, { times: 1 }).catch(() => {});
+        } catch (_) {}
+
+        await button.click({ force: true, timeout: 3000 });
+      } catch (forceErr) {
+        _emit("error", `Click failed for @${card.username}: ${forceErr.message}`);
+        return { outcome: "failed", reason: `Click failed: ${forceErr.message}`, failCategory: null };
       }
     }
     await humanDelay(1500, 2800);
+
+    // Verify we're still on the search page. If the click triggered a
+    // navigation despite our blockers, navigate back to the search URL
+    // so the next card can be located.
+    try {
+      const currentUrl = page.url();
+      if (!currentUrl.includes("tiktok.com/search/user")) {
+        _emit("warn", `Navigated off search page (now ${currentUrl}) — returning to search results`);
+        // We need the original search URL. Pull it from the card's profile URL
+        // by reconstructing — but we don't have the query here. The caller
+        // (pipeline / searchAndFollow) is responsible for re-navigating.
+        // Return a special failure so the caller can recover.
+        return {
+          outcome: "failed",
+          reason: `Click triggered navigation to ${currentUrl} — search page lost`,
+          failCategory: "not_found",
+        };
+      }
+    } catch (_) {}
 
     // Check for a TikTok action warning (rate limit / block).
     const warning = await detectActionWarning(page);
@@ -491,8 +642,10 @@ async function followUserCard(page, card, emit) {
     }
 
     // Verify the state transition: the button should now read "Following"
-    // or "Requested" (for private accounts).
-    const postState = await classifyFollowButton(button);
+    // or "Requested" (for private accounts). Re-locate the button in case
+    // the card re-rendered.
+    const postButton = scope.locator(SEARCH_SELECTORS.followButton[0]).first();
+    const postState = await classifyFollowButton(postButton);
     if (postState === "following" || postState === "pending") {
       _emit("info", `Follow confirmed for @${card.username} (state=${postState})`);
       return { outcome: "sent" };
@@ -603,6 +756,20 @@ async function searchAndFollow(page, query, opts = {}, emit) {
       result = await followUserCard(page, card, _emit);
       if (result.outcome === "sent" || result.outcome === "already_connected") break;
       if (result.failCategory === "rate_limited") break; // don't retry rate limits
+
+      // If the click lost the search page, re-navigate before retrying.
+      if (
+        result.failCategory === "not_found" &&
+        result.reason &&
+        result.reason.includes("search page lost")
+      ) {
+        _emit({ type: "warn", message: `Re-navigating to search page after navigation drift…` });
+        try {
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+          await humanDelay(2000, 3000);
+        } catch (_) {}
+      }
+
       if (attempt < maxRetriesPerCard) {
         _emit({ type: "info", message: `Retrying @${card.username} (attempt ${attempt + 2}/${maxRetriesPerCard + 1})` });
         await humanDelay(2000, 4000);

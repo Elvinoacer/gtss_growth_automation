@@ -7,6 +7,10 @@
  * a minimal stub so we don't need a real browser.
  */
 
+// Speed up humanDelay so the scrape tests don't take 15+ seconds each.
+// Other test files in this repo use the same convention.
+process.env.TEST_SPEEDUP = "true";
+
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
@@ -301,4 +305,198 @@ test("scrapeUserCards returns cards collected so far when the page closes mid-sc
   // We should still have the 1 card that was scraped before the scroll failed.
   assert.equal(cards.length, 1);
   assert.equal(cards[0].username, "survivor");
+});
+
+// ── Refresh-if-empty guard ─────────────────────────────────────────────────
+//
+// Reproduces the "page might be empty for these results, just refresh the
+// page we reload the results" symptom the user reported. scrapeUserCards
+// should call page.reload() when no anchors are visible on the first probe,
+// then re-probe. We verify by tracking reload + count calls on a fake page
+// that returns 0 anchors on the first count and 1 anchor thereafter.
+
+test("scrapeUserCards reloads the page when no anchors are visible on first paint", async () => {
+  const { scrapeUserCards } = require("../src/automation/tiktokSearch");
+
+  let countCalls = 0;
+  let reloadCalls = 0;
+
+  // Build a fake page whose anchor locator returns 0 on the first count()
+  // call (the initial probe) and 1 thereafter (after "reload").
+  const card = {
+    href: "/@refreshed_user",
+    displayName: "Refreshed User",
+    paragraphs: ["Refreshed User", "refreshed_user", "42", "Followers", "·", "99", "Likes"],
+    buttonLabel: "Follow",
+  };
+
+  const anchorLocator = {
+    count: async () => {
+      countCalls += 1;
+      // First two count() calls (initial probe + post-hydrate re-probe)
+      // return 0. After reload, return 1.
+      return countCalls <= 2 ? 0 : 1;
+    },
+    nth: () => ({
+      getAttribute: async (attr) => (attr === "href" ? card.href : null),
+      locator: (selector) => {
+        if (selector.startsWith("xpath=")) {
+          return {
+            first: () => ({
+              count: async () => 1,
+              innerText: async () => card.displayName,
+              locator: (sel) => innerLocator(card, sel),
+              allInnerTexts: async () => card.paragraphs,
+            }),
+          };
+        }
+        return innerLocator(card, selector);
+      },
+    }),
+  };
+
+  function innerLocator(c, selector) {
+    if (selector === 'p[class*="weight-bold"]') {
+      return { first: () => ({ innerText: async () => c.displayName, count: async () => 1 }) };
+    }
+    if (selector === "p") {
+      return { allInnerTexts: async () => c.paragraphs };
+    }
+    if (selector.includes('data-e2e="follow-back"')) {
+      return {
+        first: () => ({
+          count: async () => 1,
+          innerText: async () => c.buttonLabel,
+          getAttribute: async () => c.buttonLabel,
+          click: async () => {},
+        }),
+      };
+    }
+    if (selector.startsWith("div[")) {
+      // Card-container descendant selector — return a non-empty locator so
+      // the descendant-scope code path is exercised.
+      return {
+        first: () => ({
+          count: async () => 1,
+          locator: (sel) => innerLocator(c, sel),
+        }),
+      };
+    }
+    return { first: () => ({ count: async () => 0, innerText: async () => "" }), count: async () => 0 };
+  }
+
+  const fakePage = {
+    locator: (selector) => {
+      if (selector === SEARCH_SELECTORS.userCardLink[0]) return anchorLocator;
+      if (selector.includes("Users")) {
+        return { count: async () => 0, first: () => ({ click: async () => {} }) };
+      }
+      return {
+        count: async () => 0,
+        nth: () => ({ getAttribute: async () => null, locator: () => innerLocator({}, "") }),
+        first: () => ({ count: async () => 0, innerText: async () => "", click: async () => {} }),
+      };
+    },
+    reload: async () => { reloadCalls += 1; },
+    evaluate: async () => {},
+    mouse: { wheel: async () => {} },
+    url: () => "https://www.tiktok.com/search/user?q=test",
+  };
+
+  const cards = await scrapeUserCards(fakePage, { maxScrolls: 0, maxCards: 10 });
+  assert.equal(reloadCalls, 1, `Expected exactly one reload call, got ${reloadCalls}`);
+  assert.equal(cards.length, 1, `Expected 1 card after reload, got ${cards.length}`);
+  assert.equal(cards[0].username, "refreshed_user");
+});
+
+// ── Descendant:: selector regression ────────────────────────────────────────
+//
+// The previous code used `xpath=ancestor::div[...]` to scope follow-button +
+// text lookups to a card container. This was wrong — the container is a
+// DESCENDANT of the anchor, not an ancestor. The bug was masked by a silent
+// fallback to `anchor` as the scope. After the fix, we use a CSS descendant
+// selector. This test verifies that the descendant path actually picks up
+// the container (and doesn't fall through to the anchor) when the container
+// is present.
+
+test("scrapeUserCards uses the card container as scope when div[data-fmp] is present", async () => {
+  const { scrapeUserCards } = require("../src/automation/tiktokSearch");
+
+  // Track whether the descendant container lookup was attempted.
+  let containerLookupCount = 0;
+  const card = {
+    href: "/@scoped_user",
+    displayName: "Scoped User",
+    paragraphs: ["Scoped User", "scoped_user", "100", "Followers", "·", "50", "Likes"],
+    buttonLabel: "Follow",
+  };
+
+  const anchorLocator = {
+    count: async () => 1,
+    nth: () => ({
+      getAttribute: async (attr) => (attr === "href" ? card.href : null),
+      locator: (selector) => {
+        // The new CSS descendant selector starts with "div[" — verify
+        // we hit that branch and return a non-empty container locator.
+        if (selector.startsWith("div[") || selector.startsWith("div,")) {
+          containerLookupCount += 1;
+          return {
+            first: () => ({
+              count: async () => 1,
+              locator: (sel) => innerLocator(card, sel),
+              innerText: async () => "",
+              allInnerTexts: async () => card.paragraphs,
+            }),
+          };
+        }
+        return innerLocator(card, selector);
+      },
+    }),
+  };
+
+  function innerLocator(c, selector) {
+    if (selector === 'p[class*="weight-bold"]') {
+      return { first: () => ({ innerText: async () => c.displayName, count: async () => 1 }) };
+    }
+    if (selector === "p") {
+      return { allInnerTexts: async () => c.paragraphs };
+    }
+    if (selector.includes('data-e2e="follow-back"')) {
+      return {
+        first: () => ({
+          count: async () => 1,
+          innerText: async () => c.buttonLabel,
+          getAttribute: async () => c.buttonLabel,
+          click: async () => {},
+        }),
+      };
+    }
+    return { first: () => ({ count: async () => 0, innerText: async () => "" }), count: async () => 0 };
+  }
+
+  const fakePage = {
+    locator: (selector) => {
+      if (selector === SEARCH_SELECTORS.userCardLink[0]) return anchorLocator;
+      if (selector.includes("Users")) {
+        return { count: async () => 0, first: () => ({ click: async () => {} }) };
+      }
+      return {
+        count: async () => 0,
+        nth: () => ({ getAttribute: async () => null, locator: () => innerLocator({}, "") }),
+        first: () => ({ count: async () => 0, innerText: async () => "", click: async () => {} }),
+      };
+    },
+    evaluate: async () => {},
+    mouse: { wheel: async () => {} },
+    url: () => "https://www.tiktok.com/search/user?q=test",
+  };
+
+  const cards = await scrapeUserCards(fakePage, { maxScrolls: 0, maxCards: 10 });
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].username, "scoped_user");
+  assert.equal(cards[0].displayName, "Scoped User");
+  assert.ok(
+    containerLookupCount > 0,
+    `Expected the descendant card-container lookup to be invoked at least once, got ${containerLookupCount}`,
+  );
 });

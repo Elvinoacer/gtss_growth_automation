@@ -483,6 +483,34 @@ async function runTikTokMassFollowPipelineNow(config = {}) {
           maxCards: Math.max(effectiveLimit * 3, 30),
           emit: (e) => emit({ stage: "search", ...e }),
         });
+
+        // Last-resort refresh-if-empty: scrapeUserCards already retries once
+        // internally, but if it still returns zero cards we do one final
+        // page.reload() + re-scrape. This catches the case where TikTok's
+        // SPA boots but the search XHR silently 4xx'd on the first nav and
+        // only succeeds on a fresh document load.
+        if (cards.length === 0) {
+          emit({
+            stage: "search",
+            level: "warn",
+            message: "First scrape returned 0 cards — reloading search page and retrying once…",
+          });
+          try {
+            await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+            await new Promise((r) => setTimeout(r, 3000));
+            cards = await tiktokSearch.scrapeUserCards(page, {
+              maxScrolls,
+              maxCards: Math.max(effectiveLimit * 3, 30),
+              emit: (e) => emit({ stage: "search", ...e }),
+            });
+          } catch (retryErr) {
+            emit({
+              stage: "search",
+              level: "error",
+              message: `Retry scrape failed: ${retryErr.message}`,
+            });
+          }
+        }
       } finally {
         // Close the browser between search + follow stages IF we're not
         // resuming — actually we keep the browser open for the follow
@@ -674,6 +702,33 @@ async function runTikTokMassFollowPipelineNow(config = {}) {
         );
       } catch (err) {
         result = { outcome: "failed", reason: err.message, failCategory: null };
+      }
+
+      // Recovery: if the click triggered a navigation away from the search
+      // page (followUserCard returns failCategory="not_found" with the
+      // "search page lost" reason), re-navigate to the search URL so the
+      // next card can be located. The follow itself is counted as failed,
+      // but we don't burn the rest of the run.
+      if (
+        result.failCategory === "not_found" &&
+        result.reason &&
+        result.reason.includes("search page lost")
+      ) {
+        emit({
+          stage: "follow",
+          level: "warn",
+          message: `Re-navigating to search page after navigation drift…`,
+        });
+        try {
+          await page.goto(expectedUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+          await new Promise((r) => setTimeout(r, 2500));
+        } catch (navErr) {
+          emit({
+            stage: "follow",
+            level: "error",
+            message: `Re-navigation failed: ${navErr.message}`,
+          });
+        }
       }
 
       // Rate-limited → stop the loop immediately (don't attempt more follows
