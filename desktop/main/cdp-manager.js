@@ -428,6 +428,22 @@ class CdpManager {
     const args = [
       `--remote-debugging-port=${this.port}`,
       `--user-data-dir=${this.cdpProfileDir}`,
+      // Pin the launch to the single "Default" profile inside cdpProfileDir
+      // — the only profile directory the CDP clone ever creates (see
+      // ensureCdpProfile). This is the second, independent layer of
+      // defense against Chrome's "Who's using Chrome?" profile picker.
+      //
+      // The picker is driven by `profile.info_cache` inside the copied
+      // Local State file, NOT by whether user-data-dir is empty (that was
+      // the old, incorrect assumption — see the comment on the `visible`
+      // check below). ensureCdpProfile() now sanitizes that cache down to
+      // a single Default entry on every clone, which handles the picker
+      // at the source. `--profile-directory=Default` backs that up: even
+      // if Local State is missing, unreadable, or a future change to the
+      // clone logic reintroduces multiple cached profiles, this flag
+      // still tells Chrome exactly which profile to open immediately,
+      // with no picker interstitial in between.
+      "--profile-directory=Default",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-default-apps",
@@ -440,8 +456,11 @@ class CdpManager {
     // Headless mode for background/setup calls. `--headless=new` (Chrome
     // 109+) runs a real renderer with full CDP support but no visible
     // window — exactly what onboarding needs (clone, session check,
-    // warm-up) without stealing focus or showing Chrome's native
-    // "Who's using Chrome?" profile picker on an empty user-data-dir.
+    // warm-up) without stealing focus. (Headless Chrome never shows the
+    // profile picker regardless of info_cache contents, since there's no
+    // window to draw it in — but visible launches need the two defenses
+    // above, which is why they're unconditional rather than gated on
+    // `visible`.)
     if (!visible) {
       args.push("--headless=new");
     }
@@ -1059,13 +1078,51 @@ class CdpManager {
     // `os_crypt.encrypted_key` blob, which is itself bound to the user's
     // OS keyring — copying it to the same user's machine preserves
     // decryption). Without this, copied Cookies/Login Data are useless.
+    //
+    // ─── Why we SANITIZE instead of copying verbatim (profile-picker fix) ──
+    //
+    // `Local State` also carries `profile.info_cache` — the JSON map Chrome
+    // uses to populate the "Who's using Chrome?" picker. If the user's real
+    // Chrome has multiple profiles (very common — e.g. a personal profile
+    // plus a work one), copying this file verbatim carries ALL of those
+    // profile entries into the CDP user-data-dir. Chrome then shows the
+    // picker on every launch, even though we spawn with a single
+    // `--user-data-dir` that only ever contains ONE actual profile
+    // (`Default/`) on disk. The picker was never about an empty
+    // user-data-dir (the old assumption) — it's driven by this cache
+    // listing profiles that don't physically exist in the CDP profile dir.
+    // The result: automation calls `chrome.newTab(openUrl)` and the
+    // navigation lands on the picker interstitial instead of the target
+    // URL, exactly the failure this fix addresses.
+    //
+    // The fix: copy the file, then rewrite `profile.info_cache` in place so
+    // it lists ONLY the `Default` entry, and point the "last used" fields
+    // at `Default` too. This keeps the `os_crypt` keys (and everything else
+    // in the file) byte-identical — only the profile-picker-driving keys
+    // are touched — so decryption of the cloned Cookies/Login Data is
+    // unaffected. If parsing/rewriting fails for any reason, we fall back
+    // to the verbatim copy so a malformed source file never blocks the
+    // clone entirely; `--profile-directory=Default` (see start()) is the
+    // second, independent layer of defense against the picker in that case.
     const localState = path.join(source, "Local State");
     if (fs.existsSync(localState)) {
+      const destLocalState = path.join(this.cdpProfileDir, "Local State");
       try {
-        await atomicCopyFile(localState, path.join(this.cdpProfileDir, "Local State"), {
+        await atomicCopyFile(localState, destLocalState, {
           maxBytes: SESSION_FILE_MAX_BYTES,
         });
         copyResults.copied.push("Local State");
+        try {
+          await sanitizeLocalStateForSingleProfile(destLocalState);
+          copyResults.copied.push("Local State (sanitized to single profile)");
+        } catch (sanitizeErr) {
+          // Non-fatal: Chrome may still show the picker for this launch,
+          // but --profile-directory=Default in start() covers us.
+          copyResults.skipped.push({
+            name: "Local State sanitize",
+            reason: sanitizeErr.message,
+          });
+        }
       } catch (err) {
         copyResults.skipped.push({ name: "Local State", reason: err.message });
       }
@@ -1343,6 +1400,79 @@ async function atomicCopyFile(src, dest, opts = {}) {
     if (err.code === "EPERM" || err.code === "EEXIST" || err.code === "ENOTEMPTY") {
       try { await fsp.unlink(dest); } catch (_) {}
       await fsp.rename(tmp, dest);
+    } else {
+      try { await fsp.unlink(tmp); } catch (_) {}
+      throw err;
+    }
+  }
+}
+
+/**
+ * Rewrite a copied "Local State" file in place so Chrome sees exactly ONE
+ * profile ("Default") in it, instead of every profile that existed on the
+ * source machine's real Chrome.
+ *
+ * ─── Why this exists ──────────────────────────────────────────────────────
+ * Chrome decides whether to show the "Who's using Chrome?" picker by
+ * reading `profile.info_cache` out of `Local State` at startup — it does
+ * NOT look at what's actually on disk under the user-data-dir. Copying
+ * `Local State` verbatim from a real Chrome profile (as `ensureCdpProfile`
+ * does, to preserve the `os_crypt` key needed to decrypt cloned
+ * cookies/passwords) carries every one of the user's real profile entries
+ * along with it. Even though the CDP user-data-dir only ever contains a
+ * single `Default/` directory on disk, Chrome shows the picker for all of
+ * the *stale* entries it read from `info_cache` — the exact interstitial
+ * that swallows the automation's very first `openUrl` navigation.
+ *
+ * This function keeps the file's other top-level keys (crucially
+ * `os_crypt`, which decryption depends on) completely untouched, and only
+ * replaces the profile-selection keys:
+ *   - `profile.info_cache`         → single "Default" entry
+ *   - `profile.last_used`          → "Default"
+ *   - `profile.last_active_profiles` → ["Default"]
+ *   - `profile.profiles_order`     → ["Default"] (present on newer Chrome)
+ *
+ * @param {string} localStatePath - path to the already-copied Local State
+ *   file inside the CDP profile dir (top-level, not inside Default/).
+ */
+async function sanitizeLocalStateForSingleProfile(localStatePath) {
+  const raw = await fsp.readFile(localStatePath, "utf8");
+  const state = JSON.parse(raw);
+
+  if (!state.profile || typeof state.profile !== "object") {
+    state.profile = {};
+  }
+
+  const existingDefault =
+    state.profile.info_cache && state.profile.info_cache.Default;
+
+  // Preserve the Default entry's own metadata (avatar icon, display name,
+  // etc.) if the source Chrome happened to have one under this exact key;
+  // otherwise fall back to a minimal entry. Either way, it's the ONLY
+  // entry in the rewritten cache.
+  state.profile.info_cache = {
+    Default: existingDefault || { name: "Default" },
+  };
+  state.profile.last_used = "Default";
+  state.profile.last_active_profiles = ["Default"];
+  // `profiles_order` isn't present on every Chrome version — only set it
+  // if the source file already had the key, to avoid introducing a field
+  // that a given Chrome build doesn't expect.
+  if (Array.isArray(state.profile.profiles_order)) {
+    state.profile.profiles_order = ["Default"];
+  }
+
+  // Same atomic write pattern as atomicCopyFile: temp file + rename, so a
+  // crash mid-write never leaves a half-written (unparseable) Local State
+  // that would break decryption on the next launch.
+  const tmp = `${localStatePath}.tmp.${process.pid}`;
+  await fsp.writeFile(tmp, JSON.stringify(state), "utf8");
+  try {
+    await fsp.rename(tmp, localStatePath);
+  } catch (err) {
+    if (err.code === "EPERM" || err.code === "EEXIST" || err.code === "ENOTEMPTY") {
+      try { await fsp.unlink(localStatePath); } catch (_) {}
+      await fsp.rename(tmp, localStatePath);
     } else {
       try { await fsp.unlink(tmp); } catch (_) {}
       throw err;

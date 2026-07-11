@@ -160,8 +160,41 @@ if [ ! -d "$CDP_PROFILE_DIR/Default" ] || \
     # (not inside Default/). Required to decrypt encrypted cookies / login
     # data on Windows and macOS (carries the os_crypt.encrypted_key blob,
     # bound to the OS keyring — same user, same machine, decryption works).
+    #
+    # ─── Profile-picker fix ───────────────────────────────────────────────
+    # Local State also carries profile.info_cache — the list Chrome reads
+    # to populate the "Who's using Chrome?" picker. Copying it verbatim
+    # from a real Chrome with multiple profiles (common) carries every one
+    # of those entries into $CDP_PROFILE_DIR, so Chrome shows the picker on
+    # every launch even though only one Default/ dir actually exists here.
+    # After copying, we rewrite info_cache down to a single "Default" entry
+    # (python3, if available) so the copied file matches what's really on
+    # disk. os_crypt and everything else in the file is left untouched. If
+    # python3 isn't on PATH we skip the rewrite silently — the
+    # --profile-directory=Default flag passed to Chrome below is a second,
+    # independent defense against the picker either way.
     if [ -f "$SOURCE_PROFILE/Local State" ]; then
       cp -p "$SOURCE_PROFILE/Local State" "$CDP_PROFILE_DIR/Local State" 2>/dev/null && copied=$((copied + 1))
+      if [ -f "$CDP_PROFILE_DIR/Local State" ] && command -v python3 >/dev/null 2>&1; then
+        python3 - "$CDP_PROFILE_DIR/Local State" <<'PYEOF' 2>/dev/null
+import json, sys
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    state = json.load(f)
+profile = state.setdefault("profile", {})
+existing_default = (profile.get("info_cache") or {}).get("Default")
+profile["info_cache"] = {"Default": existing_default or {"name": "Default"}}
+profile["last_used"] = "Default"
+profile["last_active_profiles"] = ["Default"]
+if isinstance(profile.get("profiles_order"), list):
+    profile["profiles_order"] = ["Default"]
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(state, f)
+import os
+os.replace(tmp, path)
+PYEOF
+      fi
     fi
 
     echo "✓ Copied $copied session file(s) to $CDP_PROFILE_DIR"
@@ -217,6 +250,7 @@ fi
 "$CHROME_BIN" \
   --remote-debugging-port="$PORT" \
   --user-data-dir="$CDP_PROFILE_DIR" \
+  --profile-directory=Default \
   --no-first-run \
   --disable-default-apps \
   --start-maximized \
