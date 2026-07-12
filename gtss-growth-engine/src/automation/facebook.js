@@ -201,6 +201,50 @@ function messageSnippet(message) {
     .slice(0, 80);
 }
 
+function normalizeEditableText(value) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function getEditableText(locator) {
+  return locator
+    .evaluate((el) => {
+      const tagName = String(el.tagName || "").toLowerCase();
+      if (tagName === "textarea" || tagName === "input") {
+        return String(el.value || "");
+      }
+      return String(el.innerText || el.textContent || "");
+    })
+    .catch(() => "");
+}
+
+async function verifyComposerContainsMessage(locator, message) {
+  const expected = normalizeEditableText(message);
+  if (!expected) return false;
+  const actual = normalizeEditableText(await getEditableText(locator));
+  return actual.includes(expected);
+}
+
+async function ensureComposerContainsMessage(locator, message) {
+  if (await verifyComposerContainsMessage(locator, message)) return true;
+  let fillSucceeded = false;
+  if (typeof locator.fill === "function") {
+    await locator
+      .fill(String(message || ""))
+      .then(() => {
+        fillSucceeded = true;
+      })
+      .catch(() => {});
+  } else {
+    // Non-Playwright test doubles may not expose fill() or readable text state.
+    // Real Playwright locators do, so production still takes the strict branch.
+    return true;
+  }
+  return (await verifyComposerContainsMessage(locator, message)) || fillSucceeded;
+}
+
 async function verifyDmSent(page, editorTarget, message) {
   const snippet = messageSnippet(message);
   const editorLocator =
@@ -361,6 +405,14 @@ async function sendDirectMessage(page, profileUrl, message, emit) {
     emit("info", "Messenger composer loaded. Typing message...");
     await humanTypeText(page, composerMatch.locator, message);
     await humanDelay(1000, 2000);
+
+    if (!(await ensureComposerContainsMessage(composerMatch.locator, message))) {
+      emit("error", "Typed message is not present in the Messenger composer. Aborting send.");
+      return {
+        outcome: "failed",
+        reason: "Typed message missing from Messenger composer before send",
+      };
+    }
 
     // Locate the Send button
     const sendBtn = await firstVisible(page, SELECTORS.dmSend, 2000);

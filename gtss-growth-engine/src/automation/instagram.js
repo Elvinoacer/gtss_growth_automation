@@ -1225,6 +1225,84 @@ async function verifyDelivery(page, message) {
   return false;
 }
 
+function normalizeEditableText(value) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function getEditableText(locator) {
+  const fromEvaluate = await locator
+    .evaluate((el) => {
+      const tagName = String(el.tagName || "").toLowerCase();
+      if (tagName === "textarea" || tagName === "input") {
+        return String(el.value || "");
+      }
+      return String(el.innerText || el.textContent || "");
+    })
+    .catch(() => "");
+  const evaluatedText = String(fromEvaluate || "");
+  if (evaluatedText && !/^(flex-start|flex-end|start|end|center)$/i.test(evaluatedText.trim())) {
+    return evaluatedText;
+  }
+
+  return locator.innerText?.().catch(() => "") || "";
+}
+
+async function setComposerTextWithDomEvents(locator, message) {
+  const value = String(message || "");
+  if (!value) return false;
+
+  await locator
+    .evaluate((el, text) => {
+      const tagName = String(el.tagName || "").toLowerCase();
+      el.focus({ preventScroll: false });
+
+      if (tagName === "textarea" || tagName === "input") {
+        const prototype =
+          tagName === "textarea"
+            ? HTMLTextAreaElement.prototype
+            : HTMLInputElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+        if (descriptor?.set) descriptor.set.call(el, text);
+        else el.value = text;
+      } else {
+        el.textContent = text;
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+
+      el.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertText",
+          data: text,
+        }),
+      );
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value)
+    .catch(() => {});
+
+  const actual = normalizeEditableText(await getEditableText(locator));
+  if (actual.includes(normalizeEditableText(value))) return true;
+
+  let fillSucceeded = false;
+  await locator
+    .fill(value)
+    .then(() => {
+      fillSucceeded = true;
+    })
+    .catch(() => {});
+
+  const afterFill = normalizeEditableText(await getEditableText(locator));
+  return afterFill.includes(normalizeEditableText(value)) || fillSucceeded;
+}
+
 async function sendDM(page, { username, message }, emitter) {
   // Precondition checks
   if (!message || message.trim() === "") {
@@ -1533,17 +1611,31 @@ async function sendDM(page, { username, message }, emitter) {
           await humanDelay(2000, 4000); // Simulate reading/reviewing
 
           // Verify text is present in composer (harden against UI rendering lag)
-          const composerText = await composerElement
-            .innerText()
-            .catch(() => "");
-          if (composerText.trim() === "") {
+          let composerText = normalizeEditableText(
+            await getEditableText(composerElement),
+          );
+          const expectedMessage = normalizeEditableText(message);
+          let backupWriteOk = false;
+          if (!composerText.includes(expectedMessage)) {
             safeEmit(
               emitter,
               "warning",
-              "Composer input text empty. Attempting backup fill method.",
+              "Composer text did not match the outgoing message. Attempting backup write.",
             );
-            await composerElement.fill(message);
+            backupWriteOk = await setComposerTextWithDomEvents(
+              composerElement,
+              message,
+            );
             await humanDelay(1000, 2000);
+            composerText = normalizeEditableText(
+              await getEditableText(composerElement),
+            );
+          }
+
+          if (!composerText.includes(expectedMessage) && !backupWriteOk) {
+            throw new Error(
+              "Typed message missing from Instagram composer before send",
+            );
           }
 
           state = "CLICK_SEND";

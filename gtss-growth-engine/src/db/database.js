@@ -796,9 +796,8 @@ function seedDefaultSettings(database) {
     retry_delay_preset: "conservative",
     pipeline_outreach_paused: "false",
     pipeline_content_paused: "false",
-    pipeline_dm_check_paused: "false",
+    pipeline_dm_check_paused: "true",
     pipeline_mass_follow_paused: "false",
-    pipeline_tiktok_mass_follow_paused: "false",
     pipeline_discovery_paused: "false",
     content_asset_source: "ai",
     content_library_media_type: "image",
@@ -861,7 +860,7 @@ function seedDefaultPipelineSchedules(database) {
       'dm_check',
       'DM Inbox Checker',
       'Scans connected social inboxes for new replies',
-      1,
+      0,
       '*/30 * * * *',
       '{"active_hours_start": 8, "active_hours_end": 22, "timezone": "Africa/Nairobi", "platforms": ["instagram", "linkedin", "x", "facebook"], "prompt": ""}'
     )
@@ -871,56 +870,39 @@ function seedDefaultPipelineSchedules(database) {
   // and configures platforms. Cron runs every 30 minutes; each run pulls a
   // batch of pending mass_follow_targets rows, follows them via the platform
   // adapter (which respects per-platform active windows, daily limits, and
-  // human-like delays), and writes a summary back to the pipeline logs.
+  // rolling weekly limits), and writes a summary back to the pipeline logs.
   database.prepare(`
     INSERT OR IGNORE INTO pipeline_schedules
       (id, name, description, enabled, cron, limits_json)
     VALUES (
       'mass_follow',
       'Mass-Follow Pipeline',
-      'Bulk-follow target accounts across X, LinkedIn, Facebook, Instagram, and TikTok with human-like scheduling',
+      'Follow approved target accounts across X, LinkedIn, Facebook, and Instagram with strict rate limits',
       0,
       '*/30 * * * *',
-      '{"platforms": ["instagram", "x", "linkedin", "facebook", "tiktok"], "max_follows_per_run": 20, "follow_interval_min_seconds": 40, "follow_interval_max_seconds": 110, "respect_active_window": true, "skip_already_following": true, "max_retries_per_target": 3}'
+      '{"platforms": ["instagram", "x", "linkedin", "facebook"], "max_follows_per_run": 20, "follow_interval_min_seconds": 40, "follow_interval_max_seconds": 110, "respect_active_window": true, "skip_already_following": true, "max_retries_per_target": 3}'
     )
   `).run();
 
-  // TikTok Mass-Follow pipeline — a dedicated, search-driven pipeline that
-  // navigates to TikTok's /search/user page, scrapes the visible user cards,
-  // and clicks Follow directly on each card (data-e2e="follow-back"). This
-  // is independent of the generic mass_follow pipeline (which operates on
-  // pre-populated targets and navigates to each profile). The user sets:
-  //   - search_query: the TikTok user-search query (e.g. "restaurant owners")
-  //   - max_follows_per_run: the per-run follow limit (user-settable)
-  // Disabled by default until the user configures a search query.
-  database.prepare(`
-    INSERT OR IGNORE INTO pipeline_schedules
-      (id, name, description, enabled, cron, limits_json)
-    VALUES (
-      'tiktok_mass_follow',
-      'TikTok Mass-Follow Pipeline',
-      'Search TikTok for users by query and follow them directly from the search results page',
-      0,
-      '*/30 * * * *',
-      '{"search_query": "restaurant owners", "max_follows_per_run": 20, "follow_interval_min_seconds": 40, "follow_interval_max_seconds": 110, "max_scrolls": 3, "respect_active_window": true}'
-    )
-  `).run();
-
-  // DISABLED — see src/pipeline/tiktokMassFollowPipeline.js header comment
-  // and RUNNERS.tiktok_mass_follow in src/jobs/pipelineScheduler.js, which
-  // now refuses to execute this pipeline unconditionally. This forces the
-  // row to enabled=0 + paused on every startup (not just INSERT OR IGNORE
-  // on first seed) so an existing install with the row already enabled from
-  // before this change gets disabled too, and cron.unregister() drops any
-  // already-registered schedule for it.
-  database.prepare(`
-    UPDATE pipeline_schedules SET enabled = 0, next_run_at = NULL
-    WHERE id = 'tiktok_mass_follow'
-  `).run();
-  database.prepare(`
-    INSERT INTO settings (key, value) VALUES ('pipeline_tiktok_mass_follow_paused', 'true')
-    ON CONFLICT(key) DO UPDATE SET value = 'true'
-  `).run();
+  const massFollowRow = database
+    .prepare("SELECT limits_json FROM pipeline_schedules WHERE id = 'mass_follow'")
+    .get();
+  if (massFollowRow && massFollowRow.limits_json) {
+    try {
+      const limitsJson = JSON.parse(massFollowRow.limits_json);
+      if (Array.isArray(limitsJson.platforms)) {
+        const platforms = limitsJson.platforms.filter((platform) => platform !== "tiktok");
+        if (platforms.length !== limitsJson.platforms.length) {
+          database
+            .prepare("UPDATE pipeline_schedules SET limits_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'mass_follow'")
+            .run(JSON.stringify({ ...limitsJson, platforms }));
+        }
+      }
+    } catch (_) {}
+  }
+  database.prepare("DELETE FROM mass_follow_targets WHERE platform = 'tiktok'").run();
+  database.prepare("DELETE FROM pipeline_schedules WHERE id = 'tiktok_mass_follow'").run();
+  database.prepare("DELETE FROM settings WHERE key = 'pipeline_tiktok_mass_follow_paused'").run();
 }
 
 const db = openDatabase();

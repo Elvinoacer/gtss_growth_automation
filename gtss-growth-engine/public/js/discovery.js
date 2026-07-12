@@ -9,6 +9,7 @@ const discoveryState = {
 
 let platformLabels = {};
 let keywordGroups = [];
+const DISCOVERY_PLATFORM_KEYS = new Set(["linkedin", "x", "facebook", "instagram"]);
 
 function platformBadge(platform) {
   const label =
@@ -128,7 +129,9 @@ async function runOutreachWithKeywords() {
 }
 
 async function loadPlatformControls() {
-  const catalog = await window.gtss.loadPlatformCatalog();
+  const catalog = (await window.gtss.loadPlatformCatalog()).filter((platform) =>
+    DISCOVERY_PLATFORM_KEYS.has(platform.key),
+  );
   platformLabels = Object.fromEntries(
     catalog.map((platform) => [platform.key, platform.label]),
   );

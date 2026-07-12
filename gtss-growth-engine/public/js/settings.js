@@ -50,13 +50,47 @@ function getLimitFieldOrder(data) {
   const fields = [];
   const seen = new Set();
   Object.values(data || {}).forEach((platformLimits) => {
-    Object.keys(platformLimits || {}).forEach((field) => {
+    Object.entries(platformLimits || {}).forEach(([field, value]) => {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        Object.keys(value).forEach((nestedField) => {
+          const key = `${field}.${nestedField}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          fields.push(key);
+        });
+        return;
+      }
       if (seen.has(field)) return;
       seen.add(field);
       fields.push(field);
     });
   });
   return fields;
+}
+
+function getLimitValue(platformLimits, field) {
+  if (!platformLimits) return undefined;
+  if (!field.includes(".")) return platformLimits[field];
+  const [group, nestedField] = field.split(".", 2);
+  return platformLimits[group]?.[nestedField];
+}
+
+function setLimitValue(target, field, value) {
+  if (!field.includes(".")) {
+    target[field] = value;
+    return;
+  }
+  const [group, nestedField] = field.split(".", 2);
+  target[group] = target[group] || {};
+  target[group][nestedField] = value;
+}
+
+function formatLimitField(field) {
+  if (field === "connections") return "Connections/Requests";
+  return field
+    .split(".")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function confirmModal(message) {
@@ -186,7 +220,7 @@ function renderLimits(data) {
       "<th>Platform</th>",
       ...fields.map(
         (field) =>
-          `<th>${field === "connections" ? "Connections/Requests" : field.charAt(0).toUpperCase() + field.slice(1)}</th>`,
+          `<th>${formatLimitField(field)}</th>`,
       ),
     ].join("");
   }
@@ -198,11 +232,10 @@ function renderLimits(data) {
       <td>${platformLabel(platform)}</td>
       ${fields
         .map((field) => {
-          const hasField =
-            data[platform] &&
-            Object.prototype.hasOwnProperty.call(data[platform], field);
+          const value = getLimitValue(data[platform], field);
+          const hasField = value !== undefined;
           return hasField
-            ? `<td><input data-limit-platform="${platform}" data-limit-field="${field}" type="number" min="1" value="${data[platform][field]}"></td>`
+            ? `<td><input data-limit-platform="${platform}" data-limit-field="${field}" type="number" min="1" value="${value}"></td>`
             : '<td class="muted">-</td>';
         })
         .join("")}
@@ -218,8 +251,12 @@ function collectLimits() {
     if (!next[input.dataset.limitPlatform]) {
       next[input.dataset.limitPlatform] = {};
     }
-    next[input.dataset.limitPlatform][input.dataset.limitField] = Number(
+    setLimitValue(
+      next[input.dataset.limitPlatform],
+      input.dataset.limitField,
+      Number(
       input.value,
+      ),
     );
   });
   return next;

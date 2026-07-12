@@ -1,4 +1,4 @@
-const { humanDelay, humanScroll } = require("./browserBase");
+const { humanDelay, humanScroll, closeStrayTabs } = require("./browserBase");
 const logger = require("../utils/logger");
 const diag = require("./linkedinDiagnostics");
 
@@ -473,12 +473,11 @@ const SELECTORS = {
   ],
   message: [
     'button:has-text("Message")',
-    'button[aria-label*="Message"]',
+    'button[aria-label^="Message"]',
     '[role="button"]:has-text("Message")',
     '.artdeco-button:has-text("Message")',
-    'a:has-text("Message")',
-    'a[href*="/messaging"]',
-    '[aria-label*="Message"]',
+    'a[href*="/messaging/compose"]',
+    'a[href*="/messaging/thread"]',
     '[data-control-name="message"]',
   ],
   follow: ['button:has-text("Follow")', 'button[aria-label*="Follow"]'],
@@ -736,8 +735,6 @@ async function quickVisibleProfileAction(page, action, timeout = 900) {
             "main .pv-top-card a",
             "main section button",
             "main section a",
-            "main button",
-            "main a",
           ];
           const seen = new Set();
           const candidates = [];
@@ -768,18 +765,38 @@ async function quickVisibleProfileAction(page, action, timeout = 900) {
                 el.getAttribute("aria-label"),
                 el.getAttribute("title"),
                 el.getAttribute("data-control-name"),
-                el.textContent,
               ]
                 .filter(Boolean)
                 .join(" ")
                 .replace(/\s+/g, " ")
                 .trim()
                 .toLowerCase();
+              const visibleText = String(el.textContent || "")
+                .replace(/\s+/g, " ")
+                .trim()
+                .toLowerCase();
               const href = String(el.getAttribute("href") || "").toLowerCase();
+              const dataControl = String(
+                el.getAttribute("data-control-name") || "",
+              ).toLowerCase();
+              const exactVisibleText = visibleText === actionText;
+              const exactAriaOrTitle =
+                label === actionText ||
+                label.startsWith(`${actionText} `) ||
+                label.includes(` ${actionText} `);
               const isMessageLink =
-                actionText === "message" && href.includes("/messaging");
+                actionText === "message" &&
+                (href.includes("/messaging/compose") ||
+                  href.includes("/messaging/thread") ||
+                  dataControl === "message");
 
-              if (!label.includes(actionText) && !isMessageLink) continue;
+              if (
+                !exactVisibleText &&
+                !exactAriaOrTitle &&
+                !isMessageLink
+              ) {
+                continue;
+              }
 
               const topCard = el.closest(
                 ".pv-top-card, .ph5.pb5, section:has(h1)",
@@ -870,6 +887,43 @@ async function findProfileMessageAction(page, timeout = 2200) {
   }
 
   return null;
+}
+
+function installNoNewTabsGuard(page, emit = () => {}) {
+  let context = null;
+  try {
+    context = page.context();
+  } catch (_) {
+    return () => {};
+  }
+  if (!context || typeof context.on !== "function") return () => {};
+
+  const rootPage = page;
+  const handler = async (newPage) => {
+    if (!newPage || newPage === rootPage) return;
+    try {
+      const urlBefore = String(newPage.url?.() || "");
+      emit(
+        "warn",
+        `Closing unexpected tab opened during LinkedIn DM flow${urlBefore ? `: ${urlBefore.slice(0, 120)}` : ""}.`,
+      );
+      await newPage.close({ runBeforeUnload: false }).catch(() => {});
+    } catch (_) {
+      // Best-effort guard. The normal stray-tab cleanup still runs later.
+    }
+  };
+
+  try {
+    context.on("page", handler);
+  } catch (_) {
+    return () => {};
+  }
+
+  return () => {
+    try {
+      context.off("page", handler);
+    } catch (_) {}
+  };
 }
 
 async function firstVisibleOverlay(
@@ -3448,12 +3502,15 @@ async function sendDirectMessage(
   // (overlay mode) or the main page (full-page /messaging/ mode).
   // This variable is declared here so it is accessible in the finally block.
   let msgCtx = page;
+  let removeNoNewTabsGuard = () => {};
 
   try {
     // ── Pre-flight: bring tab to OS focus ─────────────────────────────────
     // In CDP-mode multi-tab sessions the tab is in the background and
     // document.hasFocus() is false, so all keyboard events are dropped.
     await bringLinkedInPageToFront(page);
+    removeNoNewTabsGuard = installNoNewTabsGuard(page, emit);
+    await closeStrayTabs(page.context(), "linkedin").catch(() => {});
 
     // ── 0. Pre-navigation cleanup ────────────────────────────────────────────
     // Dismiss any stale messaging UI from a previous profile's DM attempt.
@@ -3590,6 +3647,7 @@ async function sendDirectMessage(
     // 600-900ms was excessive; 250-400ms is enough for React to mount the
     // composer and for the editor to become interactive.
     await humanDelay(250, 400);
+    await closeStrayTabs(page.context(), "linkedin").catch(() => {});
     await diag.capture(page, "after-message-click");
 
     // ── 2a. Detect execution context: full-page / iframe / shadow DOM ────────
@@ -3873,6 +3931,7 @@ async function sendDirectMessage(
 
     if (sendBtnData && !sendBtnData.disabled) {
       emit("info", `Send button found and enabled, attempting click...`);
+      await closeStrayTabs(page.context(), "linkedin").catch(() => {});
       sendSuccessful = await clickSendButtonRobust(
         page,
         sendBtnData.locator,
@@ -3893,6 +3952,7 @@ async function sendDirectMessage(
     // ── 7a. Keyboard Enter fallback ───────────────────────────────────────────
     if (!sendSuccessful) {
       emit("info", "Executing keyboard Enter fallback.");
+      await closeStrayTabs(page.context(), "linkedin").catch(() => {});
       await ensureSelectionInEditor(activeEditorLocator);
       await humanDelay(80, 140);
 
@@ -3959,6 +4019,8 @@ async function sendDirectMessage(
     await diag.capture(page, `failure-${err.message.slice(0, 30).replace(/[^a-z0-9]/gi, '_')}`);
     return { outcome: "failed", reason: err.message };
   } finally {
+    removeNoNewTabsGuard();
+    await closeStrayTabs(page.context(), "linkedin").catch(() => {});
     // Flush diagnostics for this DM attempt
     diag.flush(profileUrl);
     // Clean up ALL data-gtss-* tags regardless of outcome — run in both contexts

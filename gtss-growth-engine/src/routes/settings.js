@@ -431,6 +431,25 @@ function mergeDailyLimitUpdates(currentLimits, updates) {
     }
 
     Object.entries(fields).forEach(([field, value]) => {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        if (!merged[platform][field] || typeof merged[platform][field] !== "object") {
+          merged[platform][field] = {};
+        }
+        Object.entries(value).forEach(([nestedField, nestedValue]) => {
+          if (nestedValue && typeof nestedValue === "object") return;
+          merged[platform][field][nestedField] = nestedValue;
+        });
+        return;
+      }
+      if (String(field).includes(".")) {
+        const [group, nestedField] = String(field).split(".", 2);
+        if (!group || !nestedField) return;
+        if (!merged[platform][group] || typeof merged[platform][group] !== "object") {
+          merged[platform][group] = {};
+        }
+        merged[platform][group][nestedField] = value;
+        return;
+      }
       if (value && typeof value === "object") return;
       merged[platform][field] = value;
     });
@@ -458,7 +477,19 @@ function validateLimits(nextLimits) {
     }
 
     for (const [field, rawValue] of Object.entries(fields)) {
-      if (rawValue && typeof rawValue === "object") continue;
+      if (rawValue && typeof rawValue === "object") {
+        if (Array.isArray(rawValue)) {
+          return `${platform}.${field} must be an object`;
+        }
+        for (const [nestedField, nestedRawValue] of Object.entries(rawValue)) {
+          const nestedValue = Number(nestedRawValue);
+          if (!Number.isInteger(nestedValue) || nestedValue < 1 || nestedValue > 1000) {
+            return `${platform}.${field}.${nestedField} must be an integer between 1 and 1000`;
+          }
+          nextLimits[platform][field][nestedField] = nestedValue;
+        }
+        continue;
+      }
       const value = Number(rawValue);
       if (!Number.isInteger(value) || value < 1 || value > 1000) {
         return `${platform}.${field} must be an integer between 1 and 1000`;

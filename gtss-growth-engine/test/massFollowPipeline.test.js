@@ -3,8 +3,7 @@
  *
  * Uses the modern node:test style (like pipelineQueue.test.js) with a
  * hermetic in-memory SQLite DB. Mocks platformAdapter.runConnectionAction
- * so we don't need a real browser. The TikTok automation module is also
- * exercised via the adapter's allowlist + a stubbed tiktok.followUser.
+ * so we don't need a real browser.
  */
 
 const assert = require("node:assert/strict");
@@ -52,13 +51,13 @@ test("MASS_FOLLOW_STAGES is the expected triplet", () => {
   assert.deepEqual(MASS_FOLLOW_STAGES, ["select_targets", "follow", "report"]);
 });
 
-test("SUPPORTED_PLATFORMS includes the five supported networks, including TikTok", () => {
+test("SUPPORTED_PLATFORMS includes the four mass-follow networks", () => {
   assert.ok(SUPPORTED_PLATFORMS.has("instagram"));
   assert.ok(SUPPORTED_PLATFORMS.has("x"));
   assert.ok(SUPPORTED_PLATFORMS.has("linkedin"));
   assert.ok(SUPPORTED_PLATFORMS.has("facebook"));
-  assert.ok(SUPPORTED_PLATFORMS.has("tiktok"));
-  assert.equal(SUPPORTED_PLATFORMS.size, 5);
+  assert.ok(!SUPPORTED_PLATFORMS.has("tiktok"));
+  assert.equal(SUPPORTED_PLATFORMS.size, 4);
 });
 
 test("selectTargetsBatch returns pending rows and skips platforms at their daily limit", () => {
@@ -71,6 +70,24 @@ test("selectTargetsBatch returns pending rows and skips platforms at their daily
   const result = _internal.selectTargetsBatch(["instagram", "x"], 10, false);
   assert.equal(result.targets.length, 3);
   assert.equal(result.skippedPlatforms.length, 0);
+});
+
+test("selectTargetsBatch skips a platform that has reached its weekly follow limit", () => {
+  const db = setupDb();
+  insertTarget(db, { platform: "linkedin", profile_url: "https://linkedin.com/in/weekly-skip" });
+
+  for (let i = 0; i < 80; i++) {
+    db.prepare(
+      `INSERT INTO daily_actions (platform, action_type, outcome, performed_at)
+       VALUES ('linkedin', 'connections', 'sent', datetime('now', '-1 day'))`,
+    ).run();
+  }
+
+  const result = _internal.selectTargetsBatch(["linkedin"], 10, false);
+  assert.equal(result.targets.length, 0);
+  assert.ok(
+    result.skippedPlatforms.some((p) => p.platform === "linkedin" && p.reason === "weekly_limit_reached"),
+  );
 });
 
 test("selectTargetsBatch excludes platforms that are not supported", () => {
@@ -191,7 +208,7 @@ test("recordOutcome maps 'session_required' to 'pending' so the next run retries
   assert.equal(finalStatus, "pending");
 });
 
-test("runMassFollowPipelineNow returns soft-success with no targets when the queue is empty", async () => {
+test("runMassFollowPipelineNow returns non-success with no targets when the queue is empty", async () => {
   setupDb();
   // Stub adapter so it would fail loudly if called — but it shouldn't be called at all
   let adapterCalled = false;
@@ -206,7 +223,8 @@ test("runMassFollowPipelineNow returns soft-success with no targets when the que
       respect_active_window: false,
       trigger: "test",
     });
-    assert.equal(result.success, true);
+    assert.equal(result.success, false);
+    assert.equal(result.error, "No eligible targets");
     assert.equal(result.summary.total, 0);
     assert.equal(adapterCalled, false);
   } finally {
@@ -287,45 +305,47 @@ test("runMassFollowPipelineNow follows all eligible targets and writes per-platf
   }
 });
 
-test("TikTok automation module exports the same shape as x.js (followUser + sendDirectMessage + likeRecentPost + sendConnectionRequest alias)", () => {
-  const tiktok = require("../src/automation/tiktok");
-  assert.equal(typeof tiktok.followUser, "function");
-  assert.equal(typeof tiktok.sendDirectMessage, "function");
-  assert.equal(typeof tiktok.likeRecentPost, "function");
-  // Alias for executor.js compatibility (matches x.js convention)
-  assert.strictEqual(tiktok.sendConnectionRequest, tiktok.followUser);
-});
+test("runMassFollowPipelineNow holds remaining platform targets after a rate-limit response", async () => {
+  const db = setupDb();
+  insertTarget(db, { platform: "x", profile_url: "https://x.com/rate1" });
+  insertTarget(db, { platform: "x", profile_url: "https://x.com/rate2" });
 
-test("platformAdapter.runConnectionAction accepts 'tiktok' and dispatches to tiktok.followUser", async () => {
-  // Stub tiktok.followUser so we don't actually drive a browser
-  const tiktok = require("../src/automation/tiktok");
-  const originalFollowUser = tiktok.followUser;
-  let calledWith = null;
-  tiktok.followUser = async (page, profileUrl, emit) => {
-    calledWith = { profileUrl };
-    return { outcome: "sent" };
+  let calls = 0;
+  platformAdapter.runConnectionAction = async () => {
+    calls += 1;
+    return {
+      outcome: "failed",
+      error: "rate limit",
+      metadata: { category: "rate_limited" },
+      retryable: true,
+    };
   };
 
-  try {
-    const result = await platformAdapter.runConnectionAction(
-      "tiktok",
-      {},
-      { id: 1, profile_url: "https://www.tiktok.com/@someuser" },
-      "",
-      () => {},
-    );
-    assert.equal(result.outcome, "sent");
-    assert.equal(calledWith.profileUrl, "https://www.tiktok.com/@someuser");
-  } finally {
-    tiktok.followUser = originalFollowUser;
-  }
-});
+  const browserBase = require("../src/automation/browserBase");
+  const originalCreateBrowser = browserBase.createBrowser;
+  const originalCloseBrowser = browserBase.closeBrowser;
+  browserBase.createBrowser = async () => ({ page: {}, browser: null, context: null, mode: "stub", tracePath: null, shouldCloseBrowser: false, lock: null });
+  browserBase.closeBrowser = async () => {};
 
-test("platformCatalog recognizes TikTok as a built-in platform with a proper label", () => {
-  const catalog = require("../src/services/platformCatalog");
-  assert.ok(catalog.isKnownPlatform("tiktok"), "TikTok should be a known platform");
-  assert.equal(catalog.formatPlatformLabel("tiktok"), "TikTok");
-  // Ensure the existing platforms still work (no regression)
-  assert.equal(catalog.formatPlatformLabel("x"), "X");
-  assert.equal(catalog.formatPlatformLabel("linkedin"), "LinkedIn");
+  try {
+    await assert.rejects(
+      () => runMassFollowPipelineNow({
+        platforms: ["x"],
+        max_follows_per_run: 10,
+        follow_interval_min_seconds: 1,
+        follow_interval_max_seconds: 1,
+        respect_active_window: false,
+        trigger: "test",
+      }),
+      /did not complete any targets/,
+    );
+    assert.equal(calls, 1, "Expected the runner to stop attempting X after the first rate-limit response");
+
+    const rows = db.prepare("SELECT profile_url, status FROM mass_follow_targets ORDER BY id").all();
+    assert.deepEqual(rows.map((r) => r.status), ["pending", "pending"]);
+  } finally {
+    platformAdapter.runConnectionAction = originalRunConnectionAction;
+    browserBase.createBrowser = originalCreateBrowser;
+    browserBase.closeBrowser = originalCloseBrowser;
+  }
 });

@@ -2,7 +2,7 @@
  * massFollowPipeline.js — Mass-Follow Pipeline
  *
  * Bulk-follows target accounts across all supported social platforms
- * (LinkedIn, X, Instagram, Facebook, TikTok) with human-like scheduling,
+ * (LinkedIn, X, Instagram, Facebook) with human-like scheduling,
  * per-platform active windows, daily/hourly rate caps, and retry/backoff
  * for transient failures.
  *
@@ -30,7 +30,7 @@
  *
  * Config shape (mirrors what pipelineScheduler passes from limits_json):
  *   {
- *     platforms:                  string[],  // ['instagram','x','linkedin','facebook','tiktok']
+ *     platforms:                  string[],  // ['instagram','x','linkedin','facebook']
  *     max_follows_per_run:        number,    // batch size cap (default 20)
  *     follow_interval_min_seconds: number,   // human-like delay floor (default 40)
  *     follow_interval_max_seconds: number,   // human-like delay ceiling (default 110)
@@ -64,7 +64,6 @@ const SUPPORTED_PLATFORMS = new Set([
   "x",
   "linkedin",
   "facebook",
-  "tiktok",
 ]);
 
 /**
@@ -163,6 +162,20 @@ function getHourlyFollowCount(platform) {
   return row ? row.count : 0;
 }
 
+function getWeeklyFollowCount(platform) {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM daily_actions
+       WHERE platform = ?
+         AND action_type IN ('follows', 'connections')
+         AND performed_at >= datetime('now', '-7 days')`,
+    )
+    .get(platform);
+  return row ? row.count : 0;
+}
+
 function getEffectiveDailyLimit(platform) {
   // Prefer the user's stored daily_limits (Settings → Limits), fall back to
   // the static limits.js. The 'follows' key is used by X/Instagram/TikTok;
@@ -186,6 +199,30 @@ function getEffectiveHourlyLimit(platform) {
   if (typeof staticHourly.follows === "number") return staticHourly.follows;
   if (typeof staticHourly.connections === "number") return staticHourly.connections;
   return 3;
+}
+
+function getEffectiveWeeklyLimit(platform) {
+  const stored = require("../db/database").getDailyLimits();
+  const storedWeekly = (stored[platform] && stored[platform].weekly) || {};
+  const staticWeekly = (limits[platform] && limits[platform].weekly) || {};
+  if (typeof storedWeekly.follows === "number") return storedWeekly.follows;
+  if (typeof storedWeekly.connections === "number") return storedWeekly.connections;
+  if (typeof staticWeekly.follows === "number") return staticWeekly.follows;
+  if (typeof staticWeekly.connections === "number") return staticWeekly.connections;
+  return 25;
+}
+
+function isRateLimitResult(result) {
+  const category = result && result.metadata && result.metadata.category;
+  const message = String(result?.error || "").toLowerCase();
+  return (
+    category === "rate_limited" ||
+    message.includes("rate limit") ||
+    message.includes("following too fast") ||
+    message.includes("too many actions") ||
+    message.includes("temporarily blocked") ||
+    message.includes("action blocked")
+  );
 }
 
 /**
@@ -227,10 +264,17 @@ function selectTargetsBatch(platforms, maxFollowsPerRun, respectActiveWindow) {
       skippedPlatforms.push({ platform, reason: "hourly_limit_reached", hourly, hourlyLimit });
       continue;
     }
+    const weekly = getWeeklyFollowCount(platform);
+    const weeklyLimit = getEffectiveWeeklyLimit(platform);
+    if (weekly >= weeklyLimit) {
+      skippedPlatforms.push({ platform, reason: "weekly_limit_reached", weekly, weeklyLimit });
+      continue;
+    }
     eligiblePlatforms.push({
       platform,
       remainingDaily: Math.max(0, dailyLimit - daily),
       remainingHourly: Math.max(0, hourlyLimit - hourly),
+      remainingWeekly: Math.max(0, weeklyLimit - weekly),
     });
   }
 
@@ -248,7 +292,7 @@ function selectTargetsBatch(platforms, maxFollowsPerRun, respectActiveWindow) {
   // Distribute maxFollowsPerRun proportionally to remainingHourly (so each
   // platform can use at most its hourly headroom), then cap at remainingDaily.
   const perPlatformCap = eligiblePlatforms.map((p) =>
-    Math.min(p.remainingHourly, p.remainingDaily, maxFollowsPerRun),
+    Math.min(p.remainingHourly, p.remainingDaily, p.remainingWeekly, maxFollowsPerRun),
   );
 
   // Pull a generous superset (maxFollowsPerRun * 2) then trim per-platform
@@ -630,11 +674,11 @@ async function runMassFollowPipelineNow(config = {}) {
         entityType: "pipeline",
         entityId: jobId,
         actor: trigger,
-        status: "success",
-        summary: `Mass-follow pipeline ${jobId} completed (no targets)`,
+        status: "skipped",
+        summary: `Mass-follow pipeline ${jobId} skipped (no eligible targets)`,
         details: summary,
       });
-      return { success: true, summary };
+      return { success: false, error: "No eligible targets", summary };
     }
 
     emit({
@@ -660,6 +704,7 @@ async function runMassFollowPipelineNow(config = {}) {
   // ── STAGE 2: follow ──────────────────────────────────────────────────────
   stageStart = Date.now();
   const platformsInBatch = [...new Set(batch.map((t) => t.platform))];
+  const haltedPlatforms = new Set();
   let activePages = {};
   try {
     updateLifecycle("follow", `Launching browsers for: ${platformsInBatch.join(", ")}…`, 15, 1, 3);
@@ -685,6 +730,25 @@ async function runMassFollowPipelineNow(config = {}) {
       const platform = target.platform;
       const state = activePages[platform];
       const pct = 15 + Math.floor(((i + 1) / batch.length) * 75); // 15..90
+
+      if (haltedPlatforms.has(platform)) {
+        db.prepare(
+          `UPDATE mass_follow_targets
+           SET status = 'pending', error_message = ?,
+               attempted_at = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`,
+        ).run(
+          "Platform rate limit reached earlier in this run; held for a later run",
+          new Date().toISOString(),
+          target.id,
+        );
+        summary.pending += 1;
+        summary.perPlatform[platform] = summary.perPlatform[platform] || {
+          sent: 0, skipped: 0, failed: 0, pending: 0,
+        };
+        summary.perPlatform[platform].pending += 1;
+        continue;
+      }
 
       // Browser launch failed for this platform → mark all of its targets
       // as 'session_required' so they retry next run.
@@ -763,6 +827,14 @@ async function runMassFollowPipelineNow(config = {}) {
       }
 
       const finalStatus = recordOutcome(db, target, platform, result);
+      if (isRateLimitResult(result)) {
+        haltedPlatforms.add(platform);
+        emit({
+          stage: "follow",
+          level: "warn",
+          message: `${platform} reported a rate limit; holding remaining ${platform} targets for a later run`,
+        });
+      }
       summary[finalStatus] = (summary[finalStatus] || 0) + 1;
       summary.perPlatform[platform] = summary.perPlatform[platform] || {
         sent: 0, skipped: 0, failed: 0, pending: 0,
@@ -820,6 +892,9 @@ async function runMassFollowPipelineNow(config = {}) {
   stageStart = Date.now();
   try {
     updateLifecycle("report", "Writing run summary…", 95, 2, 3);
+    if (summary.total > 0 && summary.sent + summary.skipped + summary.failed === 0) {
+      throw new Error("Mass-follow did not complete any targets; all selected targets were left pending");
+    }
     emit({
       stage: "report",
       level: "success",
@@ -898,7 +973,10 @@ module.exports = {
     isWithinActiveWindow,
     getDailyFollowCount,
     getHourlyFollowCount,
+    getWeeklyFollowCount,
     getEffectiveDailyLimit,
     getEffectiveHourlyLimit,
+    getEffectiveWeeklyLimit,
+    isRateLimitResult,
   },
 };

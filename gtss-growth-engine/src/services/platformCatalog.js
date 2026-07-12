@@ -173,9 +173,19 @@ function getLimitFields() {
   catalog.keys.forEach((platform) => {
     const platformLimits = catalog.limits[platform] || {};
     Object.entries(platformLimits).forEach(([field, value]) => {
-      if (seen.has(field) || typeof value !== "number") return;
-      seen.add(field);
-      fields.push(field);
+      if (typeof value === "number") {
+        if (seen.has(field)) return;
+        seen.add(field);
+        fields.push(field);
+        return;
+      }
+      if (!value || typeof value !== "object" || Array.isArray(value)) return;
+      Object.entries(value).forEach(([nestedField, nestedValue]) => {
+        const key = `${field}.${nestedField}`;
+        if (seen.has(key) || typeof nestedValue !== "number") return;
+        seen.add(key);
+        fields.push(key);
+      });
     });
   });
 

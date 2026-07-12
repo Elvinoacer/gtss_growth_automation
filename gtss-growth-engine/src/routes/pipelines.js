@@ -44,14 +44,13 @@ const router = express.Router();
 
 const ALLOWED_CONTENT_PLATFORMS = new Set(['instagram', 'linkedin', 'x', 'facebook']);
 const ALLOWED_OUTREACH_PLATFORMS = new Set(['instagram', 'linkedin', 'x', 'facebook']);
-const ALLOWED_MASS_FOLLOW_PLATFORMS = new Set(['instagram', 'linkedin', 'x', 'facebook', 'tiktok']);
+const ALLOWED_MASS_FOLLOW_PLATFORMS = new Set(['instagram', 'linkedin', 'x', 'facebook']);
 
 const PIPELINE_STAGES = {
   outreach: ['discovery', 'qualification', 'messages', 'send'],
   content: ['image_gen', 'caption_gen', 'post_record', 'publish'],
   dm_check: ['scan'],
   mass_follow: ['select_targets', 'follow', 'report'],
-  tiktok_mass_follow: ['search', 'follow', 'report'],
 };
 
 function parseJsonObject(value, fallback = {}) {
@@ -252,33 +251,141 @@ function normalizeLimits(id, limits) {
     }
   }
 
-  if (id === 'tiktok_mass_follow') {
-    // search_query is the TikTok user-search query (e.g. "restaurant owners").
-    // It's required to run the pipeline but may be empty when the schedule
-    // is first created — we only validate shape here, not presence.
-    if (next.search_query !== undefined) {
-      next.search_query = String(next.search_query).trim().slice(0, 200);
-    }
-    // follow_interval_min_seconds must not exceed follow_interval_max_seconds
-    if (
-      next.follow_interval_min_seconds !== undefined &&
-      next.follow_interval_max_seconds !== undefined &&
-      Number(next.follow_interval_min_seconds) > Number(next.follow_interval_max_seconds)
-    ) {
-      throw new Error('follow_interval_min_seconds cannot exceed follow_interval_max_seconds');
-    }
-    if (next.respect_active_window !== undefined) {
-      next.respect_active_window = next.respect_active_window === true || next.respect_active_window === 'true' || next.respect_active_window === 1 || next.respect_active_window === '1';
-    }
-    // max_follows_per_run is the user-set follow limit per run. It's already
-    // validated as a positive integer above; we just clamp it to a sane
-    // ceiling (200) so a typo doesn't request 10,000 follows in one go.
-    if (next.max_follows_per_run !== undefined) {
-      next.max_follows_per_run = Math.min(200, Math.max(1, next.max_follows_per_run));
-    }
+  return next;
+}
+
+function preflightMassFollowRun(limits = {}) {
+  const platforms = Array.isArray(limits.platforms)
+    ? limits.platforms.map((platform) => String(platform).trim().toLowerCase()).filter((platform) => ALLOWED_MASS_FOLLOW_PLATFORMS.has(platform))
+    : [];
+  if (platforms.length === 0) {
+    return {
+      ok: false,
+      error: 'No supported mass-follow platforms are configured. Select at least one of Instagram, LinkedIn, X, or Facebook.',
+      reason: 'no_supported_platforms',
+    };
   }
 
-  return next;
+  const maxFollows = Math.max(1, Math.floor(Number(limits.max_follows_per_run) || 20));
+  const respectActiveWindow = limits.respect_active_window !== false && limits.respect_active_window !== 'false';
+  const { _internal } = require('../pipeline/massFollowPipeline');
+  const selection = _internal.selectTargetsBatch(platforms, maxFollows, respectActiveWindow);
+  if (selection.targets.length > 0) {
+    return { ok: true, eligibleCount: selection.targets.length };
+  }
+
+  const db = getDb();
+  const placeholders = platforms.map(() => '?').join(',');
+  const retryableCount = db.prepare(
+    `SELECT COUNT(*) AS count
+     FROM mass_follow_targets
+     WHERE platform IN (${placeholders})
+       AND (
+         status = 'pending'
+         OR (status = 'failed'
+             AND retry_count < COALESCE(max_retries, 3)
+             AND (next_retry_at IS NULL OR datetime(next_retry_at) <= datetime('now')))
+       )`,
+  ).get(...platforms)?.count || 0;
+
+  if (retryableCount === 0) {
+    return {
+      ok: false,
+      error: 'No eligible mass-follow targets. Add pending targets in Manage Targets, or retry failed targets whose backoff has expired.',
+      reason: 'no_targets',
+      skippedPlatforms: selection.skippedPlatforms,
+    };
+  }
+
+  return {
+    ok: false,
+    error: 'Mass-follow has targets, but every configured platform is currently blocked by active-window or rate-limit rules.',
+    reason: 'all_platforms_capped',
+    skippedPlatforms: selection.skippedPlatforms,
+  };
+}
+
+function inferMassFollowHandle(platform, lead) {
+  if (platform === 'x' && lead.x_handle) return lead.x_handle;
+  if (platform === 'instagram' && lead.ig_username) return lead.ig_username;
+  if (lead.name) return lead.name;
+  return null;
+}
+
+function importMassFollowTargetsFromLeads(options = {}) {
+  const db = getDb();
+  const platforms = Array.isArray(options.platforms) && options.platforms.length > 0
+    ? options.platforms
+        .map((platform) => String(platform).trim().toLowerCase())
+        .filter((platform) => ALLOWED_MASS_FOLLOW_PLATFORMS.has(platform))
+    : [...ALLOWED_MASS_FOLLOW_PLATFORMS];
+  if (platforms.length === 0) {
+    return { inserted: 0, updated: 0, considered: 0, platforms: [] };
+  }
+
+  const statuses = Array.isArray(options.statuses) && options.statuses.length > 0
+    ? options.statuses.map((status) => String(status).trim()).filter(Boolean)
+    : ['qualified', 'discovered', 'pending_qualification'];
+  const limit = Math.max(1, Math.min(1000, Number(options.limit) || 200));
+  const platformPlaceholders = platforms.map(() => '?').join(',');
+  const statusPlaceholders = statuses.map(() => '?').join(',');
+
+  const leads = db.prepare(
+    `SELECT id, platform, name, profile_url, x_handle, ig_username, status
+     FROM leads
+     WHERE platform IN (${platformPlaceholders})
+       AND status IN (${statusPlaceholders})
+       AND profile_url IS NOT NULL
+       AND TRIM(profile_url) != ''
+       AND NOT EXISTS (
+         SELECT 1 FROM mass_follow_targets m
+         WHERE m.platform = leads.platform
+           AND m.profile_url = leads.profile_url
+           AND m.status IN ('pending', 'running', 'sent', 'accepted', 'skipped')
+       )
+     ORDER BY
+       CASE status
+         WHEN 'qualified' THEN 0
+         WHEN 'discovered' THEN 1
+         ELSE 2
+       END,
+       updated_at DESC,
+       created_at DESC
+     LIMIT ?`,
+  ).all(...platforms, ...statuses, limit);
+
+  const insertStmt = db.prepare(
+    `INSERT INTO mass_follow_targets (platform, profile_url, handle, source, status, lead_id, max_retries)
+     VALUES (?, ?, ?, 'lead_import', 'pending', ?, 3)
+     ON CONFLICT(platform, profile_url) DO UPDATE SET
+       handle = COALESCE(excluded.handle, mass_follow_targets.handle),
+       lead_id = COALESCE(excluded.lead_id, mass_follow_targets.lead_id),
+       source = 'lead_import',
+       status = CASE WHEN mass_follow_targets.status IN ('sent','accepted','skipped') THEN mass_follow_targets.status ELSE 'pending' END,
+       error_message = NULL,
+       retry_count = 0,
+       next_retry_at = NULL,
+       updated_at = CURRENT_TIMESTAMP
+     RETURNING id`,
+  );
+
+  let inserted = 0;
+  let updated = 0;
+  for (const lead of leads) {
+    const before = db
+      .prepare('SELECT id FROM mass_follow_targets WHERE platform = ? AND profile_url = ?')
+      .get(lead.platform, lead.profile_url);
+    insertStmt.get(
+      lead.platform,
+      lead.profile_url,
+      inferMassFollowHandle(lead.platform, lead),
+      lead.id,
+    );
+    if (before) updated += 1;
+    else inserted += 1;
+  }
+
+  return { inserted, updated, considered: leads.length, platforms, statuses };
 }
 
 // ── GET /api/pipelines ── List all pipeline schedules
@@ -425,24 +532,34 @@ router.post('/:id/run', async (req, res) => {
     });
   }
 
-  // DISABLED — see RUNNERS.tiktok_mass_follow in pipelineScheduler.js for why.
-  // This blocks manual/API triggers independent of the paused flag, so the
-  // pipeline can't be run even if pipeline_tiktok_mass_follow_paused were
-  // ever flipped back via a direct settings write.
-  if (id === 'tiktok_mass_follow') {
-    return res.status(403).json({
-      error: 'TikTok mass-follow pipeline is disabled and cannot be run.',
-    });
-  }
-
-  if (id === 'tiktok_mass_follow' && (!limits.search_query || !String(limits.search_query).trim())) {
-    return res.status(400).json({
-      error: 'A TikTok search query is required before running the TikTok Mass-Follow Pipeline',
-    });
+  let massFollowSeeded = null;
+  if (id === 'mass_follow') {
+    let preflight = preflightMassFollowRun(limits);
+    if (!preflight.ok && preflight.reason === 'no_targets') {
+      massFollowSeeded = importMassFollowTargetsFromLeads({
+        platforms: limits.platforms,
+        limit: Math.max(20, Number(limits.max_follows_per_run || 20) * 3),
+      });
+      if (massFollowSeeded.inserted > 0 || massFollowSeeded.updated > 0) {
+        preflight = preflightMassFollowRun(limits);
+      }
+    }
+    if (!preflight.ok) {
+      return res.status(400).json({
+        ...preflight,
+        seeded: massFollowSeeded,
+        error: massFollowSeeded && massFollowSeeded.considered === 0
+          ? `${preflight.error} No matching discovered or qualified leads were available to import. Run Lead Discovery first or add targets manually.`
+          : preflight.error,
+      });
+    }
   }
 
   // Respond immediately; run in background via the lifecycle service
-  res.json({ ok: true, message: `Pipeline "${row.name}" triggered manually` });
+  const seededText = massFollowSeeded && (massFollowSeeded.inserted > 0 || massFollowSeeded.updated > 0)
+    ? ` after importing ${massFollowSeeded.inserted} lead target(s)`
+    : '';
+  res.json({ ok: true, message: `Pipeline "${row.name}" triggered manually${seededText}`, seeded: massFollowSeeded });
 
   setImmediate(async () => {
     try {
@@ -523,13 +640,33 @@ router.post('/:id/restart', async (req, res) => {
     });
   }
 
-  if (id === 'tiktok_mass_follow' && (!limits.search_query || !String(limits.search_query).trim())) {
-    return res.status(400).json({
-      error: 'A TikTok search query is required before restarting the TikTok Mass-Follow Pipeline',
-    });
+  let massFollowSeeded = null;
+  if (id === 'mass_follow') {
+    let preflight = preflightMassFollowRun(limits);
+    if (!preflight.ok && preflight.reason === 'no_targets') {
+      massFollowSeeded = importMassFollowTargetsFromLeads({
+        platforms: limits.platforms,
+        limit: Math.max(20, Number(limits.max_follows_per_run || 20) * 3),
+      });
+      if (massFollowSeeded.inserted > 0 || massFollowSeeded.updated > 0) {
+        preflight = preflightMassFollowRun(limits);
+      }
+    }
+    if (!preflight.ok) {
+      return res.status(400).json({
+        ...preflight,
+        seeded: massFollowSeeded,
+        error: massFollowSeeded && massFollowSeeded.considered === 0
+          ? `${preflight.error} No matching discovered or qualified leads were available to import. Run Lead Discovery first or add targets manually.`
+          : preflight.error,
+      });
+    }
   }
 
-  res.json({ ok: true, message: `Pipeline "${row.name}" restarting` });
+  const seededText = massFollowSeeded && (massFollowSeeded.inserted > 0 || massFollowSeeded.updated > 0)
+    ? ` after importing ${massFollowSeeded.inserted} lead target(s)`
+    : '';
+  res.json({ ok: true, message: `Pipeline "${row.name}" restarting${seededText}`, seeded: massFollowSeeded });
 
   setImmediate(async () => {
     try {
@@ -1266,18 +1403,6 @@ router.get('/:id/history', (req, res) => {
     return res.json({ runs: rows });
   }
 
-  if (id === 'tiktok_mass_follow') {
-    const rows = db.prepare(`
-      SELECT id, trigger, status, current_stage, current_message, progress,
-             total_steps, completed_steps, error_message, started_at, finished_at, duration_ms
-      FROM pipeline_executions
-      WHERE pipeline_id = 'tiktok_mass_follow'
-      ORDER BY started_at DESC
-      LIMIT ?
-    `).all(limit);
-    return res.json({ runs: rows });
-  }
-
   res.json({ runs: [] });
 });
 
@@ -1454,6 +1579,37 @@ router.post('/mass-follow/targets', (req, res) => {
   });
 });
 
+// ── POST /api/pipelines/mass-follow/targets/import-leads ── seed targets from CRM/discovery leads
+//
+// Body: { platforms?: string[], statuses?: string[], limit?: number }
+// Defaults to discovered/qualified leads on the currently supported
+// mass-follow platforms. This keeps profile discovery in the discovery/CRM
+// layer and lets mass-follow operate on a reviewable queue.
+router.post('/mass-follow/targets/import-leads', (req, res) => {
+  try {
+    const result = importMassFollowTargetsFromLeads({
+      platforms: req.body?.platforms,
+      statuses: req.body?.statuses,
+      limit: req.body?.limit,
+    });
+
+    logActivity({
+      activityType: 'mass_follow_targets_imported',
+      entityType: 'pipeline',
+      entityId: 'mass_follow',
+      actor: req.user?.id || 'system',
+      status: 'success',
+      summary: `Imported ${result.inserted} new mass-follow target(s) from leads, updated ${result.updated}`,
+      details: result,
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error('PIPELINES-API', 'Failed to import mass-follow targets from leads', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── DELETE /api/pipelines/mass-follow/targets/:id ── remove a single target
 router.delete('/mass-follow/targets/:id', (req, res) => {
   const db = getDb();
@@ -1521,94 +1677,6 @@ router.post('/mass-follow/targets/clear', (req, res) => {
     .prepare(`DELETE FROM mass_follow_targets WHERE ${where.join(' AND ')}`)
     .run(...args);
   res.json({ deleted: result.changes });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TikTok Mass-Follow Pipeline — search preview endpoint
-//
-// Lets the user preview what a TikTok user-search query would return
-// BEFORE running the full pipeline. Launches a TikTok browser, navigates
-// to /search/user?q=<query>, scrapes the visible user cards, and returns
-// them as JSON. The browser is closed immediately after — no follows are
-// performed. Useful for sanity-checking a query ("restaurant owners" →
-// 24 cards) before committing a follow run.
-//
-// POST /api/pipelines/tiktok-mass-follow/preview-search
-//   body: { query: string, max_scrolls?: number, max_cards?: number }
-//   → { ok: true, query, cards: [{ username, displayName, profileUrl, followers, likes, followState }] }
-// ─────────────────────────────────────────────────────────────────────────────
-router.post('/tiktok-mass-follow/preview-search', async (req, res) => {
-  const query = String(req.body?.query || '').trim();
-  if (!query) {
-    return res.status(400).json({ error: 'query is required' });
-  }
-  const maxScrolls = Math.max(0, Math.min(10, Number(req.body?.max_scrolls) || 2));
-  const maxCards = Math.max(1, Math.min(50, Number(req.body?.max_cards) || 20));
-
-  const tiktokSearch = require('../automation/tiktokSearch');
-  const browserBase = require('../automation/browserBase');
-
-  let browserState = null;
-  try {
-    browserState = await browserBase.createBrowser('tiktok', {
-      headless: process.env.ALLOW_HEADLESS_SOCIAL === 'true',
-    });
-    const page = browserState.page;
-    const url = tiktokSearch.buildSearchUrl(query);
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await new Promise((r) => setTimeout(r, 2500));
-
-    let cards = await tiktokSearch.scrapeUserCards(page, { maxScrolls, maxCards });
-
-    // Refresh-if-empty safety net (mirrors the pipeline's behavior):
-    // TikTok's SPA sometimes paints zero cards on the first navigation.
-    // scrapeUserCards already retries internally, but if it still returns
-    // 0 we reload the page once more and re-scrape so the preview modal
-    // shows the real cards instead of an empty result.
-    if (cards.length === 0) {
-      logger.info('PIPELINES-API', `TikTok search preview: 0 cards on first scrape — reloading and retrying`);
-      try {
-        await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
-        await new Promise((r) => setTimeout(r, 2500));
-        cards = await tiktokSearch.scrapeUserCards(page, { maxScrolls, maxCards });
-      } catch (retryErr) {
-        logger.warn('PIPELINES-API', `TikTok search preview retry failed: ${retryErr.message}`);
-      }
-    }
-
-    return res.json({
-      ok: true,
-      query,
-      cardCount: cards.length,
-      cards: cards.map((c) => ({
-        username: c.username,
-        displayName: c.displayName,
-        profileUrl: c.profileUrl,
-        followers: c.followers,
-        likes: c.likes,
-        followState: c.followState,
-      })),
-    });
-  } catch (err) {
-    logger.error('PIPELINES-API', `TikTok search preview failed: ${err.message}`, err);
-    return res.status(500).json({ error: err.message });
-  } finally {
-    if (browserState) {
-      try {
-        await browserBase.closeBrowser(
-          browserState.browser,
-          'tiktok',
-          browserState.context,
-          {
-            mode: browserState.mode,
-            tracePath: browserState.tracePath,
-            shouldCloseBrowser: browserState.shouldCloseBrowser,
-            lock: browserState.lock,
-          },
-        );
-      } catch (_) {}
-    }
-  }
 });
 
 module.exports = router;

@@ -24,6 +24,11 @@ module.exports = {
       dms: 4,              // Max direct messages per hour
       likes: 2,            // Max likes per hour
       visits: 5            // Max visits per hour
+    },
+
+    // Rolling 7-day caps used by mass-follow/connection pipelines.
+    weekly: {
+      connections: 80      // Max connection invites per rolling week
     }
   },
 
@@ -39,6 +44,10 @@ module.exports = {
       dms: 2,              // Max direct messages per hour
       follows: 5,          // Max follows per hour
       likes: 4             // Max likes per hour
+    },
+
+    weekly: {
+      follows: 150         // Max account follows per rolling week
     }
   },
 
@@ -54,19 +63,32 @@ module.exports = {
       dms: 3,              // Max direct messages per hour
       follows: 4,          // Max follows per hour
       likes: 3             // Max likes per hour
+    },
+
+    weekly: {
+      follows: 100         // Max account follows per rolling week
     }
   },
 
   // ── FACEBOOK ENGAGEMENT LIMITS ───────────────────────────────────────────
   facebook: {
     // Preserved Daily Limit Thresholds (Backward Compatible)
+    connections: 8,        // Max friend/follow connection attempts per day
+    follows: 8,            // Alias used by follow-oriented queues
     dms: 10,               // Max direct messages per day
     likes: 10,             // Max posts liked per day
 
     // Queue-Specific/Hourly Limits Extension
     hourly: {
+      connections: 2,      // Max friend/follow connection attempts per hour
+      follows: 2,          // Alias used by follow-oriented queues
       dms: 2,              // Max direct messages per hour
       likes: 2             // Max likes per hour
+    },
+
+    weekly: {
+      connections: 40,
+      follows: 40
     }
   },
 
@@ -82,6 +104,10 @@ module.exports = {
       follows: 4,          // Max follows per hour
       likes: 4,            // Max likes per hour
       dms: 2               // Max direct messages per hour
+    },
+
+    weekly: {
+      follows: 60          // Max account follows per rolling week
     }
   }
 };

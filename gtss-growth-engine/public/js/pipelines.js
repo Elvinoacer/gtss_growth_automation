@@ -81,25 +81,9 @@ const PIPELINE_META = {
     platformField: true,
     isMassFollow: true,
   },
-  tiktok_mass_follow: {
-    icon: '⚫',
-    color: '#fe2c55',
-    stages: ['search', 'follow', 'report'],
-    stageLabels: { search: 'Search', follow: 'Follow', report: 'Report' },
-    limitFields: [
-      { key: 'search_query', label: 'TikTok search query', type: 'text', default: 'restaurant owners' },
-      { key: 'max_follows_per_run', label: 'Max follows per run (limit)', type: 'number', default: 20 },
-      { key: 'follow_interval_min_seconds', label: 'Follow interval — min (sec)', type: 'number', default: 40 },
-      { key: 'follow_interval_max_seconds', label: 'Follow interval — max (sec)', type: 'number', default: 110 },
-      { key: 'max_scrolls', label: 'Max scroll passes (discovery)', type: 'number', default: 3 },
-      { key: 'respect_active_window', label: 'Respect TikTok active window', type: 'select', options: ['true', 'false'], default: 'true' },
-    ],
-    platformField: false,
-    isTiktokMassFollow: true,
-  },
 };
 
-const ALL_PLATFORMS = ['instagram', 'linkedin', 'x', 'facebook', 'tiktok'];
+const ALL_PLATFORMS = ['instagram', 'linkedin', 'x', 'facebook'];
 
 const STATE_META = {
   idle:       { color: '#94a3b8', bg: 'rgba(148,163,184,0.12)', icon: '○', label: 'Idle' },
@@ -1112,7 +1096,7 @@ function renderPlatformCheckboxes(selectedPlatforms, pipelineId) {
       : pipelineId === 'dm_check'
         ? ['instagram', 'linkedin', 'x', 'facebook']
         : pipelineId === 'mass_follow'
-          ? ['instagram', 'x', 'linkedin', 'facebook', 'tiktok']
+          ? ['instagram', 'x', 'linkedin', 'facebook']
           : ['instagram', 'linkedin'];
   const selected = Array.isArray(selectedPlatforms) ? selectedPlatforms : fallback;
   return `<div style="display:flex;flex-wrap:wrap;gap:10px;padding:6px 0">
@@ -1389,13 +1373,6 @@ function renderActionButtons(pipeline) {
           background:rgba(168,85,247,0.1);color:#c4b5fd;font-size:12px;font-weight:600;cursor:pointer;
           transition:all 150ms" title="Add, import, review, and clear follow targets">
           🎯 Manage Targets
-        </button>` : ''}
-        ${meta.isTiktokMassFollow ? `
-        <button type="button" class="pipeline-action-btn" data-action="tiktok-search" data-pipeline="${pipeline.id}"
-          style="padding:8px 14px;border-radius:10px;border:1px solid rgba(254,44,85,0.35);
-          background:rgba(254,44,85,0.1);color:#fe2c55;font-size:12px;font-weight:600;cursor:pointer;
-          transition:all 150ms" title="Preview the TikTok search results for the configured query">
-          🔍 Preview Search
         </button>` : ''}
         <button type="button" class="pipeline-action-btn" data-action="save" data-pipeline="${pipeline.id}"
           style="padding:8px 14px;border-radius:10px;border:1px solid rgba(14,165,233,0.3);
@@ -1785,7 +1762,6 @@ function attachActionBtnListeners(scope) {
       else if (action === 'resume-checkpoint') resumeFromCheckpoint(id, null, btn);
       else if (action === 'force-clear') forceClearPipeline(id, btn);
       else if (action === 'manage-targets') openMassFollowTargetsModal(id, btn);
-      else if (action === 'tiktok-search') openTikTokSearchPreviewModal(id, btn);
       else if (action === 'save') savePipeline(id);
     });
     btn.addEventListener('mouseenter', () => { btn.style.transform = 'translateY(-1px)'; btn.style.opacity = '0.9'; });
@@ -1845,7 +1821,6 @@ function attachCardListeners() {
       else if (action === 'resume-checkpoint') resumeFromCheckpoint(id, null, btn);
       else if (action === 'force-clear') forceClearPipeline(id, btn);
       else if (action === 'manage-targets') openMassFollowTargetsModal(id, btn);
-      else if (action === 'tiktok-search') openTikTokSearchPreviewModal(id, btn);
       else if (action === 'save') savePipeline(id);
     });
   });
@@ -2387,7 +2362,7 @@ function initPipelineSocket() {
 //   Step 3 → enable the pipeline + Run Now (or wait for cron)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MASS_FOLLOW_PLATFORMS = ['instagram', 'x', 'linkedin', 'facebook', 'tiktok'];
+const MASS_FOLLOW_PLATFORMS = ['instagram', 'x', 'linkedin', 'facebook'];
 
 function massFollowStatusBadge(status) {
   const colors = {
@@ -2435,6 +2410,7 @@ function renderMassFollowTargetsModal(id) {
               <textarea id="mass-follow-targets-input" rows="6" placeholder="https://instagram.com/acme&#10;@brand&#10;https://x.com/handle" style="width:100%;padding:12px;border-radius:10px;border:1px solid rgba(148,163,184,0.2);background:rgba(15,23,42,0.5);color:#e2e8f0;font-family:'Geist Mono','JetBrains Mono',monospace;font-size:13px;resize:vertical"></textarea>
               <div style="display:flex;gap:8px;align-items:center">
                 <button id="mass-follow-add-btn" type="button" style="padding:9px 18px;border-radius:10px;border:1px solid rgba(168,85,247,0.4);background:rgba(168,85,247,0.18);color:#c4b5fd;font-size:13px;font-weight:600;cursor:pointer">➕ Add Targets</button>
+                <button id="mass-follow-import-leads-btn" type="button" style="padding:9px 18px;border-radius:10px;border:1px solid rgba(56,189,248,0.35);background:rgba(56,189,248,0.1);color:#38bdf8;font-size:13px;font-weight:600;cursor:pointer">Import from Leads</button>
                 <span id="mass-follow-add-feedback" style="font-size:12px;color:#94a3b8"></span>
               </div>
             </div>
@@ -2553,254 +2529,6 @@ async function refreshMassFollowTable(filters) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TikTok Mass-Follow Pipeline — Search Preview Modal
-//
-// Lets the user preview what a TikTok user-search query would return
-// BEFORE running the full follow pipeline. Calls
-// POST /api/pipelines/tiktok-mass-follow/preview-search, which launches a
-// TikTok browser, navigates to /search/user?q=<query>, scrapes the visible
-// user cards, and returns them as JSON. No follows are performed.
-//
-// The modal also shows the current daily/hourly TikTok follow caps and the
-// remaining headroom for today, so the user can pick a sensible per-run
-// limit before saving.
-// ─────────────────────────────────────────────────────────────────────────────
-
-function renderTikTokSearchPreviewModal(id) {
-  // Find the current pipeline row to pre-fill the query + limit fields.
-  const pipeline = pipelinesData.find((p) => p.id === id) || {};
-  const limits = pipeline.limits || {};
-  const currentQuery = limits.search_query || 'restaurant owners';
-  const currentLimit = limits.max_follows_per_run || 20;
-
-  return `
-    <div id="tiktok-search-modal-overlay" style="position:fixed;inset:0;background:rgba(2,6,15,0.7);backdrop-filter:blur(6px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px">
-      <div class="glass-panel" style="position:relative;width:100%;max-width:1000px;max-height:92vh;display:flex;flex-direction:column;border-radius:24px;overflow:hidden">
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid rgba(148,163,184,0.18)">
-          <div>
-            <h2 style="font-size:20px;font-weight:700;color:#f8fafc;margin:0">🔍 TikTok Search Preview</h2>
-            <p style="font-size:12px;color:#94a3b8;margin:4px 0 0 0">Test a search query — see who TikTok returns before you commit a follow run.</p>
-          </div>
-          <button id="tiktok-search-close-btn" type="button" style="background:rgba(148,163,184,0.1);border:1px solid rgba(148,163,184,0.18);color:#94a3b8;width:36px;height:36px;border-radius:10px;cursor:pointer;font-size:18px">✕</button>
-        </div>
-
-        <div style="flex:1;overflow-y:auto;padding:20px 24px">
-          <section style="margin-bottom:20px">
-            <label style="display:block;font-size:13px;font-weight:600;color:#e2e8f0;margin-bottom:8px">Search query</label>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <input id="tiktok-search-query-input" type="text" value="${gtss.escapeHtml(currentQuery)}" placeholder="restaurant owners" style="flex:1;min-width:240px;padding:10px 14px;border-radius:10px;border:1px solid rgba(148,163,184,0.2);background:rgba(15,23,42,0.5);color:#e2e8f0;font-size:13px">
-              <button id="tiktok-search-preview-btn" type="button" style="padding:10px 18px;border-radius:10px;border:1px solid rgba(254,44,85,0.4);background:rgba(254,44,85,0.15);color:#fe2c55;font-size:13px;font-weight:600;cursor:pointer">🔍 Preview</button>
-            </div>
-            <p style="font-size:11px;color:#64748b;margin:6px 0 0 0">This opens a TikTok browser, navigates to <code>tiktok.com/search/user?q=…</code>, and scrapes the visible user cards. No follows are performed.</p>
-          </section>
-
-          <section style="margin-bottom:20px">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-              <h3 style="font-size:14px;font-weight:700;color:#e2e8f0;margin:0">Discovered user cards</h3>
-              <span id="tiktok-search-count" style="font-size:12px;color:#94a3b8"></span>
-            </div>
-            <div id="tiktok-search-results" style="border:1px solid rgba(148,163,184,0.18);border-radius:12px;overflow:hidden;max-height:380px;overflow-y:auto;background:rgba(15,23,42,0.3)">
-              <div style="padding:32px;text-align:center;color:#64748b;font-size:13px">Click <strong>Preview</strong> to discover user cards.</div>
-            </div>
-          </section>
-
-          <section style="margin-bottom:16px">
-            <label style="display:block;font-size:13px;font-weight:600;color:#e2e8f0;margin-bottom:8px">Follow limit for this run</label>
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-              <input id="tiktok-search-limit-input" type="number" min="1" max="200" value="${currentLimit}" style="width:100px;padding:10px 14px;border-radius:10px;border:1px solid rgba(148,163,184,0.2);background:rgba(15,23,42,0.5);color:#e2e8f0;font-size:13px">
-              <span style="font-size:12px;color:#94a3b8">follows max (clamped by TikTok daily/hourly caps)</span>
-            </div>
-          </section>
-
-          <section style="display:flex;gap:10px;flex-wrap:wrap">
-            <button id="tiktok-search-save-btn" type="button" style="padding:10px 18px;border-radius:10px;border:1px solid rgba(14,165,233,0.3);background:rgba(14,165,233,0.1);color:#38bdf8;font-size:13px;font-weight:600;cursor:pointer">💾 Save query + limit</button>
-            <button id="tiktok-search-run-btn" type="button" style="padding:10px 18px;border-radius:10px;border:1px solid rgba(34,197,94,0.3);background:rgba(34,197,94,0.1);color:#22c55e;font-size:13px;font-weight:600;cursor:pointer">▶ Run pipeline now</button>
-            <a href="/pipelines" onclick="document.getElementById('tiktok-search-close-btn').click();return true" style="padding:10px 18px;border-radius:10px;border:1px solid rgba(148,163,184,0.2);background:rgba(148,163,184,0.06);color:#94a3b8;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block">← Back to Pipelines</a>
-          </section>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function renderTikTokSearchResultsTable(cards) {
-  if (!cards || cards.length === 0) {
-    return `<div style="padding:32px;text-align:center;color:#64748b;font-size:13px">No user cards found. Try a different query or increase scroll passes.</div>`;
-  }
-  const stateBadge = (state) => {
-    const colors = {
-      follow:    { bg: 'rgba(254,44,85,0.14)',  border: 'rgba(254,44,85,0.4)',  color: '#fe2c55' },
-      following: { bg: 'rgba(148,163,184,0.14)', border: 'rgba(148,163,184,0.35)', color: '#cbd5e1' },
-      pending:   { bg: 'rgba(245,158,11,0.14)',  border: 'rgba(245,158,11,0.35)', color: '#fbbf24' },
-      unknown:   { bg: 'rgba(148,163,184,0.1)',  border: 'rgba(148,163,184,0.25)', color: '#94a3b8' },
-    };
-    const c = colors[state] || colors.unknown;
-    return `<span style="display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;background:${c.bg};border:1px solid ${c.border};color:${c.color}">${gtss.escapeHtml(state)}</span>`;
-  };
-  const formatStat = (n) => (n === null || n === undefined) ? '—' : n.toLocaleString();
-  const rows = cards.map((c) => `
-    <tr style="border-bottom:1px solid rgba(148,163,184,0.08)">
-      <td style="padding:8px 12px;font-size:12px">
-        <div style="font-weight:600;color:#e2e8f0">${gtss.escapeHtml(c.displayName)}</div>
-        <div style="color:#94a3b8;font-size:11px">@${gtss.escapeHtml(c.username)}</div>
-      </td>
-      <td style="padding:8px 12px;font-size:12px;color:#cbd5e1">${formatStat(c.followers)} <span style="color:#64748b;font-size:10px">followers</span></td>
-      <td style="padding:8px 12px;font-size:12px;color:#cbd5e1">${formatStat(c.likes)} <span style="color:#64748b;font-size:10px">likes</span></td>
-      <td style="padding:8px 12px">${stateBadge(c.followState)}</td>
-      <td style="padding:8px 12px;font-size:11px;text-align:right">
-        <a href="${gtss.escapeHtml(c.profileUrl)}" target="_blank" rel="noopener" style="color:#38bdf8;text-decoration:none">open ↗</a>
-      </td>
-    </tr>
-  `).join('');
-  return `
-    <table style="width:100%;border-collapse:collapse;font-family:'Geist',system-ui,sans-serif">
-      <thead>
-        <tr style="background:rgba(15,23,42,0.5);font-size:11px;text-transform:uppercase;letter-spacing:0.1em;color:#64748b">
-          <th style="padding:8px 12px;text-align:left;font-weight:700">User</th>
-          <th style="padding:8px 12px;text-align:left;font-weight:700">Followers</th>
-          <th style="padding:8px 12px;text-align:left;font-weight:700">Likes</th>
-          <th style="padding:8px 12px;text-align:left;font-weight:700">State</th>
-          <th style="padding:8px 12px;text-align:right;font-weight:700">Profile</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
-}
-
-async function openTikTokSearchPreviewModal(id, btn) {
-  const root = document.getElementById('pipeline-modal-root');
-  if (!root) return;
-  root.innerHTML = renderTikTokSearchPreviewModal(id);
-
-  const overlay = document.getElementById('tiktok-search-modal-overlay');
-  const closeBtn = document.getElementById('tiktok-search-close-btn');
-  const close = () => { root.innerHTML = ''; };
-  closeBtn.addEventListener('click', close);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  const escHandler = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', escHandler); } };
-  document.addEventListener('keydown', escHandler);
-
-  const queryInput = document.getElementById('tiktok-search-query-input');
-  const limitInput = document.getElementById('tiktok-search-limit-input');
-  const previewBtn = document.getElementById('tiktok-search-preview-btn');
-  const saveBtn = document.getElementById('tiktok-search-save-btn');
-  const runBtn = document.getElementById('tiktok-search-run-btn');
-  const resultsEl = document.getElementById('tiktok-search-results');
-  const countEl = document.getElementById('tiktok-search-count');
-
-  previewBtn.addEventListener('click', async () => {
-    const query = queryInput.value.trim();
-    if (!query) {
-      gtss.showToast('Enter a search query first', 'error', 5000);
-      return;
-    }
-    previewBtn.disabled = true;
-    previewBtn.textContent = '⏳ Searching…';
-    resultsEl.innerHTML = `<div style="padding:32px;text-align:center;color:#94a3b8;font-size:13px">Launching TikTok browser and scraping search results…</div>`;
-    countEl.textContent = '';
-    try {
-      const res = await gtss.fetchJSON('/api/pipelines/tiktok-mass-follow/preview-search', {
-        method: 'POST',
-        body: JSON.stringify({ query, max_scrolls: 3, max_cards: 30 }),
-      });
-      if (res.ok) {
-        const d = res.data;
-        resultsEl.innerHTML = renderTikTokSearchResultsTable(d.cards);
-        countEl.textContent = `${d.cardCount} user(s) discovered`;
-        gtss.showToast(`Discovered ${d.cardCount} user card(s)`, 'success');
-      } else {
-        resultsEl.innerHTML = `<div style="padding:24px;text-align:center;color:#f87171;font-size:12px">Preview failed: ${gtss.escapeHtml(res.error || 'unknown error')}</div>`;
-        gtss.showToast(res.error || 'Preview failed', 'error', 6000);
-      }
-    } catch (err) {
-      resultsEl.innerHTML = `<div style="padding:24px;text-align:center;color:#f87171;font-size:12px">Preview failed: ${gtss.escapeHtml(err.message)}</div>`;
-      gtss.showToast(err.message, 'error', 6000);
-    } finally {
-      previewBtn.disabled = false;
-      previewBtn.textContent = '🔍 Preview';
-    }
-  });
-
-  saveBtn.addEventListener('click', async () => {
-    const query = queryInput.value.trim();
-    const limit = Math.max(1, Math.min(200, Number(limitInput.value) || 20));
-    if (!query) {
-      gtss.showToast('Enter a search query first', 'error', 5000);
-      return;
-    }
-    saveBtn.disabled = true;
-    saveBtn.textContent = '⏳ Saving…';
-    try {
-      const res = await gtss.fetchJSON(`/api/pipelines/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          limits: {
-            search_query: query,
-            max_follows_per_run: limit,
-          },
-        }),
-      });
-      if (res.ok) {
-        gtss.showToast('Saved query + limit', 'success');
-        // Update local cache so the modal reflects the new values on reopen.
-        const p = pipelinesData.find((x) => x.id === id);
-        if (p) {
-          p.limits = p.limits || {};
-          p.limits.search_query = query;
-          p.limits.max_follows_per_run = limit;
-        }
-        loadPipelines();
-      } else {
-        gtss.showToast(res.error || 'Save failed', 'error', 6000);
-      }
-    } catch (err) {
-      gtss.showToast(err.message, 'error', 6000);
-    } finally {
-      saveBtn.disabled = false;
-      saveBtn.textContent = '💾 Save query + limit';
-    }
-  });
-
-  runBtn.addEventListener('click', async () => {
-    const query = queryInput.value.trim();
-    if (!query) {
-      gtss.showToast('Enter a search query first', 'error', 5000);
-      return;
-    }
-    // Save first (so the run uses the latest query + limit), then trigger.
-    runBtn.disabled = true;
-    runBtn.textContent = '⏳ Saving + running…';
-    try {
-      const limit = Math.max(1, Math.min(200, Number(limitInput.value) || 20));
-      const saveRes = await gtss.fetchJSON(`/api/pipelines/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          limits: { search_query: query, max_follows_per_run: limit },
-        }),
-      });
-      if (!saveRes.ok) {
-        gtss.showToast(saveRes.error || 'Save failed before run', 'error', 6000);
-        return;
-      }
-      const runRes = await gtss.fetchJSON(`/api/pipelines/${id}/run`, { method: 'POST' });
-      if (runRes.ok) {
-        gtss.showToast('TikTok mass-follow pipeline started', 'success');
-        close();
-        loadPipelines();
-      } else {
-        gtss.showToast(runRes.error || 'Run failed', 'error', 6000);
-      }
-    } catch (err) {
-      gtss.showToast(err.message, 'error', 6000);
-    } finally {
-      runBtn.disabled = false;
-      runBtn.textContent = '▶ Run pipeline now';
-    }
-  });
-}
-
 async function openMassFollowTargetsModal(id /* pipelineId, always 'mass_follow' */) {
   const root = document.getElementById('pipeline-modal-root');
   if (!root) return;
@@ -2868,6 +2596,38 @@ async function openMassFollowTargetsModal(id /* pipelineId, always 'mass_follow'
       feedback.innerHTML = `<span style="color:#f87171">✗ ${gtss.escapeHtml(err.message)}</span>`;
     } finally {
       addBtn.disabled = false;
+    }
+  });
+
+  // Import discovered/qualified leads into the reviewable target queue.
+  const importLeadsBtn = document.getElementById('mass-follow-import-leads-btn');
+  importLeadsBtn.addEventListener('click', async () => {
+    const filters = getFilters();
+    importLeadsBtn.disabled = true;
+    importLeadsBtn.textContent = 'Importing...';
+    feedback.textContent = 'Importing discovered and qualified leads...';
+    feedback.style.color = '#94a3b8';
+    try {
+      const body = {
+        platforms: filters.platform ? [filters.platform] : MASS_FOLLOW_PLATFORMS,
+        limit: 200,
+      };
+      const res = await gtss.fetchJSON('/api/pipelines/mass-follow/targets/import-leads', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        const d = res.data;
+        feedback.innerHTML = `<span style="color:#4ade80">Imported ${d.inserted || 0} new, updated ${d.updated || 0} from ${d.considered || 0} lead(s)</span>`;
+        await refreshMassFollowTable(getFilters());
+      } else {
+        feedback.innerHTML = `<span style="color:#f87171">${gtss.escapeHtml(res.error || 'Import failed')}</span>`;
+      }
+    } catch (err) {
+      feedback.innerHTML = `<span style="color:#f87171">${gtss.escapeHtml(err.message)}</span>`;
+    } finally {
+      importLeadsBtn.disabled = false;
+      importLeadsBtn.textContent = 'Import from Leads';
     }
   });
 

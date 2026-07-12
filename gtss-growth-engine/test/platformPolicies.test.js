@@ -22,6 +22,8 @@ function runPolicyTest() {
 
   assert.strictEqual(limits.facebook.dms, 10, "Facebook DMs daily limit mismatch.");
   assert.strictEqual(limits.facebook.likes, 10, "Facebook likes daily limit mismatch.");
+  assert.strictEqual(limits.facebook.connections, 8, "Facebook connections daily limit mismatch.");
+  assert.strictEqual(limits.facebook.follows, 8, "Facebook follows daily limit mismatch.");
 
   // TikTok limits (newly added in the mass-follow pipeline overhaul)
   assert.strictEqual(limits.tiktok.follows, 25, "TikTok follows daily limit mismatch.");
@@ -36,9 +38,14 @@ function runPolicyTest() {
   assert.strictEqual(limits.x.hourly.dms, 2, "X hourly DM limit mismatch.");
   assert.strictEqual(limits.instagram.hourly.follows, 4, "Instagram hourly follow limit mismatch.");
   assert.strictEqual(limits.facebook.hourly.likes, 2, "Facebook hourly like limit mismatch.");
+  assert.strictEqual(limits.facebook.hourly.connections, 2, "Facebook hourly connection limit mismatch.");
+  assert.strictEqual(limits.facebook.hourly.follows, 2, "Facebook hourly follow limit mismatch.");
   assert.strictEqual(limits.tiktok.hourly.follows, 4, "TikTok hourly follow limit mismatch.");
   assert.strictEqual(limits.tiktok.hourly.likes, 4, "TikTok hourly like limit mismatch.");
   assert.strictEqual(limits.tiktok.hourly.dms, 2, "TikTok hourly DM limit mismatch.");
+  assert.strictEqual(limits.linkedin.weekly.connections, 80, "LinkedIn weekly connection limit mismatch.");
+  assert.strictEqual(limits.instagram.weekly.follows, 100, "Instagram weekly follow limit mismatch.");
+  assert.strictEqual(limits.facebook.weekly.connections, 40, "Facebook weekly connection limit mismatch.");
   console.log("✅ T2: Nested hourly/queue limits mapped perfectly.");
 
   // 3. Verify platformPolicies.js properties and layout
@@ -69,6 +76,7 @@ function runPolicyTest() {
     // Check hourlyLimits
     assert(policy.hourlyLimits, `hourlyLimits schema missing for '${platform}'.`);
     assert.strictEqual(typeof policy.hourlyLimits.dms, "number");
+    assert(policy.weeklyLimits, `weeklyLimits schema missing for '${platform}'.`);
   }
   console.log("✅ T3: Platform policies rules layout structured perfectly.");
 

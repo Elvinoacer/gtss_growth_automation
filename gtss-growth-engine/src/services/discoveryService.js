@@ -40,6 +40,28 @@ const X_RESERVED_SECOND_PATHS = new Set([
   "settings",
   "notifications",
 ]);
+const FACEBOOK_RESERVED_PROFILE_PATHS = new Set([
+  "search",
+  "events",
+  "groups",
+  "marketplace",
+  "pages",
+  "videos",
+  "photos",
+  "stories",
+  "gaming",
+  "fundraisers",
+  "friends",
+  "watch",
+  "reel",
+  "share",
+  "login",
+  "help",
+  "settings",
+  "notifications",
+  "messages",
+  "profile",
+]);
 const X_NOISE_LINE_PATTERNS = [
   /^follow$/i,
   /^following$/i,
@@ -59,9 +81,11 @@ const visitTimestamps = [];
 const jobStreams = new Map();
 const stoppedJobs = new Set();
 const jobEventHistory = new Map();
+const DISCOVERY_PLATFORM_KEYS = ["linkedin", "x", "facebook", "instagram"];
 
 function listDiscoverySources() {
-  return getPlatformKeys();
+  const known = new Set(getPlatformKeys());
+  return DISCOVERY_PLATFORM_KEYS.filter((platform) => known.has(platform));
 }
 
 function registerJobStream(jobId, res) {
@@ -239,6 +263,80 @@ function normalizeXProfileUrl(value) {
   } catch (_) {
     return "";
   }
+}
+
+function normalizeFacebookProfileUrl(value) {
+  if (!value) return "";
+
+  try {
+    const parsed = new URL(value, "https://www.facebook.com");
+    const host = parsed.hostname.replace(/^www\.|^m\.|^mbasic\./i, "").toLowerCase();
+    const isFacebookHost = host === "facebook.com" || host.endsWith(".facebook.com");
+    if (!isFacebookHost) return "";
+
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments.length === 0) return "";
+
+    if (segments[0] === "profile.php") {
+      const id = parsed.searchParams.get("id");
+      if (!id || !/^\d+$/.test(id)) return "";
+      return `https://www.facebook.com/profile.php?id=${id}`;
+    }
+
+    const slug = cleanText(segments[0]).replace(/^@/, "");
+    if (
+      !slug ||
+      FACEBOOK_RESERVED_PROFILE_PATHS.has(slug.toLowerCase()) ||
+      !/^[A-Za-z0-9.][A-Za-z0-9._-]{2,}$/.test(slug)
+    ) {
+      return "";
+    }
+
+    return `https://www.facebook.com/${slug}`;
+  } catch (_) {
+    return "";
+  }
+}
+
+function parseFacebookSearchSnapshot(snapshot) {
+  const rawText = String(snapshot && snapshot.text ? snapshot.text : "");
+  const hrefs = Array.isArray(snapshot && snapshot.hrefs) ? snapshot.hrefs : [];
+  const lines = rawText.split(/\r?\n/).map(cleanText).filter(Boolean);
+  const profileUrl = hrefs.map(normalizeFacebookProfileUrl).find(Boolean);
+  if (!profileUrl) return null;
+
+  const name =
+    lines.find((line) => {
+      if (isNoiseLine(line)) return false;
+      if (/^(add friend|message|follow|see more|mutual friends?|friends?)$/i.test(line)) return false;
+      if (/^\d+\s+mutual/i.test(line)) return false;
+      return true;
+    }) || "";
+
+  if (!name) return null;
+
+  const isFacebookNoiseLine = (line) =>
+    isNoiseLine(line) ||
+    /^(add friend|message|follow|see more|mutual friends?|friends?)$/i.test(line) ||
+    /^\d+\s+mutual/i.test(line);
+  const detailLines = lines.filter((line) => line !== name && !isFacebookNoiseLine(line));
+  const location = inferLocationFromLines(
+    detailLines.filter((line) => !/\b(at|founder|owner|ceo|manager|director|lead)\b/i.test(line)),
+    rawText,
+  );
+  const bio = cleanText(detailLines.filter((line) => line !== location).join(" "));
+  const inferred = inferRoleCompanyFromBio(bio);
+
+  return {
+    platform: "facebook",
+    name,
+    role: inferred.role,
+    company: inferred.company,
+    location,
+    profile_url: profileUrl,
+    website: "",
+    status: "discovered",
+  };
 }
 
 function extractFirstUrl(text) {
@@ -537,6 +635,75 @@ async function extractXSearchResults(page) {
   };
 }
 
+async function captureFacebookSearchSnapshots(page, maxCards) {
+  return page
+    .evaluate((limit) => {
+      const clean = (value) =>
+        String(value || "")
+          .replace(/\s+/g, " ")
+          .trim();
+      const anchors = Array.from(
+        document.querySelectorAll(
+          'a[href*="facebook.com/"], a[href^="/"], a[href^="profile.php"]',
+        ),
+      );
+      const snapshots = [];
+      const seen = new Set();
+
+      for (const anchor of anchors) {
+        if (snapshots.length >= limit) break;
+
+        const href = anchor.getAttribute("href") || "";
+        if (!href || seen.has(href)) continue;
+
+        const card =
+          anchor.closest('[role="article"]') ||
+          anchor.closest('[data-visualcompletion]') ||
+          anchor.closest("div");
+        const text = clean(card?.innerText || anchor.innerText || "");
+        if (!text) continue;
+
+        seen.add(href);
+        snapshots.push({
+          text,
+          hrefs: [
+            href,
+            ...Array.from((card || anchor).querySelectorAll?.("a[href]") || []).map(
+              (a) => a.getAttribute("href") || "",
+            ),
+          ],
+        });
+      }
+
+      return snapshots;
+    }, Math.max(0, maxCards))
+    .catch(() => []);
+}
+
+async function extractFacebookSearchResults(page) {
+  const snapshots = await withTimeout(
+    captureFacebookSearchSnapshots(page, 160),
+    25_000,
+    "Facebook search snapshot capture",
+  );
+  const leads = [];
+  const seen = new Set();
+
+  for (const snapshot of snapshots) {
+    const lead = parseFacebookSearchSnapshot(snapshot);
+    if (!lead || !lead.profile_url) continue;
+    const key = lead.profile_url.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    leads.push(lead);
+  }
+
+  return {
+    selector: 'dom:a[href*="facebook.com/"], dom:a[href^="/"]',
+    leads,
+  };
+}
+
 function normalizeLinkedInProfileUrl(url) {
   try {
     const parsed = new URL(url, "https://www.linkedin.com");
@@ -762,13 +929,12 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
 
   emit({
     type: "info",
-    message: `Starting discovery for "${keyword}" (Goal: ${maxLeads} new leads)`,
+    message: `Starting discovery for "${keyword}" (Goal: ${maxLeads} new leads per selected platform)`,
   });
 
   try {
     for (const platform of selected) {
       if (isJobStopped(jobId)) break;
-      if (totalNewCollected >= maxLeads) break;
 
       // Limit Check
       if (!isWithinLimit(platform, "visits")) {
@@ -780,16 +946,16 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
         continue;
       }
 
-      const needed = maxLeads - totalNewCollected;
       emit({
         type: "info",
         platform,
-        message: `Searching ${platform} for up to ${needed} more new leads...`,
+        message: `Searching ${platform} for up to ${maxLeads} new leads...`,
       });
 
       try {
+        let platformNewCollected = 0;
         const found = await withTimeout(
-          platformDiscoveryMap[platform](keyword, needed, emit, jobId),
+          platformDiscoveryMap[platform](keyword, maxLeads, emit, jobId),
           Number(process.env.DISCOVERY_PLATFORM_TIMEOUT_MS || 300_000),
           `${platform} discovery`,
         );
@@ -798,6 +964,7 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
           if (p && p.__prePersistedByDiscovery) {
             prePersistedNew++;
             totalNewCollected++;
+            platformNewCollected++;
             return;
           }
 
@@ -807,6 +974,7 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
 
           if (!isInBatch && !existsInDb) {
             totalNewCollected++;
+            platformNewCollected++;
           }
 
           // We still push duplicates to rawProfiles so insertLeads can report them correctly,
@@ -814,13 +982,11 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
           rawProfiles.push({ ...p, source_keyword: keyword });
         });
 
-        if (totalNewCollected >= maxLeads) {
-          emit({
-            type: "info",
-            message: `Target of ${maxLeads} new leads reached.`,
-          });
-          break;
-        }
+        emit({
+          type: "info",
+          platform,
+          message: `${platform} discovery finished: ${platformNewCollected}/${maxLeads} new leads collected for this platform.`,
+        });
       } catch (e) {
         platformErrors.push(e);
         emit({ type: "error", platform, message: e.message });
@@ -1416,54 +1582,11 @@ const platformDiscoveryMap = {
 
         emit({ type: "info", platform: "facebook", message: `Extracting Facebook results (pass ${pass})...` });
 
-        const cards = await page
-          .evaluate(() => {
-            const results = [];
-            const anchors = Array.from(document.querySelectorAll('a[href*="facebook.com/"], a[href^="/"]'));
-
-            for (const a of anchors) {
-              const href = a.href || "";
-              if (!href) continue;
-
-              if (
-                !href.includes("/profile.php?id=") &&
-                !/facebook\.com\/[A-Za-z0-9._-]{3,}$/.test(href.replace(/\?.*$/, ""))
-              )
-                continue;
-
-              const skip = [
-                "/search",
-                "/events",
-                "/groups",
-                "/marketplace",
-                "/pages",
-                "/videos",
-                "/photos",
-                "/stories",
-                "/gaming",
-                "/fundraisers",
-                "/friends",
-              ];
-              if (skip.some((s) => href.includes(s))) continue;
-
-              const nameEl = a.querySelector("span") || a.closest("[role='article']")?.querySelector("span");
-              const name = (nameEl?.innerText || "").trim();
-              if (!name) continue;
-
-              let profileUrl = href;
-              try {
-                const parsed = new URL(profileUrl);
-                parsed.search = "";
-                parsed.hash = "";
-                profileUrl = parsed.toString().replace(/\/$/, "");
-              } catch (_) {}
-
-              results.push({ name, profile_url: profileUrl, platform: "facebook" });
-            }
-
-            return results;
-          })
-          .catch(() => []);
+        const { selector, leads: cards } = await withTimeout(
+          extractFacebookSearchResults(page),
+          Number(process.env.DISCOVERY_PLATFORM_TIMEOUT_MS || 300_000),
+          "Facebook search extraction",
+        );
 
         let newOnPass = 0;
         for (const card of cards) {
@@ -1479,14 +1602,8 @@ const platformDiscoveryMap = {
           }
 
           rawLeads.push({
-            platform: "facebook",
-            name: card.name || "",
-            role: "",
-            company: "",
-            location: "",
-            profile_url: card.profile_url,
-            website: "",
-            status: "discovered",
+            ...card,
+            source_keyword: kw,
           });
 
           if (totalNewCount >= max) break;
@@ -1495,7 +1612,7 @@ const platformDiscoveryMap = {
         emit({
           type: "info",
           platform: "facebook",
-          message: `Pass ${pass}: found ${cards.length} cards, ${newOnPass} new. Total new: ${totalNewCount}/${max}.`,
+          message: `Pass ${pass}: found ${cards.length} Facebook profiles using ${selector}, ${newOnPass} new. Total new: ${totalNewCount}/${max}.`,
         });
 
         if (totalNewCount >= max) break;
@@ -1541,8 +1658,10 @@ module.exports = {
   __private: {
     mapInstagramLead,
     parseXSearchLeadSnapshot,
+    parseFacebookSearchSnapshot,
     inferRoleCompanyFromBio,
     normalizeXProfileUrl,
+    normalizeFacebookProfileUrl,
     buildLeadPersistenceRecord,
     validateLeadPersistenceRecord,
     insertLeads,

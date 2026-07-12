@@ -45,6 +45,9 @@ module.exports = {
       likes: 2, // Max profile updates/likes per hour
       visits: 5, // Max target profile visits per hour
     },
+    weeklyLimits: {
+      connections: 80,
+    },
   },
 
   // ── X (TWITTER) POLICY PROFILE ───────────────────────────────────────────
@@ -70,6 +73,9 @@ module.exports = {
       dms: 2,
       follows: 5,
       likes: 4,
+    },
+    weeklyLimits: {
+      follows: 150,
     },
   },
 
@@ -97,6 +103,9 @@ module.exports = {
       follows: 4,
       likes: 3,
     },
+    weeklyLimits: {
+      follows: 100,
+    },
   },
 
   // ── FACEBOOK POLICY PROFILE ───────────────────────────────────────────────
@@ -119,8 +128,14 @@ module.exports = {
       warmupDays: 7,
     },
     hourlyLimits: {
+      connections: 2,
+      follows: 2,
       dms: 2,
       likes: 2,
+    },
+    weeklyLimits: {
+      connections: 40,
+      follows: 40,
     },
   },
 
@@ -147,6 +162,9 @@ module.exports = {
       follows: 4,
       likes: 4,
       dms: 2,
+    },
+    weeklyLimits: {
+      follows: 60,
     },
   },
 };
