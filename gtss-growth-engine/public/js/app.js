@@ -453,12 +453,44 @@ function initShell() {
   });
 
   if (toggle && sidebar) {
+    const syncToggleAria = (collapsed) => {
+      toggle.setAttribute("aria-expanded", String(!collapsed));
+      toggle.setAttribute(
+        "aria-label",
+        collapsed ? "Expand sidebar" : "Collapse sidebar",
+      );
+      toggle.setAttribute("title", collapsed ? "Expand sidebar (Ctrl+B)" : "Collapse sidebar (Ctrl+B)");
+    };
+    syncToggleAria(sidebar.classList.contains("collapsed"));
     toggle.addEventListener("click", () => {
       const collapsed = !sidebar.classList.contains("collapsed");
       sidebar.classList.toggle("collapsed", collapsed);
       document.body.classList.toggle("gtss-sidebar-collapsed", collapsed);
       localStorage.setItem("gtss.sidebar.collapsed", String(collapsed));
+      syncToggleAria(collapsed);
     });
+    // Keyboard shortcut: Ctrl/Cmd + B toggles the sidebar.
+    document.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
+        event.preventDefault();
+        toggle.click();
+      }
+    });
+  }
+
+  // Sidebar version display (best-effort, non-blocking).
+  const sidebarVersion = document.getElementById("gtss-sidebar-version");
+  if (sidebarVersion) {
+    window
+      .gtss?.fetchJSON?.("/api/settings")
+      .then((data) => {
+        if (data && data.appVersion) {
+          sidebarVersion.textContent = `v${data.appVersion}`;
+        }
+      })
+      .catch(() => {
+        /* silent — version is a nicety, not critical */
+      });
   }
 
   if (notificationButton && notificationDropdown) {

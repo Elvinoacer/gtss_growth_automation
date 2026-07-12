@@ -1,108 +1,160 @@
 <aside class="gtss-sidebar" id="gtss-sidebar" aria-label="Primary navigation">
+  <!-- Skip link for keyboard users -->
+  <a class="gtss-skip-link" href="#main-content">Skip to main content</a>
+
+  <!-- Brand / workspace switcher -->
   <div class="gtss-sidebar__brand">
-    <div class="gtss-logo-mark" aria-hidden="true">G</div>
+    <div class="gtss-logo-mark" aria-hidden="true">
+      <span>G</span>
+    </div>
     <div class="gtss-brand-copy">
       <div class="gtss-logo">GTSS</div>
       <div class="gtss-brand-label">Growth Engine</div>
     </div>
+    <button
+      class="gtss-brand-collapse"
+      id="gtss-sidebar-toggle"
+      type="button"
+      aria-label="Collapse sidebar"
+      aria-expanded="true"
+      aria-controls="gtss-sidebar"
+      title="Collapse / expand sidebar (Ctrl+B)"
+    >
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" aria-hidden="true">
+        <path d="M4 6h16M4 12h16M4 18h16" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
+      </svg>
+    </button>
   </div>
 
+  <!-- Quick action: jump to dashboard -->
+  <a class="gtss-quick-action" href="/" data-route="/" aria-label="Open dashboard overview">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" aria-hidden="true">
+      <path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
+    </svg>
+    <span>Back to Dashboard</span>
+  </a>
+
   <nav class="gtss-nav" aria-label="Sections">
-    <div class="gtss-nav__group">
-      <div class="gtss-nav__label">Outreach</div>
-      <a class="gtss-nav__link" href="/" data-route="/" title="Dashboard" aria-label="Dashboard">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 13h8V3H3v10Zm10 8h8V3h-8v18ZM3 21h8v-6H3v6Z"/></svg>
+    <!-- Group 1: Outreach -->
+    <div class="gtss-nav__group" role="group" aria-labelledby="nav-group-outreach">
+      <div class="gtss-nav__label" id="nav-group-outreach">Outreach</div>
+      <a class="gtss-nav__link" href="/" data-route="/" title="Dashboard" aria-label="Dashboard overview">
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M3 13h8V3H3v10Zm10 8h8V3h-8v18ZM3 21h8v-6H3v6Z"/></svg>
         <strong>Dashboard</strong><span class="gtss-nav__badge" id="nav-badge-dashboard"></span>
       </a>
       <a class="gtss-nav__link" href="/discovery" data-route="/discovery" title="Lead Discovery" aria-label="Lead Discovery">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m21 21-4.35-4.35"/><circle cx="11" cy="11" r="7"/></svg>
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="m21 21-4.35-4.35"/><circle cx="11" cy="11" r="7"/></svg>
         <strong>Lead Discovery</strong><span class="gtss-nav__badge" id="nav-badge-discovery"></span>
       </a>
       <a class="gtss-nav__link" href="/qualification" data-route="/qualification" title="Qualification" aria-label="Qualification">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 12.75 11.25 15 15 9.75"/><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M9 12.75 11.25 15 15 9.75"/><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
         <strong>Qualification</strong><span class="gtss-nav__badge" id="nav-badge-qualification"></span>
       </a>
       <a class="gtss-nav__link" href="/messages" data-route="/messages" title="Messages" aria-label="Messages">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
         <strong>Messages</strong><span class="gtss-nav__badge" id="nav-badge-messages"></span>
       </a>
     </div>
 
-    <div class="gtss-nav__group">
-      <div class="gtss-nav__label">Automation</div>
+    <!-- Group 2: Automation -->
+    <div class="gtss-nav__group" role="group" aria-labelledby="nav-group-automation">
+      <div class="gtss-nav__label" id="nav-group-automation">Automation</div>
       <a class="gtss-nav__link" href="/automation" data-route="/automation" title="Automation" aria-label="Automation">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 8.6 15a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 11a1.7 1.7 0 0 0-.6-1l-.06-.06A2 2 0 1 1 6.77 7.1l.06.06A1.7 1.7 0 0 0 8.6 7a1.7 1.7 0 0 0 1-.6l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 15 8.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 8.6 15a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 11a1.7 1.7 0 0 0-.6-1l-.06-.06A2 2 0 1 1 6.77 7.1l.06.06A1.7 1.7 0 0 0 8.6 7a1.7 1.7 0 0 0 1-.6l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 15 8.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 15Z"/></svg>
         <strong>Automation</strong><span class="gtss-nav__badge" id="nav-badge-automation"></span>
       </a>
       <a class="gtss-nav__link" href="/campaigns" data-route="/campaigns" title="Campaigns" aria-label="Campaigns">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 14a8 8 0 0 1 16 0"/><path d="M12 14v7"/><path d="M8 21h8"/><path d="M12 3v3M5 6l2 2m12-2-2 2"/></svg>
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M4 14a8 8 0 0 1 16 0"/><path d="M12 14v7"/><path d="M8 21h8"/><path d="M12 3v3M5 6l2 2m12-2-2 2"/></svg>
         <strong>Campaigns</strong><span class="gtss-nav__badge" id="nav-badge-campaigns"></span>
       </a>
       <a class="gtss-nav__link" href="/pipelines" data-route="/pipelines" title="Pipeline Scheduler" aria-label="Pipeline Scheduler">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h5v10H4zM15 7h5v10h-5z"/><path d="M9 12h6"/></svg>
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M4 7h5v10H4zM15 7h5v10h-5z"/><path d="M9 12h6"/></svg>
         <strong>Pipelines</strong><span class="gtss-nav__badge" id="nav-badge-pipelines"></span>
       </a>
       <a class="gtss-nav__link" href="/instagram/warmup" data-route="/instagram/warmup" title="Instagram Warmup" aria-label="Instagram Warmup">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 22c3.5-2 6-4.9 6-8.2 0-2.2-1.3-4.1-3.2-5 .2 1.2-.2 2.4-1.1 3.3 0-3.4-1.8-6.5-4.7-8.1.5 3.2-.5 5.3-2 7.1-1.1 1.3-1.8 2.7-1.8 4.5C5.2 18.8 8.1 21 12 22Z"/></svg>
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M12 22c3.5-2 6-4.9 6-8.2 0-2.2-1.3-4.1-3.2-5 .2 1.2-.2 2.4-1.1 3.3 0-3.4-1.8-6.5-4.7-8.1.5 3.2-.5 5.3-2 7.1-1.1 1.3-1.8 2.7-1.8 4.5C5.2 18.8 8.1 21 12 22Z"/></svg>
         <strong>IG Warmup</strong><span class="gtss-nav__badge" id="nav-badge-warmup"></span>
       </a>
     </div>
 
-    <div class="gtss-nav__group">
-      <div class="gtss-nav__label">Analytics</div>
-      <a class="gtss-nav__link" href="/monitoring" data-route="/monitoring" title="Monitoring" aria-label="Monitoring">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 15 4-4 3 3 5-7"/></svg>
-        <strong>Monitoring</strong><span class="gtss-nav__badge" id="nav-badge-monitoring"></span>
-      </a>
-      <a class="gtss-nav__link" href="/audit" data-route="/audit" title="Audit Log" aria-label="Audit Log">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>
-        <strong>Audit Log</strong><span class="gtss-nav__badge" id="nav-badge-audit"></span>
-      </a>
-    </div>
-
-    <div class="gtss-nav__group">
-      <div class="gtss-nav__label">Content</div>
+    <!-- Group 3: Content -->
+    <div class="gtss-nav__group" role="group" aria-labelledby="nav-group-content">
+      <div class="gtss-nav__label" id="nav-group-content">Content</div>
       <a class="gtss-nav__link" href="/scheduler" data-route="/scheduler" title="Content Scheduler" aria-label="Content Scheduler">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 3v4M17 3v4M4 9h16"/><path d="M5 5h14v16H5z"/></svg>
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M7 3v4M17 3v4M4 9h16"/><path d="M5 5h14v16H5z"/></svg>
         <strong>Content Scheduler</strong><span class="gtss-nav__badge" id="nav-badge-scheduler"></span>
       </a>
       <a class="gtss-nav__link" href="/assets" data-route="/assets" title="Asset Library" aria-label="Asset Library">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 6h16v12H4z"/><path d="m8 13 2-2 3 3 2-2 3 3"/><circle cx="9" cy="9" r="1"/></svg>
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M4 6h16v12H4z"/><path d="m8 13 2-2 3 3 2-2 3 3"/><circle cx="9" cy="9" r="1"/></svg>
         <strong>Asset Library</strong><span class="gtss-nav__badge" id="nav-badge-assets"></span>
       </a>
     </div>
 
-    <div class="gtss-nav__group">
+    <!-- Group 4: Analytics -->
+    <div class="gtss-nav__group" role="group" aria-labelledby="nav-group-analytics">
+      <div class="gtss-nav__label" id="nav-group-analytics">Analytics</div>
+      <a class="gtss-nav__link" href="/monitoring" data-route="/monitoring" title="Monitoring" aria-label="Monitoring">
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 15 4-4 3 3 5-7"/></svg>
+        <strong>Monitoring</strong><span class="gtss-nav__badge" id="nav-badge-monitoring"></span>
+      </a>
+      <a class="gtss-nav__link" href="/audit" data-route="/audit" title="Audit Log" aria-label="Audit Log">
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>
+        <strong>Audit Log</strong><span class="gtss-nav__badge" id="nav-badge-audit"></span>
+      </a>
+    </div>
+
+    <!-- Group 5: Workspace -->
+    <div class="gtss-nav__group" role="group" aria-labelledby="nav-group-workspace">
+      <div class="gtss-nav__label" id="nav-group-workspace">Workspace</div>
       <a class="gtss-nav__link" href="/crm" data-route="/crm" title="CRM Pipeline" aria-label="CRM Pipeline">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h16M4 12h16M4 17h16"/><path d="M8 5v14M16 5v14"/></svg>
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/><path d="M8 5v14M16 5v14"/></svg>
         <strong>CRM Pipeline</strong><span class="gtss-nav__badge" id="nav-badge-crm"></span>
       </a>
-      <a class="gtss-nav__link" href="/settings" data-route="/settings" title="Settings" aria-label="Settings">
-        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19 12h2M3 12h2M12 3v2M12 19v2M17 7l1.4-1.4M5.6 18.4 7 17M7 7 5.6 5.6M18.4 18.4 17 17"/></svg>
+      <a class="gtss-nav__link gtss-nav__link--settings" href="/settings" data-route="/settings" title="Settings" aria-label="Settings">
+        <svg class="gtss-nav__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19 12h2M3 12h2M12 3v2M12 19v2M17 7l1.4-1.4M5.6 18.4 7 17M7 7 5.6 5.6M18.4 18.4 17 17"/></svg>
         <strong>Settings</strong><span class="gtss-nav__badge" id="nav-badge-settings"></span>
       </a>
     </div>
   </nav>
 
-  <div class="gtss-session-status" aria-label="Platform session status">
-    <div class="gtss-session-title">Platform Sessions</div>
-    <div class="gtss-session-row" data-platform-row="linkedin">
-      <span class="gtss-status-dot" data-platform-dot="linkedin"></span><span class="gtss-session-name">LinkedIn</span><span class="gtss-session-pill">Offline</span>
+  <!-- Platform session status panel -->
+  <section class="gtss-session-status" aria-label="Platform session status">
+    <div class="gtss-session-head">
+      <div class="gtss-session-title" id="session-panel-title">Sessions</div>
+      <a href="/settings#platform-sessions" class="gtss-session-manage" aria-label="Manage sessions in settings" title="Manage sessions">Manage</a>
     </div>
-    <div class="gtss-session-row" data-platform-row="x">
-      <span class="gtss-status-dot" data-platform-dot="x"></span><span class="gtss-session-name">X</span><span class="gtss-session-pill">Offline</span>
-    </div>
-    <div class="gtss-session-row" data-platform-row="instagram">
-      <span class="gtss-status-dot" data-platform-dot="instagram"></span><span class="gtss-session-name">Instagram</span><span class="gtss-session-pill">Offline</span>
-    </div>
-    <div class="gtss-session-row" data-platform-row="facebook">
-      <span class="gtss-status-dot" data-platform-dot="facebook"></span><span class="gtss-session-name">Facebook</span><span class="gtss-session-pill">Offline</span>
-    </div>
-  </div>
+    <ul class="gtss-session-list" aria-describedby="session-panel-title">
+      <li class="gtss-session-row" data-platform-row="linkedin">
+        <span class="gtss-status-dot" data-platform-dot="linkedin" aria-hidden="true"></span>
+        <span class="gtss-session-name">LinkedIn</span>
+        <span class="gtss-session-pill" aria-label="LinkedIn session status">Offline</span>
+      </li>
+      <li class="gtss-session-row" data-platform-row="x">
+        <span class="gtss-status-dot" data-platform-dot="x" aria-hidden="true"></span>
+        <span class="gtss-session-name">X</span>
+        <span class="gtss-session-pill" aria-label="X session status">Offline</span>
+      </li>
+      <li class="gtss-session-row" data-platform-row="instagram">
+        <span class="gtss-status-dot" data-platform-dot="instagram" aria-hidden="true"></span>
+        <span class="gtss-session-name">Instagram</span>
+        <span class="gtss-session-pill" aria-label="Instagram session status">Offline</span>
+      </li>
+      <li class="gtss-session-row" data-platform-row="facebook">
+        <span class="gtss-status-dot" data-platform-dot="facebook" aria-hidden="true"></span>
+        <span class="gtss-session-name">Facebook</span>
+        <span class="gtss-session-pill" aria-label="Facebook session status">Offline</span>
+      </li>
+    </ul>
+  </section>
 
-  <button class="gtss-sidebar-toggle" id="gtss-sidebar-toggle" type="button" aria-label="Toggle sidebar">
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
-  </button>
+  <!-- Footer / version + help -->
+  <footer class="gtss-sidebar-foot" aria-label="Application metadata">
+    <span class="gtss-foot-version" id="gtss-sidebar-version">v—</span>
+    <a href="/settings#system-settings" class="gtss-foot-link" aria-label="Open system settings">
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19 12h2M3 12h2M12 3v2M12 19v2"/></svg>
+      System
+    </a>
+  </footer>
 </aside>
 
 <header class="gtss-topbar" id="gtss-topbar">
@@ -110,10 +162,10 @@
     <h1 class="gtss-page-title" id="gtss-page-title">Dashboard</h1>
     <div class="gtss-page-subtitle" id="gtss-page-subtitle">Operator console ready</div>
   </div>
-  <div class="gtss-action-badge" id="gtss-action-badge">Actions today: 0 / 0 limit</div>
+  <div class="gtss-action-badge" id="gtss-action-badge" role="status" aria-live="polite">Actions today: 0 / 0 limit</div>
   <div class="gtss-topbar__right">
     <button class="gtss-bell" id="gtss-notification-button" type="button" aria-label="Notifications" aria-expanded="false">
-      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor"><path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5"/><path d="M10 21h4"/></svg>
+      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" aria-hidden="true"><path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5"/><path d="M10 21h4"/></svg>
       <span class="gtss-unread-count" id="gtss-unread-count">0</span>
     </button>
     <div class="gtss-avatar-button" id="gtss-user-button" role="button" tabindex="0" aria-label="User menu">
@@ -123,7 +175,7 @@
       <button class="gtss-logout btn btn-ghost btn-sm" type="submit">Logout</button>
     </form>
   </div>
-  <div class="gtss-notification-dropdown" id="gtss-notification-dropdown">
+  <div class="gtss-notification-dropdown" id="gtss-notification-dropdown" role="region" aria-label="Recent notifications">
     <div class="gtss-notification-item">
       <strong>Recent replies</strong>
       <span>No unread replies yet.</span>
