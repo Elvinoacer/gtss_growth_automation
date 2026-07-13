@@ -425,14 +425,13 @@ async function processConnectionQueue(page, options = {}) {
       );
 
       // ── 5. BROWSER OUTREACH EXECUTION via platformAdapter ───────────────────
-      const friendlyDefaultMessage = `Hi ${job.lead_name || "there"}, I'd love to connect!`;
       let res;
       try {
         res = await platformAdapter.runConnectionAction(
           job.platform,
           page,
           job,
-          friendlyDefaultMessage,
+          "",
           (type, msg) => {
             queueLog(type, "connection_queue", job.id, `[ADAPTER LOG] ${msg}`);
           },

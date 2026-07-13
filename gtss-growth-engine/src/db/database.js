@@ -1002,6 +1002,7 @@ function initializeDatabase() {
   initializeSchema(db);
   // Migrate keywords.json -> context store (runs once, skipped if already migrated)
   migrateKeywordsToContextStore();
+  cleanupStaleJobs();
 }
 
 function migrateKeywordsToContextStore() {
@@ -1040,6 +1041,50 @@ function migrateKeywordsToContextStore() {
   } catch (err) {
     // Non-fatal - log and continue
     console.warn("[DB] keywords.json migration skipped:", err.message);
+  }
+}
+
+function cleanupStaleJobs() {
+  try {
+    const db = getDb();
+    
+    // Mark qualification jobs that were running when the server crashed as FAILED
+    const qualResult = db.prepare(`
+      UPDATE qualification_jobs 
+      SET status = 'FAILED', completed_at = CURRENT_TIMESTAMP 
+      WHERE completed_at IS NULL
+    `).run();
+    
+    if (qualResult.changes > 0) {
+      const logger = require("../utils/logger");
+      logger.info("DB", `Cleaned up ${qualResult.changes} stale qualification jobs from previous run.`);
+    }
+
+    // Similarly clean up message generation jobs
+    const msgResult = db.prepare(`
+      UPDATE message_generation_jobs 
+      SET status = 'FAILED', completed_at = CURRENT_TIMESTAMP 
+      WHERE completed_at IS NULL
+    `).run();
+
+    if (msgResult.changes > 0) {
+      const logger = require("../utils/logger");
+      logger.info("DB", `Cleaned up ${msgResult.changes} stale message generation jobs from previous run.`);
+    }
+
+    // Similarly clean up automation jobs
+    const autoResult = db.prepare(`
+      UPDATE automation_jobs 
+      SET status = 'FAILED', completed_at = CURRENT_TIMESTAMP 
+      WHERE completed_at IS NULL
+    `).run();
+
+    if (autoResult.changes > 0) {
+      const logger = require("../utils/logger");
+      logger.info("DB", `Cleaned up ${autoResult.changes} stale automation jobs from previous run.`);
+    }
+  } catch (err) {
+    console.warn("[DB] Stale job cleanup skipped:", err.message);
   }
 }
 

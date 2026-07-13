@@ -12,7 +12,14 @@
   ],
   "platforms": [
     "linkedin",
+    "x",
     "instagram"
   ],
-  "maxLeadsPerKeyword": 7
+  "maxLeadsPerKeyword": 7,
+  "instagram": {
+    "hashtags": [
+      "restaurant",
+      "meals"
+    ]
+  }
 }

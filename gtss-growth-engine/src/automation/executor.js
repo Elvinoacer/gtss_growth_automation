@@ -142,7 +142,9 @@ function getQueuedActions(options = {}) {
     .all(...platforms)
     .map((action) => ({
       ...action,
-      action_type: action.action_type || determineActionType(action),
+      action_type:
+        normalizeQueuedActionType(action.action_type) ||
+        determineActionType(action),
       runnable: Boolean(action.runnable),
     }));
 }
@@ -203,26 +205,37 @@ function getXOutreachMode() {
   return "follow_first";
 }
 
+function normalizeQueuedActionType(actionType) {
+  const normalized = String(actionType || "")
+    .trim()
+    .toLowerCase();
+
+  if (["connect", "connection", "connections"].includes(normalized)) {
+    return "connect";
+  }
+  if (["dm", "dms", "direct_message", "message"].includes(normalized)) {
+    return "dm";
+  }
+  if (["follow", "follows"].includes(normalized)) return "follow";
+  if (normalized === "instagram_dm") return "instagram_dm";
+  if (normalized === "instagram_follow") return "instagram_follow";
+  if (normalized === "instagram_like") return "instagram_like";
+  if (normalized === "instagram_story_view") return "instagram_story_view";
+  if (normalized === "instagram_warmup_advance") {
+    return "instagram_warmup_advance";
+  }
+
+  return "";
+}
+
 function determineActionType(message) {
+  const explicitActionType = normalizeQueuedActionType(message.action_type);
+  if (explicitActionType) return explicitActionType;
+
   if (message.is_follow_up) return "dm";
 
   if (message.platform === "linkedin") {
-    const outreachMode = getLinkedInOutreachMode();
-    if (outreachMode === "dm_only" || outreachMode === "dm_first") return "dm";
-
-    // Check if a connection request was already sent to this lead
-    const db = getDb();
-    const priorConnect = db
-      .prepare(
-        `
-      SELECT id FROM touchpoints
-      WHERE lead_id = ? AND type = 'connections' AND outcome = 'sent'
-      LIMIT 1
-    `,
-      )
-      .get(message.lead_id);
-
-    return priorConnect ? "dm" : "connect";
+    return "dm";
   }
 
   if (message.platform === "x") {
@@ -345,10 +358,11 @@ async function runAutomationAction(action, browserState, emit) {
     if (actionType === "follow" && automationModule.followUser) {
       return await automationModule.followUser(page, action.profile_url, emit);
     }
+    const connectionNote = action.connection_note || action.connect_note || "";
     return await automationModule.sendConnectionRequest(
       page,
       action.profile_url,
-      action.body,
+      connectionNote,
       emit,
     );
   } else if (actionType === "dm" && automationModule.sendDirectMessage) {
@@ -916,7 +930,7 @@ async function processActionQueue(jobId, sseRes, options = {}) {
       }
 
       const { platform } = action;
-      const actionType = determineActionType(action);
+      const actionType = action.action_type || determineActionType(action);
       const isDm = actionType === "dm" || actionType === "instagram_dm";
       const isConnection =
         actionType === "connect" || actionType === "connection";
@@ -1588,8 +1602,10 @@ module.exports = {
   authenticatePlatform,
   isManualAuthComplete,
   getQueuedActions,
+  runAutomationAction,
   isWithinLimit,
   determineActionType,
+  normalizeQueuedActionType,
   getLinkedInOutreachMode,
   getXOutreachMode,
 };
