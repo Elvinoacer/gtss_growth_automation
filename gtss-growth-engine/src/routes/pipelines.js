@@ -244,9 +244,33 @@ function normalizeLimits(id, limits) {
     ) {
       throw new Error('follow_interval_min_seconds cannot exceed follow_interval_max_seconds');
     }
-    for (const key of ['respect_active_window', 'skip_already_following']) {
+    for (const key of ['respect_active_window', 'skip_already_following', 'show_browser', 'auto_import_leads']) {
       if (next[key] !== undefined) {
         next[key] = next[key] === true || next[key] === 'true' || next[key] === 1 || next[key] === '1';
+      }
+    }
+    // Per-platform max-follows overrides.
+    // Shape: { instagram: 15, x: 10, linkedin: 8, facebook: 5 }
+    // These cap how many targets the pipeline will follow on EACH platform
+    // per run, independent of the global max_follows_per_run ceiling. A value
+    // of 0 (or omission) means "fall back to the global cap for this platform".
+    if (next.max_follows_per_platform !== undefined) {
+      if (next.max_follows_per_platform === null) {
+        next.max_follows_per_platform = {};
+      } else if (typeof next.max_follows_per_platform === 'object' && !Array.isArray(next.max_follows_per_platform)) {
+        const cleaned = {};
+        for (const [platform, value] of Object.entries(next.max_follows_per_platform)) {
+          const p = String(platform).trim().toLowerCase();
+          if (!ALLOWED_MASS_FOLLOW_PLATFORMS.has(p)) continue;
+          const n = Number(value);
+          if (!Number.isFinite(n) || n < 0) {
+            throw new Error(`max_follows_per_platform.${p} must be a non-negative number`);
+          }
+          cleaned[p] = Math.floor(n);
+        }
+        next.max_follows_per_platform = cleaned;
+      } else {
+        throw new Error('max_follows_per_platform must be an object like { instagram: 15, x: 10 }');
       }
     }
   }
@@ -268,8 +292,11 @@ function preflightMassFollowRun(limits = {}) {
 
   const maxFollows = Math.max(1, Math.floor(Number(limits.max_follows_per_run) || 20));
   const respectActiveWindow = limits.respect_active_window !== false && limits.respect_active_window !== 'false';
+  const maxFollowsPerPlatform = (limits.max_follows_per_platform && typeof limits.max_follows_per_platform === 'object')
+    ? limits.max_follows_per_platform
+    : {};
   const { _internal } = require('../pipeline/massFollowPipeline');
-  const selection = _internal.selectTargetsBatch(platforms, maxFollows, respectActiveWindow);
+  const selection = _internal.selectTargetsBatch(platforms, maxFollows, respectActiveWindow, maxFollowsPerPlatform);
   if (selection.targets.length > 0) {
     return { ok: true, eligibleCount: selection.targets.length };
   }
@@ -386,6 +413,78 @@ function importMassFollowTargetsFromLeads(options = {}) {
   }
 
   return { inserted, updated, considered: leads.length, platforms, statuses };
+}
+
+/**
+ * Robust mass-follow preflight + auto-import flow.
+ *
+ * Behavior:
+ *   1. If `auto_import_leads` is not explicitly false, ALWAYS top up the
+ *      target pool from discovered/qualified leads (not just when empty).
+ *      This makes "Run" reliably pick up freshly-discovered leads without
+ *      requiring the user to manually click "Import from Leads".
+ *   2. Run the preflight (selectTargetsBatch) to confirm there's work to do.
+ *   3. If preflight still reports no_targets, try one more import pass
+ *      (in case the first pass was skipped) and re-check.
+ *   4. Return a structured result with a clear, user-facing `error` message
+ *      that distinguishes between:
+ *        - "no leads discovered yet" (considered === 0)
+ *        - "all leads already messaged" (considered > 0 but inserted === 0)
+ *        - "all platforms capped by rate limits / active window"
+ *
+ * Returns: { ok, reason?, error?, seeded, preflight }
+ */
+function preflightMassFollowWithImport(limits) {
+  const autoImport = limits.auto_import_leads !== false && limits.auto_import_leads !== 'false';
+  let seeded = null;
+
+  const maxFollows = Math.max(1, Number(limits.max_follows_per_run || 20));
+  // Import up to 3x the per-run cap so the pool has headroom for retry/failure backoff.
+  const importLimit = Math.max(20, maxFollows * 3);
+
+  if (autoImport) {
+    seeded = importMassFollowTargetsFromLeads({
+      platforms: limits.platforms,
+      limit: importLimit,
+    });
+  }
+
+  let preflight = preflightMassFollowRun(limits);
+
+  // If still no targets and we haven't tried importing yet, try now.
+  if (!preflight.ok && preflight.reason === 'no_targets' && !seeded) {
+    seeded = importMassFollowTargetsFromLeads({
+      platforms: limits.platforms,
+      limit: importLimit,
+    });
+    if (seeded.inserted > 0 || seeded.updated > 0) {
+      preflight = preflightMassFollowRun(limits);
+    }
+  }
+
+  if (preflight.ok) {
+    return { ok: true, seeded, preflight };
+  }
+
+  // Build a clear, actionable error message.
+  let friendlyError = preflight.error;
+  if (preflight.reason === 'no_targets') {
+    if (!seeded || seeded.considered === 0) {
+      friendlyError =
+        'No mass-follow targets available. No discovered or qualified leads were found to import automatically. ' +
+        'Run Lead Discovery first (and qualify the leads), or add targets manually via Manage Targets.';
+    } else if (seeded.inserted === 0 && seeded.updated === 0) {
+      friendlyError =
+        'All discovered leads have already been followed or are currently in the mass-follow queue. ' +
+        'Run Lead Discovery again to find new leads, or wait for the rate-limit / active-window caps to reset.';
+    }
+  } else if (preflight.reason === 'all_platforms_capped') {
+    friendlyError =
+      'Mass-follow has targets, but every configured platform is currently blocked by its active-window or rate-limit rules. ' +
+      'Try again later, or adjust the platform active windows in Settings.';
+  }
+
+  return { ok: false, reason: preflight.reason, error: friendlyError, seeded, preflight };
 }
 
 // ── GET /api/pipelines ── List all pipeline schedules
@@ -534,23 +633,14 @@ router.post('/:id/run', async (req, res) => {
 
   let massFollowSeeded = null;
   if (id === 'mass_follow') {
-    let preflight = preflightMassFollowRun(limits);
-    if (!preflight.ok && preflight.reason === 'no_targets') {
-      massFollowSeeded = importMassFollowTargetsFromLeads({
-        platforms: limits.platforms,
-        limit: Math.max(20, Number(limits.max_follows_per_run || 20) * 3),
-      });
-      if (massFollowSeeded.inserted > 0 || massFollowSeeded.updated > 0) {
-        preflight = preflightMassFollowRun(limits);
-      }
-    }
-    if (!preflight.ok) {
+    const result = preflightMassFollowWithImport(limits);
+    massFollowSeeded = result.seeded;
+    if (!result.ok) {
       return res.status(400).json({
-        ...preflight,
+        ok: false,
+        reason: result.reason,
+        error: result.error,
         seeded: massFollowSeeded,
-        error: massFollowSeeded && massFollowSeeded.considered === 0
-          ? `${preflight.error} No matching discovered or qualified leads were available to import. Run Lead Discovery first or add targets manually.`
-          : preflight.error,
       });
     }
   }
@@ -642,23 +732,14 @@ router.post('/:id/restart', async (req, res) => {
 
   let massFollowSeeded = null;
   if (id === 'mass_follow') {
-    let preflight = preflightMassFollowRun(limits);
-    if (!preflight.ok && preflight.reason === 'no_targets') {
-      massFollowSeeded = importMassFollowTargetsFromLeads({
-        platforms: limits.platforms,
-        limit: Math.max(20, Number(limits.max_follows_per_run || 20) * 3),
-      });
-      if (massFollowSeeded.inserted > 0 || massFollowSeeded.updated > 0) {
-        preflight = preflightMassFollowRun(limits);
-      }
-    }
-    if (!preflight.ok) {
+    const result = preflightMassFollowWithImport(limits);
+    massFollowSeeded = result.seeded;
+    if (!result.ok) {
       return res.status(400).json({
-        ...preflight,
+        ok: false,
+        reason: result.reason,
+        error: result.error,
         seeded: massFollowSeeded,
-        error: massFollowSeeded && massFollowSeeded.considered === 0
-          ? `${preflight.error} No matching discovered or qualified leads were available to import. Run Lead Discovery first or add targets manually.`
-          : preflight.error,
       });
     }
   }

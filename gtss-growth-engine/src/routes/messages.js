@@ -302,6 +302,90 @@ router.patch("/api/messages/:id/approve", (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// API: Bulk-approve all pending messages of a given variant ("A" or "B")
+//
+// Body: { variant: "A" | "B" }
+//
+// For every lead that currently has BOTH a pending variant-A and a pending
+// variant-B message (is_follow_up = 0), this approves the chosen variant and
+// skips the sibling. Leads that only have ONE pending variant get that one
+// approved. Already-approved / sent / skipped messages are left untouched.
+//
+// This is the backend that powers the "Approve All A" / "Approve All B"
+// buttons on the Messages page.
+// ---------------------------------------------------------------------------
+
+router.post("/api/messages/bulk-approve", (req, res) => {
+  const db = getDb();
+  const variant = String(req.body?.variant || "").toUpperCase() === "A" ? "A" : "B";
+
+  // Lock the leads table briefly so concurrent approvals don't race.
+  const approveStmt = db.prepare(
+    `UPDATE messages
+     SET status = 'approved', approved_by = 'founder', approved_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND status = 'pending'`,
+  );
+  const skipSiblingStmt = db.prepare(
+    `UPDATE messages
+     SET status = 'skipped'
+     WHERE lead_id = ? AND id != ? AND status = 'pending' AND is_follow_up = ?`,
+  );
+  const promoteLeadStmt = db.prepare(
+    "UPDATE leads SET status = 'message_approved', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'qualified'",
+  );
+
+  // Find every pending, non-follow-up message of the requested variant.
+  const targets = db
+    .prepare(
+      `SELECT id, lead_id, variant, is_follow_up FROM messages
+       WHERE status = 'pending' AND is_follow_up = 0 AND variant = ?`,
+    )
+    .all(variant);
+
+  let approved = 0;
+  const approvedIds = [];
+  const approvedLeadIds = new Set();
+
+  const tx = db.transaction(() => {
+    for (const msg of targets) {
+      // Re-check status inside the transaction in case a prior row in this
+      // loop already moved it (shouldn't happen for distinct ids, but be safe).
+      const fresh = db.prepare("SELECT status FROM messages WHERE id = ?").get(msg.id);
+      if (!fresh || fresh.status !== "pending") continue;
+
+      approveStmt.run(msg.id);
+      skipSiblingStmt.run(msg.lead_id, msg.id, msg.is_follow_up);
+      promoteLeadStmt.run(msg.lead_id);
+      approved += 1;
+      approvedIds.push(msg.id);
+      approvedLeadIds.add(msg.lead_id);
+    }
+  });
+  tx();
+
+  if (approved > 0) {
+    broadcast("messages:mutation", {
+      type: "bulk_approved",
+      variant,
+      count: approved,
+      messageIds: approvedIds,
+      leadIds: [...approvedLeadIds],
+    });
+  }
+
+  return res.json({
+    success: true,
+    variant,
+    approved,
+    messageIds: approvedIds,
+    message:
+      approved === 0
+        ? `No pending Variant ${variant} messages to approve.`
+        : `Approved ${approved} Variant ${variant} message${approved === 1 ? "" : "s"}.`,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // API: Skip a message / deprioritize lead
 // ---------------------------------------------------------------------------
 

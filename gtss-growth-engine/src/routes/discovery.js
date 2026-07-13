@@ -254,7 +254,10 @@ router.post("/history/:id/rerun", (req, res) => {
     });
   });
 
-  return res.status(202).json({ jobId });
+  // Return the platforms alongside the jobId so the rerun caller (discovery.js)
+  // can populate the completion summary with the platforms that were actually
+  // scanned, not just whatever is currently checked in the form.
+  return res.status(202).json({ jobId, platforms });
 });
 
 function sanitizeLeadIds(leadIds) {
@@ -302,6 +305,24 @@ function resolveKeywordsPath() {
 function readKeywordsFile() {
   const ctx = getContext();
   if (ctx.ctx_discovery_keywords && Array.isArray(ctx.ctx_discovery_keywords)) {
+    // ctx_discovery_instagram is not in contextService.JSON_FIELDS, so it may
+    // come back as a JSON string — parse it defensively so callers always see
+    // an object. This is what powers the Instagram hashtag persistence on the
+    // Lead Discovery page.
+    let instagram = {};
+    if (ctx.ctx_discovery_instagram) {
+      try {
+        instagram =
+          typeof ctx.ctx_discovery_instagram === "string"
+            ? JSON.parse(ctx.ctx_discovery_instagram)
+            : ctx.ctx_discovery_instagram;
+      } catch {
+        instagram = {};
+      }
+      if (!instagram || typeof instagram !== "object" || Array.isArray(instagram)) {
+        instagram = {};
+      }
+    }
     return {
       version: 1,
       keywords: ctx.ctx_discovery_keywords,
@@ -309,6 +330,7 @@ function readKeywordsFile() {
         ? ["linkedin", "x", "instagram"]
         : ["linkedin", "x"],
       maxLeadsPerKeyword: Number(ctx.ctx_discovery_max_per_keyword) || 10,
+      instagram,
     };
   }
   // Fallback: read from file
@@ -341,6 +363,12 @@ function writeKeywordsFile(data) {
       "ctx_discovery_max_per_keyword",
       String(data.maxLeadsPerKeyword),
     );
+  }
+  // Persist Instagram discovery keywords (hashtags, geolocations, etc.) so
+  // they survive a page reload even when the context store is the primary
+  // source of truth for the rest of the keywords config.
+  if (data.instagram !== undefined) {
+    setContext("ctx_discovery_instagram", data.instagram || {});
   }
 
   // Also write to file for backwards compatibility
@@ -455,27 +483,38 @@ router.delete("/keywords/groups/:id", (req, res) => {
 });
 
 // POST /api/discovery/keywords — replaces full keywords config
+// Supports a partial-update mode: when only `instagram` is provided (e.g. to
+// persist Instagram discovery hashtags from the Lead Discovery page), the
+// `keywords` requirement is relaxed and only the instagram section is merged.
 router.post("/keywords", (req, res) => {
-  const { keywords, platforms, maxLeadsPerKeyword } = req.body;
+  const { keywords, platforms, maxLeadsPerKeyword, instagram } = req.body;
+  const hasKeywords = Array.isArray(keywords) && keywords.length > 0;
+  const hasInstagram =
+    instagram &&
+    typeof instagram === "object" &&
+    !Array.isArray(instagram);
 
-  if (!Array.isArray(keywords) || keywords.length === 0) {
-    return res
-      .status(400)
-      .json({ error: "keywords must be a non-empty array" });
+  if (!hasKeywords && !hasInstagram) {
+    return res.status(400).json({
+      error:
+        "Either a non-empty 'keywords' array or an 'instagram' object is required",
+    });
   }
 
-  const sanitizedKeywords = keywords
-    .map(normalizeKeywordEntry)
-    .filter(Boolean);
-
-  if (sanitizedKeywords.length === 0) {
-    return res
-      .status(400)
-      .json({ error: "At least one non-empty keyword is required" });
+  let sanitizedKeywords = null;
+  if (hasKeywords) {
+    sanitizedKeywords = keywords.map(normalizeKeywordEntry).filter(Boolean);
+    if (sanitizedKeywords.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "At least one non-empty keyword is required" });
+    }
   }
 
   const config = readKeywordsFile();
-  config.keywords = sanitizedKeywords;
+  if (sanitizedKeywords) {
+    config.keywords = sanitizedKeywords;
+  }
   if (Array.isArray(platforms) && platforms.length > 0) {
     config.platforms = platforms.map((p) => String(p).trim().toLowerCase());
   }
@@ -486,6 +525,20 @@ router.post("/keywords", (req, res) => {
   ) {
     config.maxLeadsPerKeyword = maxLeadsPerKeyword;
   }
+
+  // Merge Instagram discovery keywords (hashtags / geolocations / etc.)
+  if (hasInstagram) {
+    config.instagram = config.instagram || {};
+    if (Array.isArray(instagram.hashtags)) {
+      config.instagram.hashtags = instagram.hashtags
+        .map((tag) => String(tag || "").trim().replace(/^#/, ""))
+        .filter(Boolean);
+    }
+    if (Array.isArray(instagram.geolocations)) {
+      config.instagram.geolocations = instagram.geolocations;
+    }
+  }
+
   config.version = (config.version || 0) + 1;
 
   writeKeywordsFile(config);

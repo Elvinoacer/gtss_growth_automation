@@ -71,12 +71,15 @@ const PIPELINE_META = {
     stages: ['select_targets', 'follow', 'report'],
     stageLabels: { select_targets: 'Select Targets', follow: 'Follow', report: 'Report' },
     limitFields: [
-      { key: 'max_follows_per_run', label: 'Max follows per run', type: 'number', default: 20 },
+      { key: 'max_follows_per_run', label: 'Max follows per run (global ceiling)', type: 'number', default: 20 },
+      { key: 'max_follows_per_platform', label: 'Per-platform max follows', type: 'per_platform', default: {} },
       { key: 'follow_interval_min_seconds', label: 'Follow interval — min (sec)', type: 'number', default: 40 },
       { key: 'follow_interval_max_seconds', label: 'Follow interval — max (sec)', type: 'number', default: 110 },
       { key: 'max_retries_per_target', label: 'Max retries per target', type: 'number', default: 3 },
       { key: 'respect_active_window', label: 'Respect platform active window', type: 'select', options: ['true', 'false'], default: 'true' },
       { key: 'skip_already_following', label: 'Skip already-following', type: 'select', options: ['true', 'false'], default: 'true' },
+      { key: 'auto_import_leads', label: 'Auto-import leads from Discovery', type: 'select', options: ['true', 'false'], default: 'true' },
+      { key: 'show_browser', label: 'Show browser window (visible)', type: 'select', options: ['false', 'true'], default: 'false' },
     ],
     platformField: true,
     isMassFollow: true,
@@ -170,7 +173,7 @@ document.addEventListener('focusout', (e) => {
 // in-place patches. Returns null if the card isn't yet rendered.
 function readCardFormValues(card) {
   if (!card) return null;
-  const vals = { cron: null, limits: {}, platforms: {} };
+  const vals = { cron: null, limits: {}, platforms: {}, perPlatform: {} };
   const cronInput = card.querySelector('[data-field="cron"]');
   if (cronInput) vals.cron = cronInput.value;
   card.querySelectorAll('[data-limit-key]').forEach((el) => {
@@ -178,6 +181,12 @@ function readCardFormValues(card) {
   });
   card.querySelectorAll('[data-platform-checkbox]').forEach((cb) => {
     vals.platforms[cb.dataset.platformCheckbox] = cb.checked;
+  });
+  card.querySelectorAll('[data-per-platform-key]').forEach((el) => {
+    const key = el.dataset.perPlatformKey;
+    const platform = el.dataset.platform;
+    if (!vals.perPlatform[key]) vals.perPlatform[key] = {};
+    vals.perPlatform[key][platform] = Number(el.value) || 0;
   });
   return vals;
 }
@@ -199,6 +208,12 @@ function applyCardFormValues(card, vals) {
   for (const [p, checked] of Object.entries(vals.platforms || {})) {
     const cb = card.querySelector(`[data-platform-checkbox="${p}"]`);
     if (cb && cb.checked !== checked) cb.checked = checked;
+  }
+  for (const [key, platformMap] of Object.entries(vals.perPlatform || {})) {
+    for (const [platform, value] of Object.entries(platformMap)) {
+      const el = card.querySelector(`[data-per-platform-key="${key}"][data-platform="${platform}"]`);
+      if (el && el.value !== String(value)) el.value = value;
+    }
   }
 }
 
@@ -574,7 +589,7 @@ function markCardDirty(card, isDirty) {
  */
 function snapshotCardCleanValues(card) {
   if (!card) return;
-  const snap = { cron: null, limits: {}, platforms: {} };
+  const snap = { cron: null, limits: {}, platforms: {}, perPlatform: {} };
   const cronInput = card.querySelector('[data-field="cron"]');
   if (cronInput) snap.cron = cronInput.value;
   card.querySelectorAll('[data-limit-key]').forEach((el) => {
@@ -582,6 +597,12 @@ function snapshotCardCleanValues(card) {
   });
   card.querySelectorAll('[data-platform-checkbox]').forEach((cb) => {
     snap.platforms[cb.dataset.platformCheckbox] = cb.checked;
+  });
+  card.querySelectorAll('[data-per-platform-key]').forEach((el) => {
+    const key = el.dataset.perPlatformKey;
+    const platform = el.dataset.platform;
+    if (!snap.perPlatform[key]) snap.perPlatform[key] = {};
+    snap.perPlatform[key][platform] = Number(el.value) || 0;
   });
   card.__gtssCleanSnapshot = snap;
 }
@@ -607,6 +628,14 @@ function recheckCardDirty(card) {
       if (snap.platforms[cb.dataset.platformCheckbox] !== cb.checked) dirty = true;
     });
   }
+  if (!dirty) {
+    card.querySelectorAll('[data-per-platform-key]').forEach((el) => {
+      const key = el.dataset.perPlatformKey;
+      const platform = el.dataset.platform;
+      const v = Number(el.value) || 0;
+      if (!snap.perPlatform[key] || snap.perPlatform[key][platform] !== v) dirty = true;
+    });
+  }
   markCardDirty(card, dirty);
 }
 
@@ -618,7 +647,7 @@ function recheckCardDirty(card) {
 function attachDirtyTracking(card) {
   if (!card || card.__gtssDirtyBound === '1') return;
   card.__gtssDirtyBound = '1';
-  const fields = card.querySelectorAll('[data-field="cron"], [data-limit-key], [data-platform-checkbox]');
+  const fields = card.querySelectorAll('[data-field="cron"], [data-limit-key], [data-platform-checkbox], [data-per-platform-key]');
   fields.forEach((f) => {
     const evt = f.type === 'checkbox' ? 'change' : 'input';
     f.addEventListener(evt, () => recheckCardDirty(card));
@@ -655,6 +684,19 @@ async function savePipeline(id) {
     const key = el.dataset.limitKey;
     limits[key] = el.type === 'number' ? Number(el.value) : el.value;
   });
+
+  // Collect per-platform fields (e.g. max_follows_per_platform) into a single
+  // object keyed by the data-per-platform-key attribute.
+  const perPlatformGroups = {};
+  card.querySelectorAll('[data-per-platform-key]').forEach(el => {
+    const key = el.dataset.perPlatformKey;
+    const platform = el.dataset.platform;
+    if (!perPlatformGroups[key]) perPlatformGroups[key] = {};
+    perPlatformGroups[key][platform] = Number(el.value) || 0;
+  });
+  for (const [key, value] of Object.entries(perPlatformGroups)) {
+    limits[key] = value;
+  }
 
   if (id === 'outreach' || id === 'content' || id === 'dm_check' || id === 'mass_follow') {
     const checked = [];
@@ -769,11 +811,158 @@ async function togglePipeline(id, enabled) {
 }
 
 async function runNow(id, btn) {
+  // Show a pre-run confirmation modal so the user can review and tweak all
+  // settings (including browser visibility) before the pipeline fires.
+  const confirmed = await openRunConfirmationModal(id);
+  if (!confirmed) return;
   try {
     await withActionFeedback(id, 'Run Now', btn,
-      gtss.fetchJSON(`/api/pipelines/${id}/run`, { method: 'POST' })
+      gtss.fetchJSON(`/api/pipelines/${id}/run`, { method: 'POST', body: JSON.stringify(confirmed) })
     );
   } catch (_) { /* error already shown by withActionFeedback */ }
+}
+
+/**
+ * Pre-run confirmation modal.
+ *
+ * Shows the user a compact summary of the pipeline's current settings
+ * (cron, limits, platforms) plus a "Show browser window" toggle, and lets
+ * them edit the limits inline before confirming. On confirm, returns a
+ * payload that is merged into the /run POST body (so the user can override
+ * show_browser and limits for this run without permanently saving them).
+ *
+ * Returns a Promise that resolves to:
+ *   - { limits: {...}, show_browser: bool } if the user confirms
+ *   - null if the user cancels
+ */
+function openRunConfirmationModal(pipelineId) {
+  return new Promise((resolve) => {
+    const pipeline = pipelinesData.find((p) => p.id === pipelineId);
+    if (!pipeline) { resolve(null); return; }
+    const meta = PIPELINE_META[pipelineId] || {};
+    const limits = { ...(pipeline.limits || {}) };
+    const root = document.getElementById('pipeline-modal-root');
+    if (!root) { resolve(null); return; }
+
+    // Whether this pipeline launches a browser (so the "show browser" toggle
+    // is relevant). Mass-follow and content both launch browsers.
+    const launchesBrowser = pipelineId === 'mass_follow' || pipelineId === 'content' || pipelineId === 'outreach';
+    let showBrowser = limits.show_browser === true || limits.show_browser === 'true';
+
+    const meta2 = PIPELINE_META[pipelineId] || { stages: [] };
+    const stageLabels = (meta2.stages || []).map(s => meta2.stageLabels?.[s] || s).join(' → ');
+
+    root.innerHTML = `
+      <div id="run-confirm-overlay" style="position:fixed;inset:0;z-index:3000;display:grid;place-items:center;padding:20px;background:rgba(2,6,23,0.78);animation:fadeIn 200ms ease">
+        <div style="width:min(560px,100%);max-height:88vh;display:flex;flex-direction:column;border-radius:20px;
+          background:linear-gradient(180deg,rgba(15,23,42,0.98),rgba(15,23,42,0.92));
+          border:1px solid rgba(148,163,184,0.2);box-shadow:0 24px 80px rgba(0,0,0,0.4)">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 24px;border-bottom:1px solid rgba(148,163,184,0.12)">
+            <div>
+              <h3 style="margin:0;font-size:17px;font-weight:700;color:#f8fafc">${meta.icon || '▶'} Run "${gtss.escapeHtml(pipeline.name)}"</h3>
+              <p style="margin:4px 0 0;font-size:12px;color:#94a3b8">${stageLabels}</p>
+            </div>
+            <button id="rc-close" type="button" style="width:32px;height:32px;border-radius:999px;border:1px solid rgba(148,163,184,0.2);background:rgba(148,163,184,0.06);color:#94a3b8;cursor:pointer;font-size:16px;display:grid;place-items:center">✕</button>
+          </div>
+          <div class="scroll-y" style="flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px">
+            <div id="rc-settings-summary" style="font-size:13px;color:#cbd5e1;display:flex;flex-direction:column;gap:6px">
+              ${renderRunSettingsSummary(pipelineId, limits)}
+            </div>
+            ${launchesBrowser ? `
+            <div style="padding:12px 14px;border-radius:10px;background:rgba(15,23,42,0.5);border:1px solid rgba(148,163,184,0.18);display:flex;align-items:center;justify-content:space-between;gap:12px">
+              <div>
+                <div style="font-size:13px;font-weight:700;color:#e2e8f0">Show browser window</div>
+                <div style="font-size:11px;color:#94a3b8;margin-top:2px">If ON, the automation browser will be visible (headed). If OFF, it runs headless in the background.</div>
+              </div>
+              <label style="position:relative;display:inline-block;width:46px;height:24px;cursor:pointer;flex-shrink:0">
+                <input type="checkbox" id="rc-show-browser" ${showBrowser ? 'checked' : ''} style="opacity:0;width:0;height:0">
+                <span id="rc-browser-slider" style="position:absolute;inset:0;border-radius:999px;transition:all 200ms;background:${showBrowser ? '#22c55e' : 'rgba(148,163,184,0.3)'};box-shadow:${showBrowser ? '0 0 12px rgba(34,197,94,0.3)' : 'none'}">
+                  <span style="position:absolute;top:3px;${showBrowser ? 'right:3px' : 'left:3px'};width:18px;height:18px;border-radius:999px;background:#fff;transition:all 200px;box-shadow:0 2px 6px rgba(0,0,0,0.2)"></span>
+                </span>
+              </label>
+            </div>` : ''}
+            <div style="padding:10px 14px;border-radius:10px;background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.2);font-size:12px;color:#7dd3fc;line-height:1.5">
+              ℹ️ Clicking <strong>Confirm &amp; Run</strong> will apply these settings for this run. To make them permanent, use the <strong>Save</strong> button on the pipeline card.
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;padding:16px 24px;border-top:1px solid rgba(148,163,184,0.12);justify-content:flex-end">
+            <button id="rc-cancel" type="button" style="padding:10px 18px;border-radius:10px;border:1px solid rgba(148,163,184,0.2);background:rgba(148,163,184,0.06);color:#94a3b8;font-size:13px;font-weight:600;cursor:pointer">Cancel</button>
+            <button id="rc-confirm" type="button" style="padding:10px 22px;border-radius:10px;border:1px solid rgba(34,197,94,0.4);background:rgba(34,197,94,0.16);color:#4ade80;font-size:13px;font-weight:700;cursor:pointer">▶ Confirm &amp; Run</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const overlay = document.getElementById('run-confirm-overlay');
+    const cleanup = (val) => { root.innerHTML = ''; resolve(val); };
+
+    const closeBtn = document.getElementById('rc-close');
+    const cancelBtn = document.getElementById('rc-cancel');
+    const confirmBtn = document.getElementById('rc-confirm');
+    const showBrowserCb = document.getElementById('rc-show-browser');
+    const showBrowserSlider = document.getElementById('rc-browser-slider');
+
+    closeBtn.addEventListener('click', () => cleanup(null));
+    cancelBtn.addEventListener('click', () => cleanup(null));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(null); });
+
+    if (showBrowserCb) {
+      showBrowserCb.addEventListener('change', () => {
+        showBrowser = showBrowserCb.checked;
+        if (showBrowserSlider) {
+          showBrowserSlider.style.background = showBrowser ? '#22c55e' : 'rgba(148,163,184,0.3)';
+          showBrowserSlider.style.boxShadow = showBrowser ? '0 0 12px rgba(34,197,94,0.3)' : 'none';
+          const knob = showBrowserSlider.querySelector('span');
+          if (knob) {
+            knob.style.left = showBrowser ? '' : '3px';
+            knob.style.right = showBrowser ? '3px' : '';
+          }
+        }
+      });
+    }
+
+    confirmBtn.addEventListener('click', () => {
+      // Build the limits payload from the current pipeline limits + the
+      // show_browser override. We don't re-read the card's form fields here
+      // because the modal is a review surface — the user edits on the card
+      // and clicks Save there. The modal's show_browser toggle is the one
+      // override that applies to this run only.
+      const payload = { limits: { ...limits } };
+      if (launchesBrowser) {
+        payload.limits.show_browser = showBrowser;
+      }
+      cleanup(payload);
+    });
+  });
+}
+
+/**
+ * Render a compact, read-only summary of the pipeline's current settings for
+ * the pre-run confirmation modal.
+ */
+function renderRunSettingsSummary(pipelineId, limits) {
+  const meta = PIPELINE_META[pipelineId] || {};
+  const parts = [];
+  const platforms = Array.isArray(limits.platforms) ? limits.platforms : [];
+  if (platforms.length > 0) {
+    parts.push(`<div><span style="color:#64748b;font-weight:700">Platforms:</span> ${platforms.map(p => gtss.formatPlatformLabel(p)).join(', ')}</div>`);
+  }
+  for (const field of (meta.limitFields || [])) {
+    if (field.type === 'per_platform') continue; // too verbose for the summary
+    let val = limits[field.key] !== undefined ? limits[field.key] : field.default;
+    if (val === '' || val === undefined || val === null) {
+      if (field.key === 'topic') {
+        parts.push(`<div style="color:#fbbf24"><span style="color:#64748b;font-weight:700">Topic:</span> ⚠ not set — set a topic on the card before running</div>`);
+      }
+      continue;
+    }
+    const label = field.label.split(' (')[0]; // shorten
+    let displayVal = val;
+    if (field.type === 'select' && (val === true || val === false)) displayVal = val ? 'true' : 'false';
+    parts.push(`<div><span style="color:#64748b;font-weight:700">${gtss.escapeHtml(label)}:</span> ${gtss.escapeHtml(String(displayVal))}</div>`);
+  }
+  if (parts.length === 0) parts.push('<div style="color:#64748b">No configurable settings for this pipeline.</div>');
+  return parts.join('');
 }
 
 async function restartPipeline(id, btn) {
@@ -1083,6 +1272,27 @@ function renderLimitFields(meta, limits) {
             `<option value="${o}"${o === val ? ' selected' : ''}>${o}</option>`
           ).join('')}
         </select>
+      </div>`;
+    } else if (field.type === 'per_platform') {
+      // Per-platform max-follows: one number input per platform, stored as a
+      // single JSON object { instagram: N, x: N, ... } under field.key.
+      const perPlatform = (val && typeof val === 'object') ? val : {};
+      html += `<div style="padding:8px 0">
+        <label style="color:#94a3b8;font-size:13px;display:block;margin-bottom:6px">${field.label}
+          <span style="color:#64748b;font-size:11px;font-weight:400">— 0 = use global ceiling</span>
+        </label>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px">
+          ${ALL_PLATFORMS.map(p => `
+            <div style="display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;border:1px solid rgba(148,163,184,0.18);background:rgba(15,23,42,0.4)">
+              <span style="color:#94a3b8;font-size:12px;flex:1">${gtss.formatPlatformLabel(p)}</span>
+              <input type="number" data-per-platform-key="${field.key}" data-platform="${p}"
+                value="${perPlatform[p] !== undefined ? perPlatform[p] : 0}" min="0" max="500"
+                style="width:60px;padding:4px 6px;border-radius:6px;border:1px solid rgba(148,163,184,0.22);
+                background:rgba(15,23,42,0.6);color:#e2e8f0;font-size:13px;text-align:center"
+              />
+            </div>
+          `).join('')}
+        </div>
       </div>`;
     }
   }
@@ -1455,13 +1665,13 @@ function renderPipelineCard(pipeline) {
       </div>
     </details>
 
-    <details class="pipeline-section" data-pipeline-section="${pipeline.id}-config" style="margin-top:8px">
+    <details class="pipeline-section" open data-pipeline-section="${pipeline.id}-config" style="margin-top:8px">
       <summary style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;cursor:pointer">
         <span style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#cbd5e1">
           <span class="chevron" style="color:#64748b">▸</span>
           Schedule & Configuration
         </span>
-        <span style="font-size:11px;color:#64748b">click to expand</span>
+        <span style="font-size:11px;color:#64748b">click to collapse</span>
       </summary>
       <div style="padding-top:8px">
         <div style="display:grid;gap:4px;margin-bottom:14px">

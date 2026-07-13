@@ -130,6 +130,17 @@
       statQualified.textContent = stats.qualified;
       statDeprioritized.textContent = stats.deprioritized;
       statOverridden.textContent = stats.overridden;
+
+      // Toggle the gentle pulse on the "Proceed to Messages" button when
+      // there are qualified leads ready to move to outreach.
+      const proceedBtn = document.getElementById("proceed-to-messages-btn");
+      if (proceedBtn) {
+        if (stats.qualified > 0) {
+          proceedBtn.classList.add("proceed-pulse");
+        } else {
+          proceedBtn.classList.remove("proceed-pulse");
+        }
+      }
       if (statScoringFailed) {
         statScoringFailed.textContent = stats.scoring_failed || 0;
       }
@@ -312,6 +323,11 @@
         showToast(
           `Qualification complete: ${event.result.qualified} qualified`,
           "success",
+        );
+        showToast(
+          "Qualification complete! Click 'Proceed to Messages' to generate outreach messages.",
+          "success",
+          8000,
         );
 
         cleanup();

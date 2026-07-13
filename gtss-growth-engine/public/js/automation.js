@@ -11,6 +11,8 @@
   let activeJobId = null;
   let isAutomationRunning = false;
   let socketSub = null;
+  let sessionStatus = {}; // { platform: bool } — true = session active
+  let cachedLimits = null; // last loaded limits object, used for re-render
 
   // DOM Refs
   const runAllBtn = document.getElementById("run-all-btn");
@@ -43,6 +45,7 @@
   // ----------------------------------------------------------------
 
   async function init() {
+    await loadSessionStatus();
     await loadLimits();
     await loadQueue();
     if (postRunBanner) postRunBanner.hidden = true;
@@ -50,9 +53,8 @@
     // Start idle-mode background polling to keep data fresh
     startPolling(POLL_IDLE_MS);
 
-    // Re-check sessions
-    const sessions = await fetchJSON("/api/sessions/status");
-    for (const [platform, isValid] of Object.entries(sessions)) {
+    // Surface warnings for any expired sessions (status already fetched)
+    for (const [platform, isValid] of Object.entries(sessionStatus)) {
       if (!isValid) {
         showToast(
           `No valid session for ${platform}. Please authenticate.`,
@@ -63,12 +65,30 @@
   }
 
   // ----------------------------------------------------------------
+  // Session Status
+  // ----------------------------------------------------------------
+
+  async function loadSessionStatus() {
+    try {
+      const data = await fetchJSON("/api/sessions/status");
+      sessionStatus = data || {};
+      // If limits are already loaded, re-render cards so badges update live
+      if (cachedLimits) {
+        renderLimitCards(cachedLimits);
+      }
+    } catch (err) {
+      console.error("Failed to load session status", err);
+    }
+  }
+
+  // ----------------------------------------------------------------
   // Load Limits
   // ----------------------------------------------------------------
 
   async function loadLimits() {
     try {
       const data = await fetchJSON("/api/automation/limits");
+      cachedLimits = data;
       renderLimitCards(data);
     } catch (err) {
       console.error("Failed to load limits", err);
@@ -101,29 +121,60 @@
           ? Math.min(100, Math.round((counts.used / counts.limit) * 100))
           : 0;
 
+      const isActive = !!sessionStatus[platform];
+
+      // Status badge next to the platform name
+      const statusBadge = isActive
+        ? `<span class="inline-flex items-center gap-1 text-[11px] font-semibold text-green-500">
+            <span class="w-1.5 h-1.5 rounded-full bg-green-500 inline-block"></span>
+            Active
+          </span>`
+        : `<span class="inline-flex items-center gap-1 text-[11px] font-semibold text-error">
+            <span class="w-1.5 h-1.5 rounded-full bg-error inline-block"></span>
+            Expired
+          </span>`;
+
+      // Subtle red border for expired sessions
+      const borderClass = isActive
+        ? "border-outline-variant"
+        : "border-error/30";
+
+      // Auth control: small icon for active, prominent Login button for expired
+      const authControl = isActive
+        ? `<button class="auth-btn p-1 rounded text-outline hover:text-primary hover:bg-surface-variant/50 transition-colors" data-platform="${platform}" title="Re-authenticate ${platform}" type="button">
+            <span class="material-symbols-outlined text-base">login</span>
+          </button>`
+        : `<button class="auth-btn inline-flex items-center gap-1 rounded bg-error/15 border border-error/50 px-2 py-0.5 text-[11px] font-bold text-error hover:bg-error/25 transition-colors" data-platform="${platform}" title="Authenticate ${platform}" type="button">
+            <span class="material-symbols-outlined text-[14px]">login</span>
+            Login
+          </button>`;
+
       const card = `
-        <div class="bg-surface-container-lowest border border-outline-variant shadow-sm rounded-lg p-5 flex flex-col justify-between min-h-40 relative overflow-hidden">
-          <div class="flex justify-between items-start">
-            <span class="font-label-caps text-label-caps text-on-surface-variant capitalize">${platform}</span>
-            <span class="material-symbols-outlined text-${bgClass} text-lg">${icon}</span>
+        <div class="bg-surface-container-lowest border ${borderClass} shadow-sm rounded-lg p-4 flex flex-col justify-between min-h-32 relative overflow-hidden">
+          <div class="flex justify-between items-start gap-2">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="font-label-caps text-label-caps text-on-surface-variant capitalize truncate">${platform}</span>
+              ${statusBadge}
+            </div>
+            <div class="flex items-center gap-1 shrink-0">
+              ${authControl}
+              <span class="material-symbols-outlined text-${bgClass} text-lg">${icon}</span>
+            </div>
           </div>
           <div class="mt-2">
-            <div class="font-display-lg text-display-lg text-on-surface flex items-baseline gap-1">
-                ${counts.used} <span class="font-body-sm text-body-sm text-on-surface-variant font-normal">/ ${counts.limit}</span>
+            <div class="text-on-surface flex items-baseline gap-1" style="font-size:20px;font-weight:700;line-height:1.25">
+                ${counts.used} <span class="text-[12px] text-on-surface-variant font-normal">/ ${counts.limit}</span>
             </div>
-            <div class="w-full h-1.5 bg-surface-container-high rounded-full mt-3 overflow-hidden">
+            <div class="w-full h-1.5 bg-surface-container-high rounded-full mt-2 overflow-hidden">
                 <div class="h-full bg-${bgClass} rounded-full transition-all" style="width: ${pct}%"></div>
             </div>
           </div>
-          <div class="mt-3 flex items-center gap-2 text-[11px] text-on-surface-variant">
+          <div class="mt-2 flex items-center gap-2 text-[11px] text-on-surface-variant">
             <label class="flex items-center gap-1">DM limit
-              <input class="automation-limit-input w-16 rounded border border-outline-variant bg-surface px-2 py-1 text-on-surface" data-limit-platform="${platform}" data-limit-action="dms" type="number" min="1" max="1000" value="${counts.dmsLimit || 1}" />
+              <input class="automation-limit-input w-14 rounded border border-outline-variant bg-surface px-2 py-0.5 text-on-surface" data-limit-platform="${platform}" data-limit-action="dms" type="number" min="1" max="1000" value="${counts.dmsLimit || 1}" />
             </label>
-            <button class="save-limit-btn rounded border border-outline-variant px-2 py-1 hover:border-primary hover:text-primary" data-platform="${platform}" type="button">Save</button>
+            <button class="save-limit-btn rounded border border-outline-variant px-2 py-0.5 hover:border-primary hover:text-primary" data-platform="${platform}" type="button">Save</button>
           </div>
-          <button class="absolute top-4 right-10 text-outline hover:text-primary transition-colors auth-btn" data-platform="${platform}" title="Authenticate">
-            <span class="material-symbols-outlined text-sm">login</span>
-          </button>
         </div>
       `;
       limitCards.insertAdjacentHTML("beforeend", card);
@@ -721,6 +772,8 @@
       });
       showToast(`${platform} authenticated successfully!`, "success");
       appendLog("done", `${platform} authenticated`);
+      // Refresh session status — re-renders limit cards with updated badge
+      await loadSessionStatus();
     } catch (err) {
       showToast(`Auth failed: ${err.message}`, "error");
       appendLog("error", `Auth failed: ${err.message}`);

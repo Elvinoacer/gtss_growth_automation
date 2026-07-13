@@ -5,14 +5,61 @@ const { isSessionValid } = require("../automation/sessionManager");
 const { getPlatformKeys } = require("../services/platformCatalog");
 const logger = require("../utils/logger");
 
+/**
+ * Returns true if the DM Inbox Checker pipeline is enabled.
+ *
+ * The reply checker cron is a long-running background job, but it MUST honor
+ * the user's intent: if the `dm_check` pipeline schedule is disabled (the
+ * default) or the `pipeline_dm_check_paused` setting is "true", the cron
+ * tick is a no-op. This keeps the DM checker OFF by default — the user has
+ * to explicitly enable the pipeline on the Pipelines page (or via the API)
+ * before any inbox scanning happens.
+ */
+function isDmCheckEnabled() {
+  try {
+    const { getDb } = require("../db/database");
+    const db = getDb();
+    const row = db
+      .prepare("SELECT enabled FROM pipeline_schedules WHERE id = 'dm_check'")
+      .get();
+    if (!row || !row.enabled) return false;
+
+    const paused = db
+      .prepare("SELECT value FROM settings WHERE key = 'pipeline_dm_check_paused'")
+      .get();
+    if (paused && String(paused.value).toLowerCase() === "true") return false;
+
+    return true;
+  } catch (err) {
+    logger.warn("DM check enabled-flag lookup failed; treating as disabled", {
+      error: err.message,
+    });
+    return false;
+  }
+}
+
 // Initializes the cron job to check for replies periodically.
 // Runs every 30 minutes by default: "*/30 * * * *"
+//
+// IMPORTANT: The cron is always registered (so it can pick up the moment the
+// user enables the dm_check pipeline), but each tick bails out immediately
+// if the pipeline is disabled or paused. This means the DM Inbox Checker is
+// OFF by default — the user must enable it on the Pipelines page first.
 function initReplyChecker() {
-  logger.info("Initializing Reply Checker cron job (runs every 30 mins)");
+  logger.info("Initializing Reply Checker cron job (runs every 30 mins; disabled by default — enable the dm_check pipeline to activate)");
 
   cron.schedule(
     "*/30 * * * *",
     async () => {
+      // Gate: respect the pipeline_schedules.enabled flag and the pause
+      // setting. The DM checker is disabled by default.
+      if (!isDmCheckEnabled()) {
+        logger.debug(
+          "Skipping scheduled reply detection (dm_check pipeline is disabled or paused). Enable it on the Pipelines page to activate.",
+        );
+        return;
+      }
+
       const jobId = crypto.randomUUID();
       logger.db(
         "info",

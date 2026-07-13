@@ -255,6 +255,7 @@
             ${
               msg.status === "pending"
                 ? `
+              <button class="btn btn-success btn-sm" data-action="approve-row" data-id="${msg.id}" title="Approve this ${msg.variant || "A"} variant">✓ Approve ${msg.variant || "A"}</button>
               <button class="btn btn-outline btn-sm" data-action="review" data-id="${msg.id}" title="Review & Approve">Review</button>
               <button class="btn btn-outline btn-sm" data-action="regenerate" data-id="${msg.id}" title="Regenerate">↺</button>
               <button class="btn btn-outline btn-sm" data-action="skip" data-id="${msg.id}" title="Skip">Skip</button>
@@ -526,6 +527,47 @@
     }
   }
 
+  /**
+   * Approve a single pending message directly from its row (without opening
+   * the review modal). The sibling variant for the same lead is automatically
+   * skipped by the backend.
+   */
+  async function approveRowMessage(id) {
+    const msg = cachedMessages.find((m) => m.id === id);
+    if (!msg) return;
+    try {
+      await fetchJSON(`/api/messages/${id}/approve`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: msg.body }),
+      });
+      showToast(`Variant ${msg.variant || "A"} approved!`, "success");
+      loadStats();
+      loadMessages();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  }
+
+  /**
+   * Bulk-approve all pending messages of a given variant ("A" or "B").
+   * Calls POST /api/messages/bulk-approve.
+   */
+  async function bulkApprove(variant) {
+    try {
+      const result = await fetchJSON("/api/messages/bulk-approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ variant }),
+      });
+      showToast(result.message, result.approved > 0 ? "success" : "info", 6000);
+      loadStats();
+      loadMessages();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  }
+
   async function regenerateVariants(id) {
     regenLoading.classList.add("visible");
     modalRegenerate.disabled = true;
@@ -605,6 +647,16 @@
   // Generate all
   generateAllBtn.addEventListener("click", generateAll);
 
+  // Approve All A / Approve All B bulk buttons
+  const approveAllABtn = document.getElementById("approve-all-a-btn");
+  const approveAllBBtn = document.getElementById("approve-all-b-btn");
+  if (approveAllABtn) {
+    approveAllABtn.addEventListener("click", () => bulkApprove("A"));
+  }
+  if (approveAllBBtn) {
+    approveAllBBtn.addEventListener("click", () => bulkApprove("B"));
+  }
+
   // Pagination
   prevPage.addEventListener("click", () => {
     if (currentPage > 1) {
@@ -635,6 +687,8 @@
         regenerateVariants(id);
       } else if (action === "skip") {
         skipMessage(id);
+      } else if (action === "approve-row") {
+        approveRowMessage(id);
       }
       return;
     }

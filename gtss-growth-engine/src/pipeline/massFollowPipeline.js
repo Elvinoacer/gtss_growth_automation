@@ -233,7 +233,7 @@ function isRateLimitResult(result) {
  *
  * Returns: { targets, skippedPlatforms }
  */
-function selectTargetsBatch(platforms, maxFollowsPerRun, respectActiveWindow) {
+function selectTargetsBatch(platforms, maxFollowsPerRun, respectActiveWindow, maxFollowsPerPlatform = {}) {
   const db = getDb();
   const skippedPlatforms = [];
   const eligiblePlatforms = [];
@@ -289,15 +289,22 @@ function selectTargetsBatch(platforms, maxFollowsPerRun, respectActiveWindow) {
   const platformArgs = eligiblePlatforms.map((p) => p.platform);
 
   // Per-platform caps so a single platform doesn't starve the others.
-  // Distribute maxFollowsPerRun proportionally to remainingHourly (so each
-  // platform can use at most its hourly headroom), then cap at remainingDaily.
-  const perPlatformCap = eligiblePlatforms.map((p) =>
-    Math.min(p.remainingHourly, p.remainingDaily, p.remainingWeekly, maxFollowsPerRun),
-  );
+  // The effective cap for each platform is the MIN of:
+  //   - remaining hourly headroom
+  //   - remaining daily headroom
+  //   - remaining weekly headroom
+  //   - the global maxFollowsPerRun ceiling
+  //   - the user-configured per-platform override (maxFollowsPerPlatform[p])
+  //     if it is set and > 0. A value of 0 means "fall back to the global cap".
+  const perPlatformCap = eligiblePlatforms.map((p) => {
+    const configured = Number(maxFollowsPerPlatform[p.platform] || 0);
+    const effectiveConfigured = configured > 0 ? configured : maxFollowsPerRun;
+    return Math.min(p.remainingHourly, p.remainingDaily, p.remainingWeekly, maxFollowsPerRun, effectiveConfigured);
+  });
 
-  // Pull a generous superset (maxFollowsPerRun * 2) then trim per-platform
-  // in JS. This is simpler than crafting one SQL query with per-platform
-  // LIMITs (which SQLite doesn't support natively) and the batch is small.
+  // Pull a generous superset then trim per-platform in JS. Fetch the
+  // largest cap across platforms so each bucket has enough rows to fill.
+  const fetchLimit = Math.max(maxFollowsPerRun * 2, ...perPlatformCap, maxFollowsPerRun);
   const superset = db
     .prepare(
       `SELECT id, platform, profile_url, handle, source, campaign_id, lead_id,
@@ -313,7 +320,7 @@ function selectTargetsBatch(platforms, maxFollowsPerRun, respectActiveWindow) {
        ORDER BY created_at ASC
        LIMIT ?`,
     )
-    .all(...platformArgs, Math.max(maxFollowsPerRun * 2, maxFollowsPerRun));
+    .all(...platformArgs, fetchLimit);
 
   // Bucket by platform, trim to per-platform cap, preserve chronological order
   const buckets = new Map(eligiblePlatforms.map((p) => [p.platform, []]));
@@ -432,19 +439,18 @@ function recordOutcome(db, target, platform, result) {
  * local copy so we don't create a require cycle (backgroundJobs →
  * processConnectionQueue → platformAdapter vs. here → platformAdapter).
  */
-async function launchBrowsersForPlatforms(platforms) {
+async function launchBrowsersForPlatforms(platforms, showBrowser = false) {
   const activePages = {};
+  // If the user explicitly asked to see the browser (show_browser: true), run
+  // headed. Otherwise fall back to the env-driven headless behavior.
+  const headless = showBrowser ? false : process.env.ALLOW_HEADLESS_SOCIAL === "true";
   for (const platform of platforms) {
     try {
       let state;
       if (platform === "instagram") {
-        state = await browserBase.createInstagramBrowser({
-          headless: process.env.ALLOW_HEADLESS_SOCIAL === "true",
-        });
+        state = await browserBase.createInstagramBrowser({ headless });
       } else {
-        state = await browserBase.createBrowser(platform, {
-          headless: process.env.ALLOW_HEADLESS_SOCIAL === "true",
-        });
+        state = await browserBase.createBrowser(platform, { headless });
       }
       activePages[platform] = state;
     } catch (err) {
@@ -494,8 +500,21 @@ async function runMassFollowPipelineNow(config = {}) {
     respect_active_window: respectActiveWindow = true,
     skip_already_following: skipAlreadyFollowing = true,
     max_retries_per_target = 3,
+    max_follows_per_platform: rawMaxFollowsPerPlatform = {},
+    show_browser: showBrowser = false,
     trigger = "manual",
   } = config;
+
+  // Normalize the per-platform overrides into a { platform: number } map.
+  const maxFollowsPerPlatform = {};
+  if (rawMaxFollowsPerPlatform && typeof rawMaxFollowsPerPlatform === "object" && !Array.isArray(rawMaxFollowsPerPlatform)) {
+    for (const [platform, value] of Object.entries(rawMaxFollowsPerPlatform)) {
+      const p = String(platform).trim().toLowerCase();
+      if (!SUPPORTED_PLATFORMS.has(p)) continue;
+      const n = Number(value);
+      if (Number.isFinite(n) && n >= 0) maxFollowsPerPlatform[p] = Math.floor(n);
+    }
+  }
 
   const platforms = Array.isArray(rawPlatforms)
     ? rawPlatforms
@@ -609,7 +628,7 @@ async function runMassFollowPipelineNow(config = {}) {
     }
 
     if (!batch) {
-      const selection = selectTargetsBatch(platforms, maxFollows, respectActiveWindow);
+      const selection = selectTargetsBatch(platforms, maxFollows, respectActiveWindow, maxFollowsPerPlatform);
       batch = selection.targets;
       summary.skippedPlatforms = selection.skippedPlatforms;
       if (selection.skippedPlatforms.length > 0) {
@@ -716,7 +735,7 @@ async function runMassFollowPipelineNow(config = {}) {
     }
     checkAbort();
 
-    activePages = await launchBrowsersForPlatforms(platformsInBatch);
+    activePages = await launchBrowsersForPlatforms(platformsInBatch, showBrowser);
 
     for (let i = 0; i < batch.length; i++) {
       checkAbort();

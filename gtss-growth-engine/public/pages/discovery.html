@@ -704,11 +704,21 @@
             </button>
           </div>
           <div id="result-summary" class="result-summary gtss-card">
-            <strong id="result-summary-text">Discovery complete.</strong>
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+              <span style="font-size:28px;color:#22c55e;font-weight:900;line-height:1">✓</span>
+              <div>
+                <strong id="result-summary-text" style="font-size:16px;color:var(--gtss-text);display:block">Discovery complete.</strong>
+                <div id="result-summary-detail" style="font-size:13px;color:var(--gtss-muted);margin-top:4px"></div>
+              </div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+              <a href="/qualification" class="primary-button" style="text-decoration:none;display:inline-flex;align-items:center;gap:6px">Proceed to Qualification →</a>
+              <a href="#results-section" class="secondary-button" style="text-decoration:none;display:inline-flex;align-items:center;gap:6px" onclick="document.getElementById('discovered-leads-section').scrollIntoView({behavior:'smooth'});return false">View Results Below ↓</a>
+            </div>
           </div>
         </section>
 
-        <section class="discovery-card gtss-card">
+        <section id="discovered-leads-section" class="discovery-card gtss-card">
           <div class="results-header">
             <h2>
               Discovered Leads

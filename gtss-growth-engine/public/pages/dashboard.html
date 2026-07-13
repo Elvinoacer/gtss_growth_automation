@@ -529,6 +529,250 @@
         </section>
 
         <section
+          id="quick-start-section"
+          class="glass-panel animate-card relative rounded-[28px] p-5 sm:p-6 lg:p-7"
+        >
+          <div
+            class="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-white/10 pb-5"
+          >
+            <div class="flex items-start gap-3">
+              <span
+                class="material-symbols-outlined text-[28px] text-sky-300"
+                aria-hidden="true"
+                >rocket_launch</span
+              >
+              <div>
+                <p
+                  class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400"
+                >
+                  Onboarding
+                </p>
+                <h2 class="mt-1 text-2xl font-bold text-white">Quick Start</h2>
+                <p class="mt-1 text-sm text-slate-300">
+                  New here? Follow these steps to get your growth engine
+                  running.
+                </p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2" id="quick-start-header-actions">
+              <a
+                href="/pipelines"
+                class="focus-ring hidden items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/10 sm:inline-flex"
+              >
+                <span class="material-symbols-outlined text-[16px]"
+                  >play_circle</span
+                >
+                Run a pipeline
+              </a>
+            </div>
+          </div>
+
+          <!-- 4-step horizontal flow -->
+          <ol
+            class="flex flex-col gap-4 lg:flex-row lg:items-stretch"
+            aria-label="Quick start workflow"
+          >
+            <li
+              class="qs-step group relative flex-1 rounded-2xl border border-white/10 bg-slate-950/40 p-5 transition-colors hover:border-sky-300/30"
+            >
+              <div class="mb-3 flex items-center gap-3">
+                <span
+                  class="flex h-9 w-9 items-center justify-center rounded-full bg-sky-400 text-sm font-bold text-slate-950 shadow-[0_0_0_6px_rgba(56,189,248,0.12)]"
+                  >1</span
+                >
+                <span
+                  class="material-symbols-outlined text-[22px] text-sky-300"
+                  aria-hidden="true">travel_explore</span
+                >
+              </div>
+              <h3 class="text-base font-semibold text-white">Lead Discovery</h3>
+              <p class="mt-1 text-sm leading-6 text-slate-300">
+                Find potential leads across LinkedIn, X, Facebook, and
+                Instagram.
+              </p>
+              <a
+                href="/discovery"
+                class="focus-ring mt-4 inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-950 transition-transform hover:-translate-y-0.5"
+              >
+                Start discovery
+                <span class="material-symbols-outlined text-[16px]"
+                  >arrow_forward</span
+                >
+              </a>
+            </li>
+
+            <li
+              class="qs-arrow hidden items-center justify-center lg:flex"
+              aria-hidden="true"
+            >
+              <span class="material-symbols-outlined text-[22px] text-sky-300/70"
+                >arrow_forward</span
+              >
+            </li>
+
+            <li
+              class="qs-step group relative flex-1 rounded-2xl border border-white/10 bg-slate-950/40 p-5 transition-colors hover:border-sky-300/30"
+            >
+              <div class="mb-3 flex items-center gap-3">
+                <span
+                  class="flex h-9 w-9 items-center justify-center rounded-full bg-sky-400 text-sm font-bold text-slate-950 shadow-[0_0_0_6px_rgba(56,189,248,0.12)]"
+                  >2</span
+                >
+                <span
+                  class="material-symbols-outlined text-[22px] text-sky-300"
+                  aria-hidden="true">fact_check</span
+                >
+              </div>
+              <h3 class="text-base font-semibold text-white">Qualify Leads</h3>
+              <p class="mt-1 text-sm leading-6 text-slate-300">
+                Score and approve discovered leads with AI.
+              </p>
+              <a
+                href="/qualification"
+                class="focus-ring mt-4 inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-950 transition-transform hover:-translate-y-0.5"
+              >
+                Open qualification
+                <span class="material-symbols-outlined text-[16px]"
+                  >arrow_forward</span
+                >
+              </a>
+            </li>
+
+            <li
+              class="qs-arrow hidden items-center justify-center lg:flex"
+              aria-hidden="true"
+            >
+              <span class="material-symbols-outlined text-[22px] text-sky-300/70"
+                >arrow_forward</span
+              >
+            </li>
+
+            <li
+              class="qs-step group relative flex-1 rounded-2xl border border-white/10 bg-slate-950/40 p-5 transition-colors hover:border-sky-300/30"
+            >
+              <div class="mb-3 flex items-center gap-3">
+                <span
+                  class="flex h-9 w-9 items-center justify-center rounded-full bg-sky-400 text-sm font-bold text-slate-950 shadow-[0_0_0_6px_rgba(56,189,248,0.12)]"
+                  >3</span
+                >
+                <span
+                  class="material-symbols-outlined text-[22px] text-sky-300"
+                  aria-hidden="true">edit_note</span
+                >
+              </div>
+              <h3 class="text-base font-semibold text-white">
+                Generate Messages
+              </h3>
+              <p class="mt-1 text-sm leading-6 text-slate-300">
+                Create AI outreach messages and approve them.
+              </p>
+              <a
+                href="/messages"
+                class="focus-ring mt-4 inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-950 transition-transform hover:-translate-y-0.5"
+              >
+                Generate messages
+                <span class="material-symbols-outlined text-[16px]"
+                  >arrow_forward</span
+                >
+              </a>
+            </li>
+
+            <li
+              class="qs-arrow hidden items-center justify-center lg:flex"
+              aria-hidden="true"
+            >
+              <span class="material-symbols-outlined text-[22px] text-sky-300/70"
+                >arrow_forward</span
+              >
+            </li>
+
+            <li
+              class="qs-step group relative flex-1 rounded-2xl border border-white/10 bg-slate-950/40 p-5 transition-colors hover:border-sky-300/30"
+            >
+              <div class="mb-3 flex items-center gap-3">
+                <span
+                  class="flex h-9 w-9 items-center justify-center rounded-full bg-sky-400 text-sm font-bold text-slate-950 shadow-[0_0_0_6px_rgba(56,189,248,0.12)]"
+                  >4</span
+                >
+                <span
+                  class="material-symbols-outlined text-[22px] text-sky-300"
+                  aria-hidden="true">bolt</span
+                >
+              </div>
+              <h3 class="text-base font-semibold text-white">Run Automation</h3>
+              <p class="mt-1 text-sm leading-6 text-slate-300">
+                Send approved DMs and connections automatically.
+              </p>
+              <a
+                href="/automation"
+                class="focus-ring mt-4 inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-950 transition-transform hover:-translate-y-0.5"
+              >
+                Open automation
+                <span class="material-symbols-outlined text-[16px]"
+                  >arrow_forward</span
+                >
+              </a>
+            </li>
+          </ol>
+
+          <!-- Secondary row: Configure First + Automation Pipelines -->
+          <div class="mt-5 grid gap-4 sm:grid-cols-2">
+            <article
+              class="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-5"
+            >
+              <div class="flex items-center gap-3">
+                <span
+                  class="material-symbols-outlined text-[22px] text-sky-300"
+                  aria-hidden="true">settings</span
+                >
+                <h3 class="text-base font-semibold text-white">
+                  Configure first
+                </h3>
+              </div>
+              <p class="text-sm leading-6 text-slate-300">
+                Set up platform sessions and API keys before you start.
+              </p>
+              <a
+                href="/settings"
+                class="focus-ring inline-flex items-center gap-2 self-start rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-white transition-transform hover:-translate-y-0.5 hover:bg-white/10"
+              >
+                Go to settings
+                <span class="material-symbols-outlined text-[16px]"
+                  >arrow_forward</span
+                >
+              </a>
+            </article>
+
+            <article
+              class="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-5"
+            >
+              <div class="flex items-center gap-3">
+                <span
+                  class="material-symbols-outlined text-[22px] text-sky-300"
+                  aria-hidden="true">conveyor_belt</span
+                >
+                <h3 class="text-base font-semibold text-white">
+                  Automation Pipelines
+                </h3>
+              </div>
+              <p class="text-sm leading-6 text-slate-300">
+                Run end-to-end pipelines with one click (discovery →
+                qualification → messaging).
+              </p>
+              <a
+                href="/pipelines"
+                class="focus-ring inline-flex items-center gap-2 self-start rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-white transition-transform hover:-translate-y-0.5 hover:bg-white/10"
+              >
+                Open pipelines
+                <span class="material-symbols-outlined text-[16px]"
+                  >arrow_forward</span
+                >
+              </a>
+            </article>
+          </div>
+        </section>
+
+        <section
           id="stat-cards"
           class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6"
         >

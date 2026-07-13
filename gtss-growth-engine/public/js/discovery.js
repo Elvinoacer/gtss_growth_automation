@@ -4,6 +4,7 @@ const discoveryState = {
   total: 0,
   selectedIds: new Set(),
   currentJobId: null,
+  currentPlatforms: [],
   eventSource: null,
 };
 
@@ -178,12 +179,18 @@ async function loadPlatformControls() {
 let selectedHashtags = [];
 let defaultHashtags = [];
 let igKeywordsLoaded = false;
+// True while we are hydrating hashtag chips from the saved config so that the
+// chip add/remove handlers don't fire a save back to the server for every
+// default tag we restore.
+let igHashtagsHydrating = false;
+let saveHashtagsTimer = null;
 
 async function loadInstagramDiscoveryKeywords() {
   if (igKeywordsLoaded) return;
   try {
     const data = await window.gtss.fetchJSON("/api/discovery/keywords");
-    
+
+    igHashtagsHydrating = true;
     // 1. Populate Hashtags
     if (data.instagram && Array.isArray(data.instagram.hashtags)) {
       defaultHashtags = data.instagram.hashtags;
@@ -192,6 +199,7 @@ async function loadInstagramDiscoveryKeywords() {
         addHashtagChip(tag);
       });
     }
+    igHashtagsHydrating = false;
 
     // 2. Populate Geolocation Select Dropdown
     const select = document.getElementById("ig-location-select");
@@ -228,7 +236,46 @@ async function loadInstagramDiscoveryKeywords() {
     
     igKeywordsLoaded = true;
   } catch (error) {
+    igHashtagsHydrating = false;
     console.error("Failed to load Instagram discovery keywords", error);
+  }
+}
+
+// Debounced (500ms) persistence of the current Instagram hashtag selection.
+// POSTs only the instagram.hashtags slice to /api/discovery/keywords — the
+// backend route now accepts a partial instagram update without requiring the
+// `keywords` array.
+function scheduleHashtagSave() {
+  if (igHashtagsHydrating) return;
+  if (saveHashtagsTimer) clearTimeout(saveHashtagsTimer);
+  saveHashtagsTimer = setTimeout(() => {
+    saveHashtagsTimer = null;
+    saveInstagramHashtags().catch((err) =>
+      console.error("saveInstagramHashtags failed", err),
+    );
+  }, 500);
+}
+
+async function saveInstagramHashtags() {
+  // Snapshot the array so a rapid add/remove race doesn't POST stale data.
+  const snapshot = [...selectedHashtags];
+  try {
+    await window.gtss.fetchJSON("/api/discovery/keywords", {
+      method: "POST",
+      body: JSON.stringify({ instagram: { hashtags: snapshot } }),
+    });
+    // Only show the "saved" toast if the chips still reflect the snapshot we
+    // just persisted (otherwise another save is already in flight).
+    if (
+      saveHashtagsTimer === null &&
+      snapshot.length === selectedHashtags.length &&
+      snapshot.every((t, i) => selectedHashtags[i] === t)
+    ) {
+      window.gtss.showToast("✓ Hashtags saved", "success");
+    }
+  } catch (error) {
+    console.error("Failed to save Instagram hashtags", error);
+    window.gtss.showToast("Failed to save hashtags", "error");
   }
 }
 
@@ -237,11 +284,13 @@ function addHashtagChip(tag) {
   if (!tag || selectedHashtags.includes(tag)) return;
   selectedHashtags.push(tag);
   renderHashtagChips();
+  scheduleHashtagSave();
 }
 
 function removeHashtagChip(tag) {
   selectedHashtags = selectedHashtags.filter(t => t !== tag);
   renderHashtagChips();
+  scheduleHashtagSave();
 }
 
 function renderHashtagChips() {
@@ -347,6 +396,9 @@ async function startDiscovery(event) {
     });
 
     discoveryState.currentJobId = response.jobId;
+    // Track which platforms were scanned so the completion summary can list
+    // them after the SSE done event arrives.
+    discoveryState.currentPlatforms = [...platforms];
     document.getElementById("discovery-form").style.display = "none";
     document.getElementById("result-summary").classList.remove("visible");
     document.getElementById("running-panel").classList.add("visible");
@@ -394,8 +446,23 @@ function openDiscoveryStream(jobId) {
       document.getElementById("running-panel").classList.remove("visible");
       document.getElementById("discovery-form").style.display = "";
       document.getElementById("result-summary").classList.add("visible");
+      // Compose the richer completion summary: success badge + new/duplicate
+      // counts + platforms scanned, plus a "Proceed to Qualification" CTA
+      // (the CTA markup lives in discovery.html).
+      const scannedKeys =
+        discoveryState.currentPlatforms && discoveryState.currentPlatforms.length
+          ? discoveryState.currentPlatforms
+          : selectedPlatforms();
+      const platformsScanned = scannedKeys.map(
+        (key) =>
+          platformLabels[key] ||
+          window.gtss.formatPlatformLabel(key) ||
+          key,
+      );
       document.getElementById("result-summary-text").textContent =
-        `Discovery complete: ${result.new || 0} new leads, ${result.duplicates || 0} duplicates.`;
+        `Discovery Complete: ${result.new || 0} new leads found`;
+      document.getElementById("result-summary-detail").textContent =
+        `Scanned: ${platformsScanned.length ? platformsScanned.join(", ") : "—"} · ${result.duplicates || 0} duplicates skipped`;
       window.gtss.showToast(
         `Discovery complete: ${result.new || 0} new leads found`,
         "success",
@@ -605,6 +672,14 @@ async function rerun(id) {
       "success",
     );
     discoveryState.currentJobId = data.jobId;
+    // The rerun endpoint returns the platforms that will actually be scanned
+    // (taken from the original run record) so the completion summary lists
+    // the correct platforms instead of whatever is currently checked.
+    if (Array.isArray(data.platforms) && data.platforms.length) {
+      discoveryState.currentPlatforms = [...data.platforms];
+    } else {
+      discoveryState.currentPlatforms = selectedPlatforms();
+    }
     document.getElementById("discovery-form").style.display = "none";
     document.getElementById("running-panel").classList.add("visible");
     document.getElementById("live-log").innerHTML = "";
