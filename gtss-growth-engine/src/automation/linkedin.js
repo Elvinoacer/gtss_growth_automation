@@ -3828,6 +3828,10 @@ async function sendDirectMessage(
           retryCtx.mode === "iframe" ? retryCtx.frame : null,
         );
         typeSuccess = await typeLikeHuman(page, activeEditorLocator, message);
+        // Keep the later Send-button lookup scoped to the same context as the
+        // recovered editor. LinkedIn can finish mounting its /preload/ iframe
+        // between the first attempt and this retry.
+        msgCtx = retryMsgCtx;
       }
     }
 

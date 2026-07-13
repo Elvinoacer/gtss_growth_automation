@@ -292,3 +292,68 @@ test(
     }
   },
 );
+
+// ─── test 7: the iframe composer can have both Subject and body fields ──────
+//
+// This mirrors the saved LinkedIn DM checkpoint: the active /preload/ frame
+// exposes two text fields. The automation must type only into the message body.
+
+test(
+  "iframe DM typing selects the message body instead of Subject",
+  { skip: SKIP },
+  async () => {
+    const browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext({
+      viewport: { width: 1366, height: 768 },
+    });
+    const page = await context.newPage();
+
+    try {
+      await serveHtml(
+        context,
+        "**/preload/**",
+        `<html><body>
+          <section class="msg-overlay-conversation-bubble" role="dialog"
+                   style="display:block;width:540px;height:420px;">
+            <input aria-label="Subject" placeholder="Subject" role="textbox"
+                   style="display:block;width:480px;height:32px;" />
+            <form class="msg-form">
+              <div class="msg-form__contenteditable" contenteditable="true"
+                   role="textbox" aria-label="Write a message"
+                   style="display:block;width:480px;height:180px;"></div>
+              <button type="submit" aria-label="Send">Send</button>
+            </form>
+          </section>
+        </body></html>`,
+      );
+      await serveHtml(
+        context,
+        "**/in/some-profile",
+        `<html><body><iframe data-testid="interop-iframe"
+          src="/preload/?_bprMode=vanilla" style="width:100vw;height:100vh;"></iframe></body></html>`,
+      );
+      await page.goto("https://www.linkedin.com/in/some-profile");
+
+      const contextResult = await __private.detectMessagingContext(page, 3000);
+      assert.equal(contextResult.mode, "iframe");
+      const editor = await __private.findBestDmEditor(contextResult.frame, 1000);
+      assert.ok(editor, "expected the iframe message editor");
+
+      process.env.TEST_SPEEDUP = "true";
+      const body = "Hi Allan, thanks for connecting.";
+      assert.equal(
+        await __private.typeLikeHuman(page, editor.locator, body),
+        true,
+      );
+      assert.equal(await editor.locator.textContent(), body);
+      assert.equal(
+        await contextResult.frame.locator('[aria-label="Subject"]').inputValue(),
+        "",
+        "subject must remain empty",
+      );
+    } finally {
+      delete process.env.TEST_SPEEDUP;
+      await browser.close();
+    }
+  },
+);
