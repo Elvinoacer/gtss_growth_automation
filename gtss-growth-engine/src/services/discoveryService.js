@@ -1112,7 +1112,9 @@ const platformDiscoveryMap = {
         platform: "linkedin",
         message: `LinkedIn page loaded: ${page.url()}`,
       });
-      await delay(4000);
+      // The captured LinkedIn page has usable people-result anchors as soon
+      // as the initial React render completes; avoid a fixed long delay.
+      await delay(800);
 
       emit({
         type: "info",
@@ -1188,8 +1190,14 @@ const platformDiscoveryMap = {
           break;
         }
 
-        // Store first lead URL to verify page transition later
+        // Store the captured UI's active page marker before clicking Next.
+        // It is more reliable than checking whether an old profile name has
+        // disappeared from LinkedIn's virtualised result list.
         const firstLeadUrl = leads[0]?.profile_url;
+        const currentPageLabel = await page
+          .locator('[data-testid^="pagination-indicator-"][aria-current="true"]')
+          .getAttribute("aria-label")
+          .catch(() => null);
 
         // Scroll down in increments to trigger lazy loading of pagination
         await page.evaluate(async () => {
@@ -1199,10 +1207,11 @@ const platformDiscoveryMap = {
           }
           window.scrollTo(0, document.body.scrollHeight);
         });
-        await delay(2000);
+        await delay(500);
 
         // Try multiple selectors for the Next button
         const nextButtonSelectors = [
+          '[data-testid="pagination-controls-next-button-visible"]:not([disabled]):not([aria-disabled="true"])',
           "button.artdeco-pagination__button--next:not([disabled])",
           'button[aria-label="Next"]:not([disabled])',
           'button:has-text("Next"):not([disabled])',
@@ -1254,7 +1263,20 @@ const platformDiscoveryMap = {
             message: "Waiting for next page results to load...",
           });
 
-          if (firstLeadUrl) {
+          if (currentPageLabel) {
+            await page
+              .waitForFunction(
+                (previousLabel) => {
+                  const current = document.querySelector(
+                    '[data-testid^="pagination-indicator-"][aria-current="true"]',
+                  );
+                  return current && current.getAttribute("aria-label") !== previousLabel;
+                },
+                currentPageLabel,
+                { timeout: 7000 },
+              )
+              .catch(() => {});
+          } else if (firstLeadUrl) {
             const profileSnippet = firstLeadUrl.split("/in/")[1]?.split("/")[0];
             if (profileSnippet) {
               // Wait for the old result to vanish or a timeout
@@ -1276,7 +1298,7 @@ const platformDiscoveryMap = {
             }
           }
 
-          await delay(3000); // Base safety delay for AJAX
+          await delay(800);
         } else {
           emit({
             type: "info",

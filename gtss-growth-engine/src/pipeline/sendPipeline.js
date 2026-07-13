@@ -38,8 +38,14 @@ async function runSendStage(
   const selectedPlatforms = Array.isArray(platforms)
     ? platforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean)
     : [];
+  // Sending a DM must never trigger a connection or follow action. Those
+  // actions run only from their dedicated pipeline.
+  const dmActionTypes = ["dm", "instagram_dm"];
   // ── 1. Check the queue ──────────────────────────────────────────────────
-  const queue = getQueuedActions({ platforms: selectedPlatforms });
+  const queue = getQueuedActions({
+    platforms: selectedPlatforms,
+    actionTypes: dmActionTypes,
+  });
 
   if (queue.length === 0) {
     emit({ type: 'info', message: 'No approved messages ready to send.' });
@@ -108,6 +114,7 @@ async function runSendStage(
       maxDmsPerRun,
       maxConnectionsPerRun,
       platforms: selectedPlatforms,
+      actionTypes: dmActionTypes,
     });
     const sent = summary?.successes || 0;
     const failed = summary?.failures || 0;

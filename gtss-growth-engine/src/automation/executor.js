@@ -108,6 +108,11 @@ function getQueuedActions(options = {}) {
         .map((platform) => String(platform).trim().toLowerCase())
         .filter(Boolean)
     : [];
+  const actionTypes = Array.isArray(options.actionTypes)
+    ? options.actionTypes
+        .map((actionType) => normalizeQueuedActionType(actionType))
+        .filter(Boolean)
+    : [];
   const platformClause =
     platforms.length > 0
       ? `AND m.platform IN (${platforms.map(() => "?").join(",")})`
@@ -146,7 +151,11 @@ function getQueuedActions(options = {}) {
         normalizeQueuedActionType(action.action_type) ||
         determineActionType(action),
       runnable: Boolean(action.runnable),
-    }));
+    }))
+    .filter(
+      (action) =>
+        actionTypes.length === 0 || actionTypes.includes(action.action_type),
+    );
 }
 
 function classifyOutcome(outcome, reason) {
@@ -815,11 +824,17 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           .map((platform) => String(platform).trim().toLowerCase())
           .filter(Boolean)
       : [];
-    const runnableQueue = getQueuedActions({ platforms });
+    const actionTypes = Array.isArray(options.actionTypes)
+      ? options.actionTypes
+          .map((actionType) => normalizeQueuedActionType(actionType))
+          .filter(Boolean)
+      : [];
+    const runnableQueue = getQueuedActions({ platforms, actionTypes });
     const fullQueue = getQueuedActions({
       includeBlocked: true,
       includeWaiting: true,
       platforms,
+      actionTypes,
     });
     const waitingCount = fullQueue.filter(
       (action) => action.status === "approved" && !action.runnable,

@@ -32,6 +32,15 @@
   const queueSelectAll = document.getElementById("queue-select-all");
   const retryWaitingBtn = document.getElementById("retry-waiting-btn");
   const retryBlockedBtn = document.getElementById("retry-blocked-btn");
+  const domCapturePlatform = document.getElementById("dom-capture-platform");
+  const domCapturePipeline = document.getElementById("dom-capture-pipeline");
+  const domCaptureTab = document.getElementById("dom-capture-tab");
+  const domCaptureLabel = document.getElementById("dom-capture-label");
+  const domCaptureRefreshTabs = document.getElementById("dom-capture-refresh-tabs");
+  const domCaptureSave = document.getElementById("dom-capture-save");
+  const domCaptureStatus = document.getElementById("dom-capture-status");
+  const domCaptureList = document.getElementById("dom-capture-list");
+  const domCaptureRefreshList = document.getElementById("dom-capture-refresh-list");
 
   const captchaBanner = document.getElementById("captcha-banner");
   const captchaPlatformText = document.getElementById("captcha-platform-text");
@@ -48,6 +57,7 @@
     await loadSessionStatus();
     await loadLimits();
     await loadQueue();
+    await loadDomCaptures();
     if (postRunBanner) postRunBanner.hidden = true;
     await resumeActiveAutomation();
 
@@ -62,6 +72,94 @@
           "warn",
         );
       }
+    }
+  }
+
+  // ----------------------------------------------------------------
+  // Manual DOM Recorder
+  // ----------------------------------------------------------------
+
+  function setDomCaptureStatus(message) {
+    if (domCaptureStatus) domCaptureStatus.textContent = message;
+  }
+
+  function escapeHtml(value) {
+    const node = document.createElement("span");
+    node.textContent = String(value || "");
+    return node.innerHTML;
+  }
+
+  async function loadDomTabs() {
+    if (!domCapturePlatform || !domCaptureTab) return;
+    const platform = domCapturePlatform.value;
+    domCaptureTab.disabled = true;
+    domCaptureSave.disabled = true;
+    domCaptureTab.innerHTML = '<option>Finding open tabs...</option>';
+    setDomCaptureStatus(`Looking for open ${platform} tabs...`);
+    try {
+      const tabs = await fetchJSON(`/api/automation/dom-captures/tabs?platform=${encodeURIComponent(platform)}`);
+      domCaptureTab.innerHTML = "";
+      if (!tabs.length) {
+        domCaptureTab.innerHTML = '<option value="">No matching tab open</option>';
+        setDomCaptureStatus(`Open the ${platform} page in the connected Chrome session, then refresh.`);
+        return;
+      }
+      tabs.forEach((tab) => {
+        const option = document.createElement("option");
+        option.value = tab.index;
+        option.textContent = tab.url;
+        domCaptureTab.appendChild(option);
+      });
+      domCaptureTab.disabled = false;
+      domCaptureSave.disabled = false;
+      setDomCaptureStatus(`${tabs.length} open ${platform} tab${tabs.length === 1 ? "" : "s"} found.`);
+    } catch (error) {
+      domCaptureTab.innerHTML = '<option value="">Could not connect to Chrome</option>';
+      setDomCaptureStatus(error.message || "Could not connect to the CDP Chrome session.");
+    }
+  }
+
+  async function loadDomCaptures() {
+    if (!domCaptureList) return;
+    try {
+      const captures = await fetchJSON("/api/automation/dom-captures?limit=12");
+      if (!captures.length) {
+        domCaptureList.innerHTML = "<p>No DOM checkpoints saved yet.</p>";
+        return;
+      }
+      domCaptureList.innerHTML = captures.map((capture) => `
+        <div class="flex items-center justify-between gap-4 border border-outline-variant/70 px-3 py-2 rounded">
+          <div class="min-w-0"><span class="text-on-surface font-medium">${escapeHtml(capture.label)}</span><span class="mx-2 text-outline">${escapeHtml(capture.platform)} / ${escapeHtml(capture.pipeline)}</span><span class="text-on-surface-variant">${escapeHtml(capture.url)}</span></div>
+          <time class="shrink-0 text-body-xs">${escapeHtml(new Date(capture.capturedAt).toLocaleString())}</time>
+        </div>`).join("");
+    } catch (error) {
+      domCaptureList.innerHTML = "<p>Could not load saved DOM checkpoints.</p>";
+    }
+  }
+
+  async function saveDomCapture() {
+    if (!domCapturePlatform || domCaptureSave.disabled) return;
+    domCaptureSave.disabled = true;
+    setDomCaptureStatus("Saving rendered DOM and screenshot...");
+    try {
+      const capture = await fetchJSON("/api/automation/dom-captures", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: domCapturePlatform.value,
+          pipeline: domCapturePipeline.value,
+          pageIndex: Number(domCaptureTab.value),
+          label: domCaptureLabel.value,
+        }),
+      });
+      setDomCaptureStatus(`Saved ${capture.label} at ${new Date(capture.capturedAt).toLocaleTimeString()}.`);
+      showToast("DOM checkpoint saved.", "success");
+      await loadDomCaptures();
+    } catch (error) {
+      setDomCaptureStatus(error.message || "Could not save DOM checkpoint.");
+      showToast(error.message || "Could not save DOM checkpoint.", "error");
+    } finally {
+      domCaptureSave.disabled = domCaptureTab.disabled;
     }
   }
 
@@ -787,6 +885,11 @@
       retryQueue("blocked"),
     );
   }
+
+  domCapturePlatform?.addEventListener("change", loadDomTabs);
+  domCaptureRefreshTabs?.addEventListener("click", loadDomTabs);
+  domCaptureSave?.addEventListener("click", saveDomCapture);
+  domCaptureRefreshList?.addEventListener("click", loadDomCaptures);
 
   // ----------------------------------------------------------------
   // Authentication & Captcha

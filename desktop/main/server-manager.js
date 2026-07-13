@@ -208,6 +208,7 @@ class ServerManager {
     childEnv.DB_PATH = path.join(this.dataRoot, "data", "gtss.db");
     childEnv.SESSION_DIR = path.join(this.dataRoot, "sessions");
     childEnv.AUTOMATION_ARTIFACTS_DIR = path.join(this.dataRoot, "artifacts", "automation");
+    childEnv.DOM_CAPTURE_DIR = path.join(this.dataRoot, "artifacts", "dom-captures");
     childEnv.GEMINI_IMAGE_SAVE_DIR = path.join(this.dataRoot, "artifacts", "gemini-images");
     childEnv.AUTOMATION_LOCKS_DIR = path.join(this.dataRoot, "data", "browser-locks");
     // Writable paths for uploads / media / CDP profile. Without these the
@@ -219,6 +220,7 @@ class ServerManager {
       // Defensive fallback (shouldn't happen in normal operation).
       childEnv.UPLOADS_DIR = path.join(this.dataRoot, "public", "uploads");
       childEnv.MEDIA_DIR = path.join(this.dataRoot, "media");
+      childEnv.DOM_CAPTURE_DIR = path.join(this.dataRoot, "artifacts", "dom-captures");
       childEnv.CDP_PROFILE_DIR = path.join(this.dataRoot, "chrome-cdp-profile");
       childEnv.PROFILES_DIR = path.join(this.dataRoot, "profiles");
     }

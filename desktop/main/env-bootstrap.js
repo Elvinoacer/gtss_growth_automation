@@ -115,6 +115,7 @@ class EnvBootstrap {
     return {
       UPLOADS_DIR: path.join(this.dataRoot, "public", "uploads"),
       MEDIA_DIR: path.join(this.dataRoot, "media"),
+      DOM_CAPTURE_DIR: path.join(this.dataRoot, "artifacts", "dom-captures"),
       CDP_PROFILE_DIR: path.join(this.dataRoot, "chrome-cdp-profile"),
       // Per-platform persistent browser profile dir (used only when CDP
       // mode is unavailable and the engine falls back to Playwright's
@@ -131,6 +132,7 @@ class EnvBootstrap {
       DB_PATH: path.join(this.dataRoot, "data", "gtss.db"),
       SESSION_DIR: path.join(this.dataRoot, "sessions"),
       AUTOMATION_ARTIFACTS_DIR: path.join(this.dataRoot, "artifacts", "automation"),
+      DOM_CAPTURE_DIR: path.join(this.dataRoot, "artifacts", "dom-captures"),
       GEMINI_IMAGE_SAVE_DIR: path.join(this.dataRoot, "artifacts", "gemini-images"),
       AUTOMATION_LOCKS_DIR: path.join(this.dataRoot, "data", "browser-locks"),
       // Writable paths for uploads / media / CDP profile / persistent
@@ -235,6 +237,9 @@ class EnvBootstrap {
     }
     if (!have.has("MEDIA_DIR")) {
       additions.push(`MEDIA_DIR=${path.join(this.dataRoot, "media")}`);
+    }
+    if (!have.has("DOM_CAPTURE_DIR")) {
+      additions.push(`DOM_CAPTURE_DIR=${path.join(this.dataRoot, "artifacts", "dom-captures")}`);
     }
     if (!have.has("CDP_PROFILE_DIR")) {
       additions.push(`CDP_PROFILE_DIR=${path.join(this.dataRoot, "chrome-cdp-profile")}`);

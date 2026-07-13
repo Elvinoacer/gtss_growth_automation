@@ -29,6 +29,11 @@ const {
 const router = express.Router();
 const { broadcast } = require("../services/socketService");
 const logger = require("../utils/logger");
+const {
+  captureDom,
+  getPlatformPages,
+  listCaptures,
+} = require("../services/domCaptureService");
 
 // SSE response storage
 const activeStreams = new Map();
@@ -48,6 +53,40 @@ router.get("/automation", (req, res) => {
 // ---------------------------------------------------------------------------
 // API Routes
 // ---------------------------------------------------------------------------
+
+// Manual DOM recorder. This intentionally only reads the user-controlled CDP
+// Chrome tab; it never clicks, types, navigates, or starts an automation job.
+router.get("/api/automation/dom-captures/tabs", async (req, res) => {
+  try {
+    res.json(await getPlatformPages(req.query.platform));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.get("/api/automation/dom-captures", async (req, res) => {
+  try {
+    res.json(await listCaptures(req.query.limit));
+  } catch (error) {
+    logger.error("DOM_CAPTURE", "Could not list DOM captures", error);
+    res.status(500).json({ error: "Could not list DOM captures" });
+  }
+});
+
+router.post("/api/automation/dom-captures", async (req, res) => {
+  try {
+    const capture = await captureDom(req.body || {});
+    logger.info("DOM_CAPTURE", "Saved manual DOM checkpoint", {
+      captureId: capture.captureId,
+      platform: capture.platform,
+      pipeline: capture.pipeline,
+      label: capture.label,
+    });
+    res.status(201).json(capture);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
 
 // Get limits and current usage
 router.get("/api/automation/limits", (req, res) => {
