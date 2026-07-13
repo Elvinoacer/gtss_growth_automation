@@ -485,7 +485,18 @@ const SELECTORS = {
   ],
   follow: ['button:has-text("Follow")', 'button[aria-label*="Follow"]'],
   pending: ['button:has-text("Pending")', 'button[aria-label*="Pending"]'],
-  more: ['button[aria-label="More actions"]', 'button[aria-label*="More"]'],
+  more: [
+    // Profile-area "More actions" button — strict selectors only.
+    // NEVER use a bare `button[aria-label*="More"]` here: it matches
+    // LinkedIn's top-nav "More" button (Home / My Network / Jobs /
+    // Messaging / Notifications / More) which opens a completely
+    // different menu (Learning, Salary, etc.) and traps the automation.
+    'button[aria-label="More actions"]',
+    'button[aria-label="More actions for this profile"]',
+    '.pv-top-card [aria-label*="More"]',
+    'section.pv-top-card button[aria-label*="More"]',
+    '.ph5.pb5 button[aria-label*="More"]',
+  ],
   actionDropdown: [
     ".artdeco-dropdown__content",
     ".artdeco-dropdown__content-inner",
@@ -1700,17 +1711,179 @@ async function closeOverlay(page, overlayMatch) {
 }
 
 /**
+ * Dismiss any open LinkedIn top-nav dropdowns — specifically the
+ * "For Business" / "My Apps" nine-dot menu and the top-nav "More" menu.
+ *
+ * Why this exists:
+ *   Users reported that the "My Apps" / "For Business" dropdown opens
+ *   every time the automation fires. This is caused either by LinkedIn's
+ *   own UI behaviour (auto-opening on navigation, hover-open menus, or
+ *   React state surviving across page loads) or by an errant click during
+ *   the DM flow. Regardless of the trigger, an open dropdown:
+ *     - covers the Message button we need to click
+ *     - intercepts keyboard events
+ *     - leaves the UI in a confusing state for the user
+ *
+ * Strategy:
+ *   1. Detect known dropdown containers by their content ("My Apps",
+ *      "Explore more for business", "Hire on LinkedIn", "Sell with
+ *      LinkedIn", etc.) — these strings only appear together in the
+ *      For Business dropdown.
+ *   2. If a dropdown is open, press Escape (the universal closer for
+ *      LinkedIn's dropdowns) and also click any visible
+ *      `aria-expanded="true"` trigger to toggle it closed.
+ *   3. As a final fallback, click the document body at a safe location
+ *      to blur any focused trigger.
+ *
+ * This is a NO-OP if no dropdown is open, so it is safe to call
+ * repeatedly.
+ */
+async function dismissLinkedInNavDropdowns(page) {
+  try {
+    // Detection: look for the unique content of the For Business / My Apps
+    // dropdown. These three strings only ever co-occur inside that menu.
+    const dropdownOpen = await page
+      .evaluate(() => {
+        const allText = document.body
+          ? (document.body.innerText || "").toLowerCase()
+          : "";
+        if (!allText) return false;
+        const hasMyApps = /\bmy apps\b/.test(allText);
+        const hasExploreBusiness = /explore more for business/.test(allText);
+        const hasHireOnLinkedin = /hire on linkedin/.test(allText);
+        // Also detect the top-nav "More" dropdown (Learning, Salary, etc.)
+        // by checking for a visible [role="menu"] that is NOT inside a
+        // messaging modal.
+        const menus = Array.from(
+          document.querySelectorAll('[role="menu"], .global-nav-dropdown, [data-control-name*="top_nav"]'),
+        );
+        const visibleTopNavMenu = menus.some((el) => {
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          if (
+            rect.width < 50 ||
+            rect.height < 50 ||
+            style.display === "none" ||
+            style.visibility === "hidden"
+          ) {
+            return false;
+          }
+          // Reject menus that live inside a messaging overlay/modal — those
+          // are handled by dismissAllMessagingUI and should not be touched
+          // here (doing so could close the composer we are trying to use).
+          if (
+            el.closest(
+              '.msg-overlay-conversation-bubble, .msg-convo-wrapper, .msg-form,' +
+                ' [role="dialog"], .artdeco-modal, #interop-outlet',
+            )
+          ) {
+            return false;
+          }
+          // Top-nav menus live near the top of the viewport.
+          return rect.top < 120;
+        });
+        return hasMyApps || hasExploreBusiness || hasHireOnLinkedin || visibleTopNavMenu;
+      })
+      .catch(() => false);
+
+    if (!dropdownOpen) return false;
+
+    // Close strategy 1: press Escape (LinkedIn's dropdowns all respond to it).
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press("Escape").catch(() => {});
+      await humanDelay(80, 150);
+      const stillOpen = await page
+        .evaluate(() => {
+          const allText = document.body
+            ? (document.body.innerText || "").toLowerCase()
+            : "";
+          if (/explore more for business/.test(allText)) return true;
+          if (/\bmy apps\b/.test(allText) && /hire on linkedin/.test(allText)) return true;
+          const menus = Array.from(document.querySelectorAll('[role="menu"]'));
+          return menus.some((el) => {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            if (
+              rect.width < 50 ||
+              rect.height < 50 ||
+              style.display === "none" ||
+              style.visibility === "hidden"
+            ) {
+              return false;
+            }
+            if (
+              el.closest(
+                '.msg-overlay-conversation-bubble, .msg-convo-wrapper, .msg-form,' +
+                  ' [role="dialog"], .artdeco-modal, #interop-outlet',
+              )
+            ) {
+              return false;
+            }
+            return rect.top < 120;
+          });
+        })
+        .catch(() => false);
+      if (!stillOpen) return true;
+    }
+
+    // Close strategy 2: toggle any aria-expanded="true" trigger in the
+    // global nav back to closed.
+    await page
+      .evaluate(() => {
+        const triggers = document.querySelectorAll(
+          '.global-nav__nav-item [aria-expanded="true"],' +
+            ' nav [aria-expanded="true"],' +
+            ' header [aria-expanded="true"]',
+        );
+        triggers.forEach((el) => {
+          try {
+            el.click();
+          } catch (_) {}
+        });
+      })
+      .catch(() => {});
+    await humanDelay(80, 150);
+
+    // Close strategy 3: click on a neutral area of the page body to blur
+    // any focused trigger.
+    await page
+      .evaluate(() => {
+        const el = document.querySelector(
+          '.core-rail, main, .scaffold-layout__main, #profile-content',
+        );
+        if (el) {
+          try {
+            el.click();
+          } catch (_) {}
+        }
+      })
+      .catch(() => {});
+
+    return true;
+  } catch (err) {
+    logger.warn(`dismissLinkedInNavDropdowns failed: ${err.message}`);
+    return false;
+  }
+}
+
+/**
  * Dismiss ALL open messaging UI — overlays, chat windows, full-page messaging.
  *
  * LinkedIn's new UI uses obfuscated class names, so we use broad strategies:
  * 1. Press Escape repeatedly to dismiss modals/overlays
  * 2. Click close buttons using broad attribute-based selectors
  * 3. Clean up any stale data-gtss-* attributes from previous runs
+ * 4. Dismiss any open top-nav "For Business" / "My Apps" dropdown
  *
  * Called before navigation to a new profile and in the finally block.
  */
 async function dismissAllMessagingUI(page) {
   try {
+    // Strategy 0: Close any open LinkedIn top-nav dropdowns first.
+    // The "For Business" / "My Apps" menu can survive navigation and
+    // intercept subsequent clicks. Dismiss it before doing anything else.
+    await dismissLinkedInNavDropdowns(page);
+
     // Strategy 1: Press Escape up to 3 times to dismiss modals/overlays
     for (let i = 0; i < 3; i++) {
       const hasVisibleOverlay = await page
@@ -2567,8 +2740,53 @@ async function verifyModalRecipient(pageOrFrame, editorLocator, expectedName) {
       .toLowerCase()
       .replace(/[^a-z]/g, "");
 
-  const expectedFirst = normalise(expectedName);
-  if (!expectedFirst) return { ok: true };
+  // Defense-in-depth: apply the same metadata denylist used by the
+  // pre-navigation and post-navigation identity guards. If the expected
+  // name is garbage (e.g. "7 other mutual connections", "500+ followers"),
+  // we cannot verify the recipient — fail CLOSED. Previously this branch
+  // returned { ok: true }, which let "7 other mutual connections" pass
+  // through as a "match" for any profile name.
+  const METADATA_DENYLIST_VERIFY = new Set([
+    "mutual", "followers", "follower", "connections", "connection",
+    "other", "and", "are", "with", "plus", "more",
+  ]);
+  const extractCleanFirst = (raw) => {
+    if (!raw) return "";
+    let s = String(raw)
+      .replace(/\s+are\s+mutual\s+connections?.*$/i, "")
+      .replace(/,?\s*\d+\s+(other\s+)?mutual\s+connections?.*$/i, "")
+      .replace(/,?\s*\d+\s+mutual$/i, "")
+      .trim();
+    if (!s) return "";
+    const andSplit = s.split(/\s+(?:&|and)\s+/i);
+    s = andSplit[andSplit.length - 1].trim();
+    if (!s) return "";
+    const tokens = s.split(/\s+/).filter(Boolean);
+    for (const t of tokens) {
+      const cleaned = t.replace(/[^a-zA-Z]/g, "").toLowerCase();
+      if (cleaned.length < 2) continue;
+      if (/^(mr|mrs|ms|dr|prof|sir|madam)$/i.test(cleaned)) continue;
+      if (METADATA_DENYLIST_VERIFY.has(cleaned)) continue;
+      return cleaned;
+    }
+    return "";
+  };
+
+  const expectedFirst = extractCleanFirst(expectedName);
+
+  // Fail CLOSED: if a leadName was supplied but we cannot extract a real
+  // first name from it, the lead data is corrupt — refuse to verify.
+  if (!expectedFirst) {
+    return {
+      ok: false,
+      reason:
+        `Cannot parse first name from leadName "${expectedName}". ` +
+        `Refusing to verify modal recipient — lead data is corrupt. ` +
+        `Send aborted by recipient-verification guard (fail-closed).`,
+      actual: null,
+      expected: expectedName,
+    };
+  }
 
   const overlayInfo = await editorLocator
     .evaluate((editor) => {
@@ -3564,6 +3782,158 @@ async function sendDirectMessage(
     // Dismiss any stale messaging UI from a previous profile's DM attempt.
     await dismissAllMessagingUI(page);
 
+    // ── 0-pre. Pre-navigation safety guards (fail BEFORE wasting a page load) ─
+    // Two cheap checks that only need `leadName` and `message`, both of which
+    // we already have in hand. Failing here saves a full navigation cycle
+    // and prevents the "navigated to wrong profile" symptom entirely.
+    {
+      const normalise0 = (name) =>
+        String(name || "")
+          .trim()
+          .split(/\s+/)[0]
+          .toLowerCase()
+          .replace(/[^a-z]/g, "");
+
+      // Garbage-name detector. Lead names that consist solely of relationship
+      // metadata (e.g. "7 other mutual connections", "500+ followers",
+      // "2 mutual", "Peter, Francis and 24 other mutual connections") are
+      // never safe to message under — we cannot tell who the actual recipient
+      // is supposed to be. The discovery layer tries to filter these out, but
+      // some slip through (legacy data, manual imports, partial scrapes).
+      // Refuse to send when the lead name is unparseable garbage.
+      const looksLikeMetadata = (raw) => {
+        const s = String(raw || "").trim().toLowerCase();
+        if (!s) return true;
+        // Pure metadata patterns — never a real person's name.
+        const metadataPatterns = [
+          /^\d+\s+(other\s+)?mutual\s+connections?$/i,
+          /^\d+\s+(other\s+)?mutual$/i,
+          /^\d+\s+followers?$/i,
+          /^\d+\s+connections?$/i,
+          /^\d+\+(st|nd|rd|th)?\s+(mutual\s+)?connections?$/i,
+          /^(mutual\s+connections?|followers?|connections?)$/i,
+          /^[\d,.+\s]+\+?\s*(mutual|followers?|connections?)?$/i,
+        ];
+        if (metadataPatterns.some((re) => re.test(s))) return true;
+        // The ONLY acceptable form of "mutual connections" in a leadName is
+        // the exact "A & B are mutual connections" / "A and B are mutual
+        // connections" pattern — the profile_url owner is always B (the
+        // second name). Anything else ("A, B and 24 other mutual
+        // connections", "X mutual", etc.) is ambiguous → garbage.
+        if (/\bmutual\s+connections?\b/i.test(s) || /\bare\s+mutual\b/i.test(s)) {
+          // Accept ONLY "NameA & NameB are mutual connections" or
+          // "NameA and NameB are mutual connections" (2 distinct names).
+          const pairMatch = s.match(
+            /^([a-z][a-z.'-]+(?:\s+[a-z][a-z.'-]+)*)\s+(?:&|and)\s+([a-z][a-z.'-]+(?:\s+[a-z][a-z.'-]+)*)\s+are\s+mutual\s+connections?$/i,
+          );
+          if (pairMatch) {
+            // The "A & B are mutual connections" form is unambiguous —
+            // NOT metadata. extractFirstName will return B.
+            return false;
+          }
+          // Any other "mutual connections" appearance is ambiguous.
+          return true;
+        }
+        return false;
+      };
+
+      // Words that must never be returned as a "first name" — they are
+      // relationship-metadata keywords that slipped through extraction.
+      const METADATA_DENYLIST = new Set([
+        "mutual", "followers", "follower", "connections", "connection",
+        "other", "and", "are", "with", "plus", "more",
+      ]);
+
+      // Extract the best-effort single first-name from a (possibly dirty)
+      // leadName. Returns "" if nothing name-like could be extracted.
+      const extractFirstName = (raw) => {
+        if (!raw) return "";
+        let s = String(raw)
+          // Strip trailing "are mutual connections..." tail.
+          .replace(/\s+are\s+mutual\s+connections?.*$/i, "")
+          // Strip trailing "X other mutual connections" fragments.
+          .replace(/,?\s*\d+\s+(other\s+)?mutual\s+connections?.*$/i, "")
+          // Strip trailing "X mutual" fragments.
+          .replace(/,?\s*\d+\s+mutual$/i, "")
+          .trim();
+        if (!s) return "";
+        // Handle "A & B" / "A and B" — last name is the canonical one
+        // (matches the profile_url's owner).
+        const andSplit = s.split(/\s+(?:&|and)\s+/i);
+        s = andSplit[andSplit.length - 1].trim();
+        if (!s) return "";
+        // Take the first whitespace-delimited token, drop honorifics and
+        // metadata keywords.
+        const tokens = s.split(/\s+/).filter(Boolean);
+        for (const t of tokens) {
+          const cleaned = t.replace(/[^a-zA-Z]/g, "").toLowerCase();
+          if (cleaned.length < 2) continue;
+          if (/^(mr|mrs|ms|dr|prof|sir|madam)$/i.test(cleaned)) continue;
+          if (METADATA_DENYLIST.has(cleaned)) continue;
+          return cleaned;
+        }
+        return "";
+      };
+
+      const intendedFirst = extractFirstName(leadName);
+
+      // Guard 0-pre-A: refuse to send when leadName is metadata garbage.
+      // We CANNOT safely verify the recipient's identity, so sending would
+      // risk messaging a stranger. Fail closed.
+      if (leadName && looksLikeMetadata(leadName)) {
+        emit(
+          "error",
+          `Refusing to send DM: lead name "${leadName}" is relationship metadata, ` +
+            `not a real person's name. The intended recipient cannot be verified. ` +
+            `Aborting BEFORE navigation to prevent sending to the wrong person.`,
+        );
+        logger.error("LinkedIn DM Safety Block — garbage lead name", {
+          profileUrl,
+          leadName,
+          messageSnippet: messageSnippet(message),
+        });
+        return {
+          outcome: "failed",
+          reason:
+            `Lead name "${leadName}" is metadata, not a person's name. ` +
+            `Send aborted by pre-navigation identity guard.`,
+        };
+      }
+
+      // Guard 0-pre-B: cross-check message greeting vs leadName BEFORE
+      // navigating. If the message says "Hi Duncan" but leadName is "Brian
+      // Example", the lead record is internally inconsistent (wrong
+      // profile_url, wrong message body, or wrong name) — abort now.
+      if (intendedFirst && message) {
+        const greetingMatch0 = message.match(
+          /^(?:hi|hey|hello|dear|good\s+(?:morning|afternoon|evening))\s*,?\s+([a-z]+)/i,
+        );
+        if (greetingMatch0) {
+          const greetingName0 = normalise0(greetingMatch0[1]);
+          if (greetingName0 && greetingName0 !== intendedFirst) {
+            emit(
+              "error",
+              `Pre-navigation mismatch: message greets "${greetingMatch0[1]}" ` +
+                `but lead is "${leadName}". Aborting BEFORE navigation — ` +
+                `lead record is internally inconsistent.`,
+            );
+            logger.error("LinkedIn DM Pre-Navigation Safety Block", {
+              profileUrl,
+              leadName,
+              greetingName: greetingMatch0[1],
+              messageSnippet: messageSnippet(message),
+            });
+            return {
+              outcome: "failed",
+              reason:
+                `Pre-navigation mismatch: greeting="${greetingMatch0[1]}" vs leadName="${leadName}". ` +
+                `Send aborted before navigation by pre-flight content guard.`,
+            };
+          }
+        }
+      }
+    }
+
     emit("info", `Navigating to ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
     // Performance: domcontentloaded already fires when the DOM is ready.
@@ -3572,9 +3942,20 @@ async function sendDirectMessage(
     await humanDelay(200, 350);
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
 
+    // ── 0-post-nav. Dismiss any LinkedIn top-nav dropdown that may have      ─
+    // auto-opened on navigation (e.g. "For Business" / "My Apps"). This is a
+    // defensive measure — regardless of what opened it, we close it before
+    // looking for the Message button.
+    await dismissLinkedInNavDropdowns(page);
+
     // ── 0a. Profile identity & message-content verification ──────────────────
     // Two safety checks before we type a single character:
     //   A. If leadName was passed, verify the profile page h1/h2 matches it.
+    //      FAIL CLOSED: if leadName was passed but we cannot parse a real
+    //      first name from it (after stripping metadata fragments), abort.
+    //      Previously this branch silently passed through, which is how
+    //      "7 other mutual connections" got verified as a match for
+    //      "Shadrack Kipkirui Korir".
     //   B. ALWAYS check the message body for a greeting name (e.g. "Hi Peter,")
     //      and verify it matches the profile page.
     {
@@ -3585,15 +3966,38 @@ async function sendDirectMessage(
           .toLowerCase()
           .replace(/[^a-z]/g, "");
 
-      // Older search-result cards sometimes persisted text such as
-      // "Dennis Mokaya & Angela Onsarigo are mutual connections" as the
-      // lead name. The profile URL still identifies Angela, so compare her
-      // name rather than needlessly refreshing the same page on retries.
-      const identityName = String(leadName || "")
-        .replace(/\s+are\s+mutual\s+connections?.*$/i, "")
-        .split("&")
-        .pop()
-        .trim() || leadName;
+      // Robust identity-name cleanup. Strips trailing "are mutual connections",
+      // "X other mutual connections", and "X mutual" fragments, then takes
+      // the last name from "A & B" / "A and B" pairs (the profile_url owner).
+      // Uses the same metadata denylist as the pre-navigation guard so both
+      // checks agree on what counts as a real first name.
+      const METADATA_DENYLIST_A = new Set([
+        "mutual", "followers", "follower", "connections", "connection",
+        "other", "and", "are", "with", "plus", "more",
+      ]);
+      const extractIdentityName = (raw) => {
+        if (!raw) return "";
+        let s = String(raw)
+          .replace(/\s+are\s+mutual\s+connections?.*$/i, "")
+          .replace(/,?\s*\d+\s+(other\s+)?mutual\s+connections?.*$/i, "")
+          .replace(/,?\s*\d+\s+mutual$/i, "")
+          .trim();
+        if (!s) return "";
+        const andSplit = s.split(/\s+(?:&|and)\s+/i);
+        s = andSplit[andSplit.length - 1].trim();
+        if (!s) return "";
+        const tokens = s.split(/\s+/).filter(Boolean);
+        for (const t of tokens) {
+          const cleaned = t.replace(/[^a-zA-Z]/g, "").toLowerCase();
+          if (cleaned.length < 2) continue;
+          if (/^(mr|mrs|ms|dr|prof|sir|madam)$/i.test(cleaned)) continue;
+          if (METADATA_DENYLIST_A.has(cleaned)) continue;
+          return cleaned;
+        }
+        return "";
+      };
+
+      const identityName = extractIdentityName(leadName) || leadName || "";
 
       let pageProfileName = null;
       try {
@@ -3607,11 +4011,34 @@ async function sendDirectMessage(
       } catch (_) {}
 
       const pageFirst = normalise(pageProfileName);
+      const expectedFirst = normalise(identityName);
 
-      // Check A: leadName vs profile page name
-      if (leadName && pageFirst) {
-        const expectedFirst = normalise(identityName);
-        if (expectedFirst && pageFirst !== expectedFirst) {
+      // Check A: leadName vs profile page name — FAIL CLOSED.
+      // If leadName was supplied but we couldn't extract a real first name
+      // from it, the lead data is corrupt — refuse to send rather than
+      // silently passing (which is the bug that let "7 other mutual
+      // connections" match "Shadrack Kipkirui Korir").
+      if (leadName && !expectedFirst) {
+        emit(
+          "error",
+          `Cannot verify identity: leadName "${leadName}" could not be parsed ` +
+            `into a real first name. Aborting to prevent sending to the wrong person.`,
+        );
+        logger.error("LinkedIn DM Safety Block — unparseable leadName", {
+          profileUrl,
+          leadName,
+          pageProfileName: (pageProfileName || "").trim(),
+        });
+        return {
+          outcome: "failed",
+          reason:
+            `Cannot parse first name from leadName "${leadName}". ` +
+            `Send aborted by identity guard (fail-closed).`,
+        };
+      }
+
+      if (leadName && expectedFirst && pageFirst) {
+        if (pageFirst !== expectedFirst) {
           emit(
             "error",
             `Profile identity mismatch: page shows "${(pageProfileName || "").trim()}" ` +
@@ -3698,6 +4125,11 @@ async function sendDirectMessage(
     }
 
     // ── 2. Click Message ──────────────────────────────────────────────────────
+    // Pre-click defense: if a LinkedIn top-nav dropdown ("For Business" /
+    // "My Apps" / top-nav "More") opened between the previous step and now,
+    // it could intercept the click. Dismiss it first.
+    await dismissLinkedInNavDropdowns(page);
+
     emit("info", `Clicking Message (${messageMatch.selector})...`);
     // DOM-level click: avoids sticky-header interception when element is near viewport top.
     await messageMatch.locator.evaluate((el) => el.click()).catch(() => {});
@@ -3707,6 +4139,11 @@ async function sendDirectMessage(
     await humanDelay(250, 400);
     await closeStrayTabs(page.context(), "linkedin").catch(() => {});
     await diag.capture(page, "after-message-click");
+
+    // Post-click defense: dismiss any top-nav dropdown that may have popped
+    // open as a side-effect of the Message click (LinkedIn's React tree
+    // sometimes re-flows and re-opens sticky nav menus).
+    await dismissLinkedInNavDropdowns(page);
 
     // ── 2a. Detect execution context: full-page / iframe / shadow DOM ────────
     //
