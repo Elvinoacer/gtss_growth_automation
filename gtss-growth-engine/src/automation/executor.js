@@ -1162,6 +1162,13 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           "no_posts",
           "skipped",
         ]);
+        const NON_RETRYABLE_FAILURE_REASONS = [
+          /profile name mismatch/i,
+          /message content mismatch/i,
+          /wrong-recipient/i,
+          /recipient-verification guard/i,
+          /modal recipient .* does not match/i,
+        ];
 
         // outcomeObj is declared in the outer (for-loop body) scope above the
         // try block, so the post-catch circuit-breaker / cooldown / cleanup
@@ -1177,7 +1184,10 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           if (
             !outcomeObj ||
             outcomeObj.outcome === "sent" ||
-            NON_RETRYABLE_OUTCOMES.has(outcomeObj.outcome)
+            NON_RETRYABLE_OUTCOMES.has(outcomeObj.outcome) ||
+            NON_RETRYABLE_FAILURE_REASONS.some((pattern) =>
+              pattern.test(String(outcomeObj.reason || "")),
+            )
           ) {
             break;
           }

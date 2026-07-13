@@ -872,6 +872,14 @@ async function extractLinkedInSearchResults(page, max) {
         .filter((line) => !/^(message|connect|follow|view profile|ad|promoted)$/i.test(line));
     }
 
+    function isLeadName(line) {
+      const value = clean(line);
+      return Boolean(value) &&
+        !/^\d+(st|nd|rd|th)?$/i.test(value) &&
+        !/\b(mutual connections?|are mutual|followers?|connections?)\b/i.test(value) &&
+        !/^(message|connect|follow|view profile|ad|promoted)$/i.test(value);
+    }
+
     const leads = [];
     const seen = new Set();
     const anchors = Array.from(document.querySelectorAll('a[href*="/in/"]'));
@@ -884,8 +892,12 @@ async function extractLinkedInSearchResults(page, max) {
       const card = cardFor(anchor);
       const lines = linesFor(card);
       const anchorText = clean(anchor.innerText);
-      const firstLine = lines.find((line) => !/^\d+(st|nd|rd|th)?$/i.test(line)) || anchorText;
-      const name = clean(firstLine.replace(/\s*•\s*(1st|2nd|3rd\+?).*$/i, ""));
+      const firstLine = lines.find(isLeadName) || anchorText;
+      const nameSource = isLeadName(anchorText) ? anchorText : firstLine;
+      const name = clean(nameSource.replace(/\s*•\s*(1st|2nd|3rd\+?).*$/i, ""));
+      // Do not turn relationship metadata into a lead. A later search pass
+      // can collect the profile once LinkedIn renders its actual name anchor.
+      if (!isLeadName(name)) continue;
       const role =
         lines.find((line) => line !== firstLine && !/mutual connection|followers|current:/i.test(line)) || "";
       const location = lines.find((line) => /kenya|nairobi|mombasa|county|city|area/i.test(line)) || "";

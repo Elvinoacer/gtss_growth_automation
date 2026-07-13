@@ -820,12 +820,18 @@ async function quickVisibleProfileAction(page, action, timeout = 900) {
                 continue;
               }
 
+              // A page can contain other visible "Message" controls (the
+              // persistent inbox, suggested people, or an old chat bubble).
+              // Only the action in the profile's own top card is eligible.
+              // The slower header-scoped fallback below covers older layouts
+              // that do not use one of these containers.
               const topCard = el.closest(
-                ".pv-top-card, .ph5.pb5, section:has(h1)",
+                ".pv-top-card, .ph5.pb5, section:has(h1), [data-view-name*='profile-card']",
               );
+              if (!topCard) continue;
               candidates.push({
                 el,
-                score: (topCard ? 100 : 0) - rect.y / 10 - rect.x / 100,
+                score: 100 - rect.y / 10 - rect.x / 100,
               });
             }
           }
@@ -1786,9 +1792,49 @@ async function dismissAllMessagingUI(page) {
 }
 
 async function detectPremiumRequired(page, { dismissIfFound = true } = {}) {
-  // 800 ms is enough — the dialog is already rendered by the time we check.
-  const premiumMatch = await firstVisible(page, SELECTORS.premiumDialog, 800);
-  if (!premiumMatch) return null;
+  // Do not search the entire page for the word "Premium". LinkedIn renders
+  // upgrades in navigation and sidebars even when a normal DM composer is
+  // open; treating that text as a block was causing false premium skips.
+  // This exact message is rendered by LinkedIn's current interop modal (as
+  // captured in the Grace Kimanthi run). Playwright locators pierce LinkedIn's
+  // open shadow root, unlike document.querySelector()/innerText.
+  const explicitPremiumMessage = page
+    .getByText(/with premium, you can message anyone/i)
+    .first();
+  const hasExplicitPremiumMessage = await explicitPremiumMessage
+    .isVisible({ timeout: 120 })
+    .catch(() => false);
+
+  const token = `gtss-premium-block-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const premiumSelector = await page
+    .evaluate((marker) => {
+      const containers = document.querySelectorAll(
+        '#interop-outlet, [data-testid="interop-shadowdom"], [role="dialog"], .artdeco-modal',
+      );
+      const visible = (el) => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return rect.width > 160 && rect.height > 80 && style.display !== 'none' && style.visibility !== 'hidden';
+      };
+      for (const container of containers) {
+        if (!visible(container)) continue;
+        const text = String(container.innerText || container.textContent || '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLowerCase();
+        const isMessagingPremiumBlock =
+          text.includes('with premium, you can message anyone') ||
+          text.includes('grow your business with premium') ||
+          text.includes('inmail credits') ||
+          (/\bpremium\b/.test(text) && /\b(message|inmail)\b/.test(text) && /\b(get|try|upgrade|required)\b/.test(text));
+        if (!isMessagingPremiumBlock) continue;
+        container.setAttribute('data-gtss-premium-block', marker);
+        return `[data-gtss-premium-block="${marker}"]`;
+      }
+      return null;
+    }, token)
+    .catch(() => null);
+  if (!hasExplicitPremiumMessage && !premiumSelector) return null;
 
   // CRITICAL: dismiss the dialog before returning. The previous comment said
   // "we are navigating away immediately, so there is no point cleaning up" —
@@ -1809,34 +1855,10 @@ async function detectPremiumRequired(page, { dismissIfFound = true } = {}) {
 
 async function detectMessagingBlocked(page, timeout = 700) {
   const deadline = Date.now() + timeout;
-  const phrases = [
-    "with premium, you can message anyone",
-    "grow your business with premium",
-    "get premium",
-    "premium required",
-    "inmail credits",
-    "you need premium",
-    "cannot message",
-    "can't message",
-    "unable to message",
-  ];
 
   while (Date.now() < deadline) {
     const premium = await detectPremiumRequired(page);
     if (premium) return premium;
-
-    const bodyText = await page
-      .locator("body")
-      .innerText({ timeout: 250 })
-      .catch(() => "");
-    const normalized = bodyText.toLowerCase();
-    const matched = phrases.find((phrase) => normalized.includes(phrase));
-    if (matched) {
-      return {
-        outcome: "premium_required",
-        reason: `LinkedIn messaging blocked (${matched})`,
-      };
-    }
 
     await humanDelay(80, 130);
   }
@@ -2593,7 +2615,11 @@ async function verifyModalRecipient(pageOrFrame, editorLocator, expectedName) {
         if (node) {
           const text = (node.textContent || node.getAttribute("title") || "")
             .trim();
-          if (text && text.length > 0 && text.length < 100) {
+        // This is LinkedIn's own account-menu label, not the person in the
+        // composer. It was causing false wrong-recipient blocks on Premium
+        // modals where no actual editor/recipient exists.
+        if (/^view\s+.+['’]s\s+profile$/i.test(text)) continue;
+        if (text && text.length > 0 && text.length < 100) {
             return { found: true, name: text, selector: sel };
           }
         }
@@ -3559,6 +3585,16 @@ async function sendDirectMessage(
           .toLowerCase()
           .replace(/[^a-z]/g, "");
 
+      // Older search-result cards sometimes persisted text such as
+      // "Dennis Mokaya & Angela Onsarigo are mutual connections" as the
+      // lead name. The profile URL still identifies Angela, so compare her
+      // name rather than needlessly refreshing the same page on retries.
+      const identityName = String(leadName || "")
+        .replace(/\s+are\s+mutual\s+connections?.*$/i, "")
+        .split("&")
+        .pop()
+        .trim() || leadName;
+
       let pageProfileName = null;
       try {
         // LinkedIn's new UI uses obfuscated class names on h1/h2 — use broad
@@ -3574,28 +3610,28 @@ async function sendDirectMessage(
 
       // Check A: leadName vs profile page name
       if (leadName && pageFirst) {
-        const expectedFirst = normalise(leadName);
+        const expectedFirst = normalise(identityName);
         if (expectedFirst && pageFirst !== expectedFirst) {
           emit(
             "error",
             `Profile identity mismatch: page shows "${(pageProfileName || "").trim()}" ` +
-              `but expected "${leadName}". Aborting to prevent wrong-person DM.`,
+              `but expected "${identityName}". Aborting to prevent wrong-person DM.`,
           );
           logger.error("LinkedIn DM Safety Block", {
             profileUrl,
-            expectedLeadName: leadName,
+            expectedLeadName: identityName,
             pageProfileName: (pageProfileName || "").trim(),
           });
           return {
             outcome: "failed",
             reason:
-              `Profile name mismatch: page="${(pageProfileName || "").trim()}" vs expected="${leadName}". ` +
+              `Profile name mismatch: page="${(pageProfileName || "").trim()}" vs expected="${identityName}". ` +
               `Send aborted by identity guard.`,
           };
         }
         emit(
           "info",
-          `Profile identity verified: "${(pageProfileName || "").trim()}" matches lead "${leadName}".`,
+          `Profile identity verified: "${(pageProfileName || "").trim()}" matches lead "${identityName}".`,
         );
       }
 
@@ -3749,6 +3785,17 @@ async function sendDirectMessage(
 
     // ── 5. Locate DM editor ───────────────────────────────────────────────────
     const editorMatch = await waitForDmEditor(msgCtx, null, 3);
+
+    // Premium's interop modal can mount after the initial context/editor
+    // probes. Check once more here, immediately before accepting any editor
+    // or reading a recipient, so a Premium lead is skipped without typing,
+    // retries, or a cooldown.
+    const blockedBeforeEditorUse = await detectMessagingBlocked(page, 900);
+    if (blockedBeforeEditorUse) {
+      emit("warn", blockedBeforeEditorUse.reason);
+      return blockedBeforeEditorUse;
+    }
+
     if (!editorMatch) {
       emit("warn", "DM editor not found — skipping profile.");
       await diag.capture(page, "dm-editor-not-found");
@@ -4160,6 +4207,7 @@ module.exports = {
     waitForEditorInteractive,
     waitForDmEditor,
     detectMessagingBlocked,
+    detectPremiumRequired,
     detectMessagingContext,
     dismissPremiumDialog,
     verifyModalRecipient,
