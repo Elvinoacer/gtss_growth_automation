@@ -275,6 +275,34 @@ router.post("/api/automation/stop-all", (_req, res) => {
   res.json({ success: true, stopped: true });
 });
 
+// GET /api/automation/active — is there an automation run currently in
+// progress? A job is "still running" as long as its automation_jobs row has
+// no completed_at (journal.js only sets completed_at once a terminal status
+// like COMPLETED/FAILED/MANUAL_INTERVENTION_REQUIRED is reached), so this
+// reflects durable state rather than any in-memory map that would reset on
+// server restart or be invisible to a second tab.
+router.get("/api/automation/active", (req, res) => {
+  const job = getDb()
+    .prepare(
+      `SELECT id, status, started_at FROM automation_jobs
+       WHERE completed_at IS NULL
+       ORDER BY started_at DESC
+       LIMIT 1`,
+    )
+    .get();
+
+  if (!job) {
+    return res.json({ active: false });
+  }
+
+  return res.json({
+    active: true,
+    jobId: job.id,
+    status: job.status,
+    startedAt: job.started_at,
+  });
+});
+
 // Skip an action
 router.patch("/api/automation/queue/:messageId/skip", (req, res) => {
   try {

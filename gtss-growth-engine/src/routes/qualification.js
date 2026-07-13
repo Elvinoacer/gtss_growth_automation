@@ -92,6 +92,27 @@ router.get("/api/qualification/stream/:jobId", (req, res) => {
   registerJobStream(req.params.jobId, res);
 });
 
+// GET /api/qualification/active — is a qualification batch currently
+// running? Backed by qualification_jobs (completed_at IS NULL means still
+// in progress), so this survives a refresh and is visible to any other
+// tab, unlike the jobId that used to live only in page-local state.
+router.get("/api/qualification/active", (req, res) => {
+  const job = getDb()
+    .prepare(
+      `SELECT id, status, started_at FROM qualification_jobs
+       WHERE completed_at IS NULL
+       ORDER BY started_at DESC
+       LIMIT 1`,
+    )
+    .get();
+
+  if (!job) {
+    return res.json({ active: false });
+  }
+
+  return res.json({ active: true, jobId: job.id, status: job.status });
+});
+
 // ---------------------------------------------------------------------------
 // API: list leads with scores
 // ---------------------------------------------------------------------------

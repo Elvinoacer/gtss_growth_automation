@@ -208,6 +208,28 @@ router.post("/dismiss", (req, res) => {
   return res.json({ updated });
 });
 
+// GET /api/discovery/active — returns the currently-running discovery job,
+// if any, so the frontend can rehydrate the "running" UI on page load or
+// refresh instead of always starting from the idle form.
+router.get("/active", (req, res) => {
+  const run = getDb()
+    .prepare(
+      "SELECT * FROM discovery_runs WHERE status = 'running' ORDER BY run_at DESC, id DESC LIMIT 1",
+    )
+    .get();
+
+  if (!run) {
+    return res.json({ active: false });
+  }
+
+  return res.json({
+    active: true,
+    jobId: run.id,
+    keyword: run.keyword,
+    platforms: parseJsonArray(run.platforms),
+  });
+});
+
 router.get("/history", (req, res) => {
   const runs = getDb()
     .prepare("SELECT * FROM discovery_runs ORDER BY run_at DESC, id DESC")

@@ -334,6 +334,52 @@ function formatEventMessage(event) {
   return JSON.stringify(event);
 }
 
+function enterRunningState(jobId, platforms, statusText) {
+  discoveryState.currentJobId = jobId;
+  // Track which platforms were scanned so the completion summary can list
+  // them after the SSE done event arrives.
+  discoveryState.currentPlatforms = [...platforms];
+  document.getElementById("discovery-form").style.display = "none";
+  document.getElementById("result-summary").classList.remove("visible");
+  document.getElementById("running-panel").classList.add("visible");
+  document.getElementById("running-text").textContent = statusText;
+  openDiscoveryStream(jobId);
+}
+
+// Called once on page load. If a discovery job is currently running (started
+// from this tab, another tab, or before a refresh), rehydrate the running
+// panel and reattach the live Socket.IO listener instead of showing the idle
+// form as if nothing were happening.
+async function resumeActiveDiscovery() {
+  try {
+    const status = await window.gtss.fetchJSON("/api/discovery/active");
+    if (!status.active) return;
+
+    const platforms =
+      Array.isArray(status.platforms) && status.platforms.length
+        ? status.platforms
+        : selectedPlatforms();
+    const platformNames = platforms
+      .map((platform) => platformLabels[platform] || window.gtss.formatPlatformLabel(platform) || platform)
+      .join(", ");
+
+    document.getElementById("live-log").innerHTML = "";
+    appendLog({
+      type: "info",
+      message: `Reconnected to discovery job ${status.jobId} (already running)`,
+    });
+    enterRunningState(
+      status.jobId,
+      platforms,
+      `Discovering leads on ${platformNames}...`,
+    );
+  } catch (error) {
+    // Non-fatal — if this check fails, the page still works as an idle
+    // discovery form; the user can just see the job's own next event.
+    console.error("Failed to check active discovery job", error);
+  }
+}
+
 async function startDiscovery(event) {
   event.preventDefault();
 
@@ -395,21 +441,16 @@ async function startDiscovery(event) {
       body: JSON.stringify({ keyword, platforms, maxLeads, ig_auto_warmup }),
     });
 
-    discoveryState.currentJobId = response.jobId;
-    // Track which platforms were scanned so the completion summary can list
-    // them after the SSE done event arrives.
-    discoveryState.currentPlatforms = [...platforms];
-    document.getElementById("discovery-form").style.display = "none";
-    document.getElementById("result-summary").classList.remove("visible");
-    document.getElementById("running-panel").classList.add("visible");
-    document.getElementById("running-text").textContent =
-      `Discovering leads on ${platforms.map((platform) => platformLabels[platform]).join(", ")}...`;
     document.getElementById("live-log").innerHTML = "";
     appendLog({
       type: "info",
       message: `Discovery job ${response.jobId} started`,
     });
-    openDiscoveryStream(response.jobId);
+    enterRunningState(
+      response.jobId,
+      platforms,
+      `Discovering leads on ${platforms.map((platform) => platformLabels[platform]).join(", ")}...`,
+    );
   } catch (error) {
     window.gtss.showToast(error.message, "error");
   }
@@ -671,21 +712,15 @@ async function rerun(id) {
       `Discovery rerun started: job ${data.jobId}`,
       "success",
     );
-    discoveryState.currentJobId = data.jobId;
     // The rerun endpoint returns the platforms that will actually be scanned
     // (taken from the original run record) so the completion summary lists
     // the correct platforms instead of whatever is currently checked.
-    if (Array.isArray(data.platforms) && data.platforms.length) {
-      discoveryState.currentPlatforms = [...data.platforms];
-    } else {
-      discoveryState.currentPlatforms = selectedPlatforms();
-    }
-    document.getElementById("discovery-form").style.display = "none";
-    document.getElementById("running-panel").classList.add("visible");
+    const rerunPlatforms =
+      Array.isArray(data.platforms) && data.platforms.length
+        ? data.platforms
+        : selectedPlatforms();
     document.getElementById("live-log").innerHTML = "";
-    document.getElementById("running-text").textContent =
-      "Re-running discovery...";
-    openDiscoveryStream(data.jobId);
+    enterRunningState(data.jobId, rerunPlatforms, "Re-running discovery...");
   } catch (error) {
     window.gtss.showToast(error.message, "error");
   }
@@ -824,4 +859,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
   loadResults().catch((error) => window.gtss.showToast(error.message, "error"));
   loadHistory().catch((error) => window.gtss.showToast(error.message, "error"));
+  resumeActiveDiscovery();
 });

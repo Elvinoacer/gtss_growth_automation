@@ -124,6 +124,27 @@ router.get("/api/messages/stream/:jobId", (req, res) => {
   registerJobStream(req.params.jobId, res);
 });
 
+// GET /api/messages/active — is a bulk message-generation job currently
+// running? Backed by message_generation_jobs (completed_at IS NULL means
+// still in progress), so this survives a refresh and is visible to any
+// other tab, unlike the jobId that used to live only in page-local state.
+router.get("/api/messages/active", (req, res) => {
+  const job = getDb()
+    .prepare(
+      `SELECT id, status, started_at FROM message_generation_jobs
+       WHERE completed_at IS NULL
+       ORDER BY started_at DESC
+       LIMIT 1`,
+    )
+    .get();
+
+  if (!job) {
+    return res.json({ active: false });
+  }
+
+  return res.json({ active: true, jobId: job.id, status: job.status });
+});
+
 // ---------------------------------------------------------------------------
 // API: List messages (with lead data)
 // ---------------------------------------------------------------------------

@@ -267,6 +267,17 @@ async function scoreLeadsBatch(leadIds, jobId, { pipelineRunId } = {}) {
   let failed = 0;
   const timedOutLeadIds = [];
 
+  db.prepare(
+    `INSERT INTO qualification_jobs (id, status, started_at)
+     VALUES (?, 'RUNNING', CURRENT_TIMESTAMP)
+     ON CONFLICT(id) DO UPDATE SET
+       status = 'RUNNING',
+       started_at = CURRENT_TIMESTAMP,
+       completed_at = NULL`,
+  ).run(String(jobId));
+
+  let finalStatus = "FAILED";
+
   emit({ type: "info", message: `Starting qualification of ${total} leads` });
 
   try {
@@ -275,6 +286,7 @@ async function scoreLeadsBatch(leadIds, jobId, { pipelineRunId } = {}) {
         emit({ type: "stopped", message: "Qualification stopped by user." });
         const summary = { processed, qualified, deprioritized, failed };
         emit({ type: "done", result: summary });
+        finalStatus = "STOPPED";
         return summary;
       }
       if (pipelineRunId) {
@@ -284,6 +296,7 @@ async function scoreLeadsBatch(leadIds, jobId, { pipelineRunId } = {}) {
             type: "warn",
             message: "Qualification aborted by pipeline abort signal.",
           });
+          finalStatus = "STOPPED";
           return { processed, qualified, deprioritized, failed };
         }
       }
@@ -374,11 +387,15 @@ async function scoreLeadsBatch(leadIds, jobId, { pipelineRunId } = {}) {
 
     const summary = { processed, qualified, deprioritized, failed };
     emit({ type: "done", result: summary });
+    finalStatus = "COMPLETED";
     return summary;
   } catch (error) {
     emit({ type: "error", message: `Batch failed: ${error.message}` });
     throw error;
   } finally {
+    db.prepare(
+      "UPDATE qualification_jobs SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).run(finalStatus, String(jobId));
     activeQualJobs.delete(String(jobId));
     closeJobStream(jobId);
   }

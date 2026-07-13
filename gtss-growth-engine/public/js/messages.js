@@ -286,6 +286,92 @@
   // Generate All (batch)
   // ----------------------------------------------------------------
 
+  // Wire the progress panel + socket listener to a job that is already
+  // running server-side. Used both right after creating a new job
+  // (generateAll) and when we discover on page load that one was already
+  // in progress (resumeActiveMessageGeneration) — so a refresh or a second
+  // tab shows the same live progress instead of the idle button.
+  function attachToMessageJob(jobId, { alreadyRunning = false } = {}) {
+    progressPanel.classList.add("visible");
+    if (alreadyRunning) {
+      progressText.textContent = "Reconnecting...";
+      progressLabelText.textContent = "Generating messages with Gemini AI...";
+    }
+
+    // Legacy SSE to trigger backend stream. If the job is already running,
+    // this just registers the stream for future events (see the
+    // /api/messages/stream handler, which only calls registerJobStream).
+    const legacySSE = window.gtss.initSSE(`/api/messages/stream/${jobId}`, () => {});
+
+    const socket = getSocket();
+    if (!socket) return;
+
+    function onMsgEvent(event) {
+      if (!event) return;
+      if (event.jobId && String(event.jobId) !== String(jobId)) return;
+
+      if (event.type === "progress") {
+        const pct =
+          event.total > 0
+            ? Math.round((event.processed / event.total) * 100)
+            : 0;
+        progressFill.style.width = `${pct}%`;
+        progressText.textContent = `${event.processed} / ${event.total} messages generated`;
+      }
+
+      if (event.type === "generated") {
+        loadMessages();
+      }
+
+      if (event.type === "done") {
+        progressFill.style.width = "100%";
+        progressLabelText.textContent = "Generation complete!";
+        progressText.textContent = `${event.result.succeeded} generated, ${event.result.failed} failed`;
+        showToast(
+          `Generated messages for ${event.result.succeeded} leads`,
+          "success",
+        );
+
+        cleanup();
+        generateAllBtn.disabled = false;
+        loadStats();
+        loadMessages();
+
+        setTimeout(() => {
+          progressPanel.classList.remove("visible");
+        }, 5000);
+      }
+
+      if (event.type === "error") {
+        showToast(`Error: ${event.message}`, "error");
+      }
+    }
+
+    function cleanup() {
+      socket.off('messages:event', onMsgEvent);
+      if (legacySSE) legacySSE.close();
+      activeSocketCleanup = null;
+    }
+
+    activeSocketCleanup = cleanup;
+    socket.on('messages:event', onMsgEvent);
+  }
+
+  // Called once on page load. If a bulk message-generation job is already
+  // running, rehydrate the progress panel and reattach the live listener
+  // instead of showing the idle Generate button as if nothing were
+  // happening.
+  async function resumeActiveMessageGeneration() {
+    try {
+      const status = await fetchJSON("/api/messages/active");
+      if (!status.active) return;
+      generateAllBtn.disabled = true;
+      attachToMessageJob(status.jobId, { alreadyRunning: true });
+    } catch (err) {
+      console.error("Failed to check active message-generation job", err);
+    }
+  }
+
   async function generateAll() {
     generateAllBtn.disabled = true;
     progressPanel.classList.add("visible");
@@ -313,61 +399,7 @@
         return;
       }
 
-      // Legacy SSE to trigger backend stream
-      const legacySSE = window.gtss.initSSE(`/api/messages/stream/${jobId}`, () => {});
-
-      const socket = getSocket();
-      if (!socket) return;
-
-      function onMsgEvent(event) {
-        if (!event) return;
-        if (event.jobId && String(event.jobId) !== String(jobId)) return;
-
-        if (event.type === "progress") {
-          const pct =
-            event.total > 0
-              ? Math.round((event.processed / event.total) * 100)
-              : 0;
-          progressFill.style.width = `${pct}%`;
-          progressText.textContent = `${event.processed} / ${event.total} messages generated`;
-        }
-
-        if (event.type === "generated") {
-          loadMessages();
-        }
-
-        if (event.type === "done") {
-          progressFill.style.width = "100%";
-          progressLabelText.textContent = "Generation complete!";
-          progressText.textContent = `${event.result.succeeded} generated, ${event.result.failed} failed`;
-          showToast(
-            `Generated messages for ${event.result.succeeded} leads`,
-            "success",
-          );
-
-          cleanup();
-          generateAllBtn.disabled = false;
-          loadStats();
-          loadMessages();
-
-          setTimeout(() => {
-            progressPanel.classList.remove("visible");
-          }, 5000);
-        }
-
-        if (event.type === "error") {
-          showToast(`Error: ${event.message}`, "error");
-        }
-      }
-
-      function cleanup() {
-        socket.off('messages:event', onMsgEvent);
-        if (legacySSE) legacySSE.close();
-        activeSocketCleanup = null;
-      }
-
-      activeSocketCleanup = cleanup;
-      socket.on('messages:event', onMsgEvent);
+      attachToMessageJob(jobId);
     } catch (err) {
       showToast(err.message, "error");
       progressPanel.classList.remove("visible");
@@ -848,6 +880,7 @@
     loadPipelineConfig().finally(() => {
       loadStats();
       loadMessages();
+      resumeActiveMessageGeneration();
     });
   });
 })();

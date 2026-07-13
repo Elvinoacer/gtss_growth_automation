@@ -462,6 +462,17 @@ async function generateAllMessages(jobId, productPitch, tone) {
   const db = getDb();
   const emit = (event) => emitJobEvent(jobId, { ...event, jobId });
 
+  db.prepare(
+    `INSERT INTO message_generation_jobs (id, status, started_at)
+     VALUES (?, 'RUNNING', CURRENT_TIMESTAMP)
+     ON CONFLICT(id) DO UPDATE SET
+       status = 'RUNNING',
+       started_at = CURRENT_TIMESTAMP,
+       completed_at = NULL`,
+  ).run(String(jobId));
+
+  let finalStatus = "FAILED";
+
   const qualifiedLeads = db
     .prepare(
       `SELECT l.* FROM leads l
@@ -515,11 +526,15 @@ async function generateAllMessages(jobId, productPitch, tone) {
     }
     const summary = { processed, succeeded, failed };
     emit({ type: "done", result: summary });
+    finalStatus = "COMPLETED";
     return summary;
   } catch (error) {
     emit({ type: "error", message: error.message });
     throw error;
   } finally {
+    db.prepare(
+      "UPDATE message_generation_jobs SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).run(finalStatus, String(jobId));
     closeJobStream(jobId);
   }
 }

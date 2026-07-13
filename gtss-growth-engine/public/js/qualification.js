@@ -398,6 +398,27 @@
     showToast("Stop signal sent.", "warn");
   }
 
+  // Called once on page load. If a qualification batch is already running
+  // (started from this tab before a refresh, or from another tab),
+  // rehydrate the progress panel and reattach the live listener instead of
+  // showing the idle Run button as if nothing were happening.
+  async function resumeActiveQualification() {
+    try {
+      const status = await fetchJSON("/api/qualification/active");
+      if (!status.active) return;
+
+      activeJobId = status.jobId;
+      runAllBtn.disabled = true;
+      stopQualificationBtn?.classList.remove("hidden");
+      progressPanel.classList.add("visible");
+      progressText.textContent = "Reconnecting...";
+      progressLabelText.textContent = "Scoring leads with Gemini AI...";
+      attachQualificationStream(status.jobId, "Qualification complete!");
+    } catch (err) {
+      console.error("Failed to check active qualification job", err);
+    }
+  }
+
   stopQualificationBtn?.addEventListener("click", stopQualification);
 
   // ----------------------------------------------------------------
@@ -839,4 +860,5 @@
   restoreFilterFromHash();
   loadStats();
   loadLeads();
+  resumeActiveQualification();
 })();

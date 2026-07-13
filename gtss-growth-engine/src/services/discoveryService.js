@@ -1003,6 +1003,10 @@ async function discoverLeads(keyword, platforms, maxLeads, jobId) {
     }
 
     if (isJobStopped(jobId)) {
+      db.prepare("UPDATE discovery_runs SET status = ? WHERE id = ?").run(
+        "stopped",
+        jobId,
+      );
       emit({ type: "stopped", jobId, message: "Discovery stopped by user." });
       closeJobStream(jobId);
       return { total: 0, new: 0, duplicates: 0, stopped: true };

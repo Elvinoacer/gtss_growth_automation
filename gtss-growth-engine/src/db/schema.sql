@@ -123,6 +123,20 @@ CREATE TABLE IF NOT EXISTS automation_jobs (
   details_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS message_generation_jobs (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  started_at DATETIME,
+  completed_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS qualification_jobs (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  started_at DATETIME,
+  completed_at DATETIME
+);
+
 CREATE TABLE IF NOT EXISTS automation_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   job_id TEXT,
