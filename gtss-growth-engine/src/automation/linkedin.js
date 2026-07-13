@@ -472,12 +472,15 @@ const SELECTORS = {
     '.artdeco-dropdown__content button:has-text("Connect")',
   ],
   message: [
+    'a[href*="/messaging/compose/"]:has-text("Message")',
+    'a[href*="/messaging/compose/"]',
+    'a:has-text("Message")',
+    'a[aria-label^="Message"]',
+    'a[href*="/messaging/thread"]',
     'button:has-text("Message")',
     'button[aria-label^="Message"]',
     '[role="button"]:has-text("Message")',
     '.artdeco-button:has-text("Message")',
-    'a[href*="/messaging/compose"]',
-    'a[href*="/messaging/thread"]',
     '[data-control-name="message"]',
   ],
   follow: ['button:has-text("Follow")', 'button[aria-label*="Follow"]'],
@@ -518,10 +521,18 @@ const SELECTORS = {
     "button.artdeco-button--primary",
   ],
   dmEditor: [
+    // Active modal specific selectors
+    '.msg-overlay-conversation-bubble--is-active .msg-form__contenteditable',
+    '.msg-overlay-conversation-bubble--is-active div[aria-label="Write a message…"]',
+    '.msg-overlay-conversation-bubble--is-active [contenteditable="true"]',
+    '.msg-overlay-conversation-bubble--is-active textarea',
+    '.msg-overlay-conversation-bubble--is-active [role="textbox"]',
+    
     // New interop Shadow DOM selectors
     '#interop-outlet [contenteditable="true"]',
     '#interop-outlet textarea',
     '#interop-outlet [role="textbox"]',
+    
     // Legacy selectors
     '.msg-form__contenteditable[contenteditable="true"]',
     ".msg-form textarea",
@@ -555,31 +566,42 @@ const SELECTORS = {
     ".artdeco-modal--type-is-messaging",
   ],
   dmSend: [
+    // Active modal specific selectors
+    '.msg-overlay-conversation-bubble--is-active .msg-form__send-btn',
+    '.msg-overlay-conversation-bubble--is-active button[type="submit"]',
+    '.msg-overlay-conversation-bubble--is-active button[aria-label*="Send" i]',
+    
     // New interop Shadow DOM selectors
     '#interop-outlet button[type="submit"]',
     '#interop-outlet button[aria-label*="Send" i]',
+    
     // ── High-confidence: LinkedIn's own stable classes ──
     "button.msg-form__send-button:not([disabled])",
     "button.msg-form__send-button[aria-label]",
     "button.msg-form__send-button",
+    
     // ── Submit buttons scoped to the message form ──
     '.msg-form__send-btn-container button[type="submit"]',
     '.msg-form button[type="submit"]',
     '.msg-form__right-actions button[type="submit"]',
+    
     // ── aria-label based (covers icon-only send buttons) ──
     'button[aria-label="Send"][type="submit"]',
     'button[aria-label="Send"]',
     'button[aria-label="Send message"]',
     'button[aria-label*="Send" i][type="submit"]',
+    
     // ── Scoped to messaging containers ──
     '.msg-overlay-conversation-bubble button[aria-label*="Send" i]',
     '[role="dialog"] button[aria-label*="Send" i]',
     '.msg-form button[aria-label*="Send" i]',
     '[role="dialog"] .msg-form button',
+    
     // ── Text-based (broad fallbacks) ──
     '.msg-form button:has-text("Send")',
     '.msg-overlay-conversation-bubble button:has-text("Send")',
     '[role="dialog"] button:has-text("Send")',
+    
     // ── Very broad fallbacks (last resort) ──
     'button:has-text("Send")',
     "button.artdeco-button--primary",
