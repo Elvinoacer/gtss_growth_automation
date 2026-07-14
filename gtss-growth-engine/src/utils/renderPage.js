@@ -69,7 +69,9 @@ function renderPage(res, pageFile, data = {}) {
   // so partials may themselves reference shell-injected markup if needed.
   html = resolveIncludes(html);
 
-  if (html.includes('</body>')) {
+  if (html.includes('</head>')) {
+    html = html.replace('</head>', `${pageDataScript}</head>`);
+  } else if (html.includes('</body>')) {
     html = html.replace('</body>', `${pageDataScript}</body>`);
   } else {
     html += pageDataScript;
