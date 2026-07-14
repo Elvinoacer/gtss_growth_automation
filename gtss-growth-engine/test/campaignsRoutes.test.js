@@ -221,6 +221,57 @@ async function runCampaignsRoutesTests() {
   console.log("✅ POST manual run triggers & lock protection — PASS");
 
   // ───────────────────────────────────────────────────────────────────────────
+  // TEST 8: POST /api/campaigns/stop-queue — reclaim stuck running jobs
+  // ───────────────────────────────────────────────────────────────────────────
+  console.log("Testing POST /api/campaigns/stop-queue...");
+
+  // Plant a stuck running connection + DM job for this campaign
+  db.prepare(
+    `UPDATE connection_jobs SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE campaign_id = ?`,
+  ).run(createdCampaign.id);
+  db.prepare(
+    `UPDATE dm_jobs SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE campaign_id = ?`,
+  ).run(createdCampaign.id);
+
+  // Also stick the advisory lock so stop can clear it when no runner is live
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES ('campaign_queue_lock', 'true')
+     ON CONFLICT(key) DO UPDATE SET value = 'true'`,
+  ).run();
+
+  const resStop = await fetch(`${BASE_URL}/api/campaigns/stop-queue`, { method: "POST" });
+  assert.strictEqual(resStop.status, 200, "stop-queue should return 200");
+  const bodyStop = await resStop.json();
+  assert.strictEqual(bodyStop.success, true);
+  assert.strictEqual(bodyStop.stopped, true);
+  assert(bodyStop.reclaimed, "reclaimed counts should be present");
+  assert(bodyStop.reclaimed.connectionJobs >= 1, "Should reclaim stuck connection jobs");
+  assert(bodyStop.reclaimed.dmJobs >= 1, "Should reclaim stuck DM jobs");
+
+  const connAfterStop = db
+    .prepare(`SELECT status FROM connection_jobs WHERE campaign_id = ?`)
+    .get(createdCampaign.id);
+  const dmAfterStop = db
+    .prepare(`SELECT status FROM dm_jobs WHERE campaign_id = ?`)
+    .get(createdCampaign.id);
+  assert.strictEqual(connAfterStop.status, "pending", "Stuck connection job must return to pending");
+  assert.strictEqual(dmAfterStop.status, "pending", "Stuck DM job must return to pending");
+
+  const lockAfterStop = db
+    .prepare(`SELECT value FROM settings WHERE key = 'campaign_queue_lock'`)
+    .get();
+  assert.strictEqual(lockAfterStop.value, "false", "Stuck queue lock should be cleared when no runner is live");
+
+  // Status endpoint should report not busy after stop/clear
+  const resLock = await fetch(`${BASE_URL}/api/campaigns/queue-status/lock`);
+  assert.strictEqual(resLock.status, 200);
+  const bodyLock = await resLock.json();
+  assert.strictEqual(bodyLock.busy, false);
+  assert.strictEqual(bodyLock.locked, false);
+
+  console.log("✅ POST /api/campaigns/stop-queue reclaim + lock clear — PASS");
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Database cleanup
   // ───────────────────────────────────────────────────────────────────────────
   db.pragma("foreign_keys = OFF");

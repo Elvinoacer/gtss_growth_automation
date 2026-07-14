@@ -44,8 +44,16 @@ const lockText = document.getElementById("lock-text");
 const pauseResumeBtn = document.getElementById("pause-resume-btn");
 const pauseResumeIcon = document.getElementById("pause-resume-icon");
 const pauseResumeText = document.getElementById("pause-resume-text");
+const stopQueueBtn = document.getElementById("stop-queue-btn");
+const stopQueueIcon = document.getElementById("stop-queue-icon");
+const stopQueueText = document.getElementById("stop-queue-text");
 const runConnectionBtn = document.getElementById("run-connection-btn");
 const runDmBtn = document.getElementById("run-dm-btn");
+
+// True while the campaign connection/DM queue is busy (lock or in-progress).
+let queueBusy = false;
+// Prevents double-click storms while a stop request is in flight.
+let isStoppingQueue = false;
 
 // ── DOM Refs: progress widgets ──────────────────────────────────────────────
 const connectionsCircle = document.getElementById("connections-svg-circle");

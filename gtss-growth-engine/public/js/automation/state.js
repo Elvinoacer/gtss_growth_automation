@@ -19,46 +19,46 @@
  *     controls, captcha banner / manual open / manual resume)
  */
 
-const { fetchJSON, showToast, initSocket, getSocket } = window.gtss;
+var { fetchJSON, showToast, initSocket, getSocket } = window.gtss;
 
 // State
-let activeJobId = null;
-let isAutomationRunning = false;
-let socketSub = null;
-let sessionStatus = {}; // { platform: bool } — true = session active
-let cachedLimits = null; // last loaded limits object, used for re-render
+var activeJobId = null;
+var isAutomationRunning = false;
+var socketSub = null;
+var sessionStatus = {}; // { platform: bool } — true = session active
+var cachedLimits = null; // last loaded limits object, used for re-render
 
 // DOM Refs
-const runAllBtn = document.getElementById("run-all-btn");
-const stopBtn = document.getElementById("stop-btn");
-const queueBody = document.getElementById("queue-body");
-const logContainer = document.getElementById("log-container");
-const logAutoScroll = document.getElementById("log-autoscroll");
-const logClearBtn = document.getElementById("log-clear-btn");
-const emptyState = document.getElementById("empty-state");
-const limitCards = document.getElementById("limit-cards");
-const queueSummary = document.getElementById("queue-summary");
-const postRunBanner = document.getElementById("post-run-banner");
-const postRunBannerText = document.getElementById("post-run-banner-text");
-const postRunBannerMeta = document.getElementById("post-run-banner-meta");
-const retryAllBtn = document.getElementById("retry-all-btn");
-const retrySelectedBtn = document.getElementById("retry-selected-btn");
-const queueSelectAll = document.getElementById("queue-select-all");
-const retryWaitingBtn = document.getElementById("retry-waiting-btn");
-const retryBlockedBtn = document.getElementById("retry-blocked-btn");
-const domCapturePlatform = document.getElementById("dom-capture-platform");
-const domCapturePipeline = document.getElementById("dom-capture-pipeline");
-const domCaptureTab = document.getElementById("dom-capture-tab");
-const domCaptureLabel = document.getElementById("dom-capture-label");
-const domCaptureRefreshTabs = document.getElementById("dom-capture-refresh-tabs");
-const domCaptureSave = document.getElementById("dom-capture-save");
-const domCaptureStatus = document.getElementById("dom-capture-status");
-const domCaptureList = document.getElementById("dom-capture-list");
-const domCaptureRefreshList = document.getElementById("dom-capture-refresh-list");
+var runAllBtn = document.getElementById("run-all-btn");
+var stopBtn = document.getElementById("stop-btn");
+var queueBody = document.getElementById("queue-body");
+var logContainer = document.getElementById("log-container");
+var logAutoScroll = document.getElementById("log-autoscroll");
+var logClearBtn = document.getElementById("log-clear-btn");
+var emptyState = document.getElementById("empty-state");
+var limitCards = document.getElementById("limit-cards");
+var queueSummary = document.getElementById("queue-summary");
+var postRunBanner = document.getElementById("post-run-banner");
+var postRunBannerText = document.getElementById("post-run-banner-text");
+var postRunBannerMeta = document.getElementById("post-run-banner-meta");
+var retryAllBtn = document.getElementById("retry-all-btn");
+var retrySelectedBtn = document.getElementById("retry-selected-btn");
+var queueSelectAll = document.getElementById("queue-select-all");
+var retryWaitingBtn = document.getElementById("retry-waiting-btn");
+var retryBlockedBtn = document.getElementById("retry-blocked-btn");
+var domCapturePlatform = document.getElementById("dom-capture-platform");
+var domCapturePipeline = document.getElementById("dom-capture-pipeline");
+var domCaptureTab = document.getElementById("dom-capture-tab");
+var domCaptureLabel = document.getElementById("dom-capture-label");
+var domCaptureRefreshTabs = document.getElementById("dom-capture-refresh-tabs");
+var domCaptureSave = document.getElementById("dom-capture-save");
+var domCaptureStatus = document.getElementById("dom-capture-status");
+var domCaptureList = document.getElementById("dom-capture-list");
+var domCaptureRefreshList = document.getElementById("dom-capture-refresh-list");
 
-const captchaBanner = document.getElementById("captcha-banner");
-const captchaPlatformText = document.getElementById("captcha-platform-text");
-const manualOpenBtn = document.getElementById("manual-open-btn");
-const manualResumeBtn = document.getElementById("manual-resume-btn");
-let currentCaptchaPlatform = null;
-let selectedRetryIds = new Set();
+var captchaBanner = document.getElementById("captcha-banner");
+var captchaPlatformText = document.getElementById("captcha-platform-text");
+var manualOpenBtn = document.getElementById("manual-open-btn");
+var manualResumeBtn = document.getElementById("manual-resume-btn");
+var currentCaptchaPlatform = null;
+var selectedRetryIds = new Set();

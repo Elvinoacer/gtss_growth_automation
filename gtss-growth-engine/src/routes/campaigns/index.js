@@ -27,7 +27,7 @@
  *   jobs.js                — GET /:id/connection-jobs  GET /:id/dm-jobs
  *   stream.js              — GET /:id/stream (SSE)
  *   queueControls.js       — POST /run-connection-queue  POST /run-dm-queue
- *                            GET /queue-status/lock
+ *                            POST /stop-queue  GET /queue-status/lock
  *   pageRouter.js          — buildPageRouter() → /campaigns + /campaigns/:id
  *   index.js               — this file
  */
@@ -42,6 +42,9 @@ const {
   resumeCampaign,
 } = require("../../campaign/campaignOrchestrator");
 const { isCampaignQueueInProgress, __private } = require("../../jobs/backgroundJobs");
+const { stopConnectionQueue } = require("../../campaign/connectionQueue");
+const { stopDmQueue } = require("../../campaign/dmQueue");
+const { reclaimStuckRunningJobs } = require("../../campaign/utils/reclaimStuckJobs");
 const { registerCampaignStream } = require("../../campaign/utils/campaignUtils");
 const logger = require("../../utils/logger");
 const { broadcast } = require("../../services/socketService");
@@ -61,6 +64,9 @@ const requireDeps = () => ({
   resumeCampaign,
   isCampaignQueueInProgress,
   __private,
+  stopConnectionQueue,
+  stopDmQueue,
+  reclaimStuckRunningJobs,
   registerCampaignStream,
   logger,
   broadcast,

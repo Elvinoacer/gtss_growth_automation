@@ -37,9 +37,21 @@ async function sendConnectionRequest(page, profileUrl, message, emit) {
     );
     const isPending = await isAnyVisibleOnProfile(page, SELECTORS.pending);
 
+    // Message button = already 1st-degree. Promote as already connected so the
+    // campaign can advance to DM without re-sending a connect invite.
+    if (messageBtnVisible) {
+      emit("info", "Message button visible — already connected (1st degree).");
+      return { outcome: "already_connected" };
+    }
+
+    // Pending invite is NOT the same as accepted. Map to "sent" so the
+    // connection job stays in the invite-out state and DMs wait for accept.
     if (isPending) {
       emit("warn", "Connection request is already pending.");
-      return { outcome: "already_connected" };
+      return {
+        outcome: "sent",
+        reason: "Connection request already pending",
+      };
     }
 
     let connectMatch = await findProfileAction(

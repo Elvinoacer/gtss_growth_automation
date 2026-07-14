@@ -38,6 +38,10 @@ const { normalizeProfileUrl, buildProfileUrlVariants } = require("./profileUrlDe
 const { isWithinActiveWindow } = require("./activeWindow");
 const { sleep } = require("./interruptibleSleep");
 const { ensureDmJobsSchema } = require("./schemaInit");
+const {
+  reclaimStuckRunningJobs,
+  reclaimJobIfStillRunning,
+} = require("../utils/reclaimStuckJobs");
 
 // ── SCHEMA AUTO-UPGRADE (DEFENSIVE STARTUP INITIALIZATION) ───────────────────
 // Runs at module load, exactly like the original dmQueue.js top-level block.
@@ -60,12 +64,37 @@ async function processDmQueue(page, options = {}) {
     skipped: 0,
     blocked: 0,
     sessionExpired: 0,
+    reclaimed: 0,
+    stopped: false,
   };
 
   const maxRetries = options.maxRetries || 5;
   const expiredPlatforms = new Set();
   const maxDmsPerRun = options.maxDmsPerRun;
   let dmsSentThisRun = 0;
+
+  // Orphan recovery: jobs left `running` by a prior stop/crash.
+  try {
+    const reclaimed = reclaimStuckRunningJobs(db, {
+      reason: "Reclaimed at DM-queue run start (prior run interrupted)",
+    });
+    report.reclaimed = reclaimed.dmJobs;
+    if (reclaimed.dmJobs > 0) {
+      queueLog(
+        "warn",
+        "dm_queue",
+        "SYSTEM",
+        `Reclaimed ${reclaimed.dmJobs} DM job(s) stuck in running.`,
+      );
+    }
+  } catch (err) {
+    queueLog(
+      "warn",
+      "dm_queue",
+      "SYSTEM",
+      `Startup reclaim of stuck DM jobs failed: ${err.message}`,
+    );
+  }
 
   queueLog(
     "info",
@@ -119,11 +148,12 @@ async function processDmQueue(page, options = {}) {
 
   for (const job of eligibleJobs) {
     if (isDmQueueStopped()) {
+      report.stopped = true;
       queueLog(
         "info",
         "dm_queue",
         "SYSTEM",
-        "DM queue stopped by user (stop button on automation page).",
+        "DM queue stopped by user (Stop Queue).",
       );
       break;
     }
@@ -235,12 +265,18 @@ async function processDmQueue(page, options = {}) {
       }
 
       // ── 3. LINKEDIN CONNECTION GATING (WAITING BEHAVIOR) ────────────────────
+      // Allow DMs when connection is accepted OR already sent (invite out —
+      // the recipient may have accepted since). Only hard-block when the
+      // connection job is still pending/failed/missing (invite never went out).
+      // A live "not_connected" outcome from the DM adapter will re-snooze.
       if (normPlatform === "linkedin") {
-        const isAccepted =
-          job.connection_job_status === "accepted" ||
+        const connStatus = String(job.connection_job_status || "").toLowerCase();
+        const isReady =
+          connStatus === "accepted" ||
+          connStatus === "sent" ||
           job.lead_status === "replied" ||
           job.lead_status === "messaged";
-        if (!isAccepted) {
+        if (!isReady) {
           // Snooze/postpone by standard check interval (e.g. 6 hours)
           const snoozeIntervalHours = options.snoozeIntervalHours || 6;
           const snoozeUntil = new Date(
@@ -258,7 +294,7 @@ async function processDmQueue(page, options = {}) {
               "info",
               "dm_queue",
               job.id,
-              `LinkedIn connection invite not accepted yet. Snoozing DM check for ${snoozeIntervalHours} hours.`,
+              `LinkedIn connection not ready yet (status: ${connStatus || "none"}). Snoozing DM check for ${snoozeIntervalHours} hours.`,
             );
           } catch (err) {
             queueLog(
@@ -670,7 +706,9 @@ async function processDmQueue(page, options = {}) {
       let res;
       for (let attempt = 1; attempt <= MAX_INLOOP_RETRIES + 1; attempt++) {
         if (isDmQueueStopped()) {
-          res = { outcome: "skipped", error: "Stopped by user", metadata: {}, retryable: false };
+          // Never map stop → "skipped" (skipped was previously persisted as
+          // status=sent, which falsely completed the job on stop).
+          res = { outcome: "stopped", error: "Stopped by user", metadata: {}, retryable: false };
           break;
         }
         try {
@@ -695,6 +733,7 @@ async function processDmQueue(page, options = {}) {
         if (
           !res ||
           res.outcome === "sent" ||
+          res.outcome === "stopped" ||
           NON_RETRYABLE_OUTCOMES.has(res.outcome)
         ) {
           break;
@@ -708,13 +747,71 @@ async function processDmQueue(page, options = {}) {
             `Attempt ${attempt} failed (${res.outcome}: ${res.error || ""}). Retrying (${attempt}/${MAX_INLOOP_RETRIES})...`,
           );
           await sleep(2000 + Math.floor(Math.random() * 1500));
-          if (isDmQueueStopped()) break;
+          if (isDmQueueStopped()) {
+            res = { outcome: "stopped", error: "Stopped by user", metadata: {}, retryable: false };
+            break;
+          }
         }
       }
 
       // ── 9. ATOMIC MULTI-TABLE TRANSACTION STATE UPDATE ──────────────────────
       try {
-        if (res.outcome === "sent") {
+        if (res.outcome === "stopped") {
+          db.prepare(
+            `
+            UPDATE dm_jobs
+            SET status = 'pending',
+                error_message = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `,
+          ).run(res.error || "Stopped by user", job.id);
+          report.stopped = true;
+          queueLog(
+            "warn",
+            "dm_queue",
+            job.id,
+            "DM job reclaimed to pending after user stop.",
+          );
+        } else if (res.outcome === "not_connected") {
+          // LinkedIn invite not accepted yet (or Message button unavailable).
+          // Re-snooze — do NOT mark as sent/skipped.
+          const snoozeIntervalHours = options.snoozeIntervalHours || 6;
+          const snoozeUntil = new Date(
+            Date.now() + snoozeIntervalHours * 60 * 60 * 1000,
+          ).toISOString();
+          db.prepare(
+            `
+            UPDATE dm_jobs
+            SET status = 'scheduled',
+                scheduled_at = ?,
+                error_message = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `,
+          ).run(
+            snoozeUntil,
+            res.error || "Not connected yet — waiting for acceptance",
+            job.id,
+          );
+          recordCampaignEvent(
+            db,
+            job.campaign_id,
+            job.lead_id,
+            "dm_waiting_connection",
+            {
+              error: res.error,
+              snooze_until: snoozeUntil,
+            },
+          );
+          queueLog(
+            "info",
+            "dm_queue",
+            job.id,
+            `Not connected yet — snoozing DM for ${snoozeIntervalHours}h.`,
+          );
+          report.skipped++;
+        } else if (res.outcome === "sent") {
           db.transaction(() => {
             // Update DM Job Status
             db.prepare(
@@ -724,6 +821,17 @@ async function processDmQueue(page, options = {}) {
               WHERE id = ?
             `,
             ).run(job.id);
+
+            // Successful LinkedIn DM implies 1st-degree — promote connection job.
+            if (normPlatform === "linkedin") {
+              db.prepare(
+                `
+                UPDATE connection_jobs
+                SET status = 'accepted', updated_at = CURRENT_TIMESTAMP
+                WHERE campaign_id = ? AND lead_id = ? AND status IN ('sent', 'pending', 'running')
+              `,
+              ).run(job.campaign_id, job.lead_id);
+            }
 
             // Update Lead Outreach Stage Status
             db.prepare(
@@ -1031,6 +1139,23 @@ async function processDmQueue(page, options = {}) {
           job.id,
           `Failed to persist transaction outcomes in database: ${err.message}`,
         );
+      } finally {
+        // Safety net: never leave a job permanently stuck in `running`.
+        if (
+          reclaimJobIfStillRunning(
+            db,
+            "dm",
+            job.id,
+            "Outcome not finalized; reclaimed to pending after DM attempt",
+          )
+        ) {
+          queueLog(
+            "warn",
+            "dm_queue",
+            job.id,
+            "Job was still running after outcome handling — reclaimed to pending.",
+          );
+        }
       }
 
       // ── 10. STRAY-TAB CLEANUP (always, before any continue) ──────────────
@@ -1074,6 +1199,7 @@ async function processDmQueue(page, options = {}) {
         "no_posts",
         "skipped",
         "session_required",
+        "stopped",
       ]);
       const lastOutcome = res?.outcome;
       const shouldSkipCooldown =

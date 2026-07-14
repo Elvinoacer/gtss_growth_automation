@@ -21,92 +21,92 @@
  *     settings refs)
  */
 
-const { fetchJSON, showToast, getSocket } = window.gtss;
+var { fetchJSON, showToast, getSocket } = window.gtss;
 
 // ---- State ----
-let currentFilter = "all";
-let currentPlatform = "";
-let currentSearch = "";
-let currentPage = 1;
-const pageLimit = 20;
-let totalMessages = 0;
-let cachedMessages = [];
-let activeSocketCleanup = null;
-let charLimits = {};
-let platformCatalog = [];
-let platformLabels = {};
-let defaultPlatform = "";
-let pipelineConfig = {};
+var currentFilter = "all";
+var currentPlatform = "";
+var currentSearch = "";
+var currentPage = 1;
+var pageLimit = 20;
+var totalMessages = 0;
+var cachedMessages = [];
+var activeSocketCleanup = null;
+var charLimits = {};
+var platformCatalog = [];
+var platformLabels = {};
+var defaultPlatform = "";
+var pipelineConfig = {};
 
 // Settings state
-let selectedTone = "friendly";
-let selectedProduct = "Restaurant Manager";
+var selectedTone = "friendly";
+var selectedProduct = "Restaurant Manager";
 
 // Modal state
-let modalLeadId = null;
-let modalVariantA = null; // { id, body }
-let modalVariantB = null;
+var modalLeadId = null;
+var modalVariantA = null; // { id, body }
+var modalVariantB = null;
 
 // ---- DOM refs ----
-const statPending = document.getElementById("stat-pending");
-const statApproved = document.getElementById("stat-approved");
-const statSent = document.getElementById("stat-sent");
-const statSkipped = document.getElementById("stat-skipped");
-const statFollowups = document.getElementById("stat-followups");
-const statUnscoredQualified = document.getElementById(
+var statPending = document.getElementById("stat-pending");
+var statApproved = document.getElementById("stat-approved");
+var statSent = document.getElementById("stat-sent");
+var statSkipped = document.getElementById("stat-skipped");
+var statFollowups = document.getElementById("stat-followups");
+var statUnscoredQualified = document.getElementById(
   "stat-unscored-qualified",
 );
-const unscoredQualifiedNote = document.getElementById(
+var unscoredQualifiedNote = document.getElementById(
   "unscored-qualified-note",
 );
-const tabPending = document.getElementById("tab-pending");
-const tabApprovedCount = document.getElementById("tab-approved");
-const tabSent = document.getElementById("tab-sent");
-const tabFollowups = document.getElementById("tab-followups");
+var tabPending = document.getElementById("tab-pending");
+var tabApprovedCount = document.getElementById("tab-approved");
+var tabSent = document.getElementById("tab-sent");
+var tabFollowups = document.getElementById("tab-followups");
 
-const generateAllBtn = document.getElementById("generate-all-btn");
-const progressPanel = document.getElementById("progress-panel");
-const progressFill = document.getElementById("progress-fill");
-const progressText = document.getElementById("progress-text");
-const progressLabelText = document.getElementById("progress-label-text");
+var generateAllBtn = document.getElementById("generate-all-btn");
+var progressPanel = document.getElementById("progress-panel");
+var progressFill = document.getElementById("progress-fill");
+var progressText = document.getElementById("progress-text");
+var progressLabelText = document.getElementById("progress-label-text");
 
-const filterTabs = document.getElementById("filter-tabs");
-const platformFilter = document.getElementById("platform-filter");
-const searchInput = document.getElementById("search-input");
-const totalBadge = document.getElementById("total-badge");
-const msgBody = document.getElementById("msg-body");
-const emptyState = document.getElementById("empty-state");
-const prevPage = document.getElementById("prev-page");
-const nextPage = document.getElementById("next-page");
-const pageLabel = document.getElementById("page-label");
+var filterTabs = document.getElementById("filter-tabs");
+var platformFilter = document.getElementById("platform-filter");
+var searchInput = document.getElementById("search-input");
+var totalBadge = document.getElementById("total-badge");
+var msgBody = document.getElementById("msg-body");
+var emptyState = document.getElementById("empty-state");
+var prevPage = document.getElementById("prev-page");
+var nextPage = document.getElementById("next-page");
+var pageLabel = document.getElementById("page-label");
 
 // Modal refs
-const modalOverlay = document.getElementById("modal-overlay");
-const modalTitle = document.getElementById("modal-title");
-const modalSub = document.getElementById("modal-sub");
-const modalClose = document.getElementById("modal-close");
-const modalCloseBtn = document.getElementById("modal-close-btn");
-const ctxName = document.getElementById("ctx-name");
-const ctxRole = document.getElementById("ctx-role");
-const ctxCompany = document.getElementById("ctx-company");
-const ctxPlatform = document.getElementById("ctx-platform");
-const ctxScore = document.getElementById("ctx-score");
-const ctxReasoning = document.getElementById("ctx-reasoning");
-const ctxNotes = document.getElementById("ctx-notes");
-const variantATextarea = document.getElementById("variant-a-textarea");
-const variantBTextarea = document.getElementById("variant-b-textarea");
-const charCounterA = document.getElementById("char-counter-a");
-const charCounterB = document.getElementById("char-counter-b");
-const modalApproveA = document.getElementById("modal-approve-a");
-const modalApproveB = document.getElementById("modal-approve-b");
-const modalRegenerate = document.getElementById("modal-regenerate");
-const modalSkip = document.getElementById("modal-skip");
-const regenLoading = document.getElementById("regen-loading");
+var modalOverlay = document.getElementById("modal-overlay");
+var modalTitle = document.getElementById("modal-title");
+var modalSub = document.getElementById("modal-sub");
+var modalClose = document.getElementById("modal-close");
+var modalCloseBtn = document.getElementById("modal-close-btn");
+var ctxName = document.getElementById("ctx-name");
+var ctxRole = document.getElementById("ctx-role");
+var ctxCompany = document.getElementById("ctx-company");
+var ctxPlatform = document.getElementById("ctx-platform");
+var ctxScore = document.getElementById("ctx-score");
+var ctxReasoning = document.getElementById("ctx-reasoning");
+var ctxNotes = document.getElementById("ctx-notes");
+var variantATextarea = document.getElementById("variant-a-textarea");
+var variantBTextarea = document.getElementById("variant-b-textarea");
+var charCounterA = document.getElementById("char-counter-a");
+var charCounterB = document.getElementById("char-counter-b");
+var modalApproveA = document.getElementById("modal-approve-a");
+var modalApproveB = document.getElementById("modal-approve-b");
+var modalRegenerate = document.getElementById("modal-regenerate");
+var modalSkip = document.getElementById("modal-skip");
+var regenLoading = document.getElementById("regen-loading");
 
 // Settings refs
-const settingsToggle = document.getElementById("settings-toggle");
-const settingsPanel = document.getElementById("settings-panel");
-const toneGroup = document.getElementById("tone-group");
-const productGroup = document.getElementById("product-group");
-const customPitchGroup = document.getElementById("custom-pitch-group");
-const customPitchInput = document.getElementById("custom-pitch-input");
+var settingsToggle = document.getElementById("settings-toggle");
+var settingsPanel = document.getElementById("settings-panel");
+var toneGroup = document.getElementById("tone-group");
+var productGroup = document.getElementById("product-group");
+var customPitchGroup = document.getElementById("custom-pitch-group");
+var customPitchInput = document.getElementById("custom-pitch-input");

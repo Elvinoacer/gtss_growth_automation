@@ -42,6 +42,10 @@ const { isWithinActiveWindow } = require("./activeWindow");
 const { sleep } = require("./interruptibleSleep");
 const { ensureConnectionJobsSchema } = require("./schemaInit");
 const { handleConnectionOutcome } = require("./outcomeHandlers");
+const {
+  reclaimStuckRunningJobs,
+  reclaimJobIfStillRunning,
+} = require("../utils/reclaimStuckJobs");
 
 // ── SCHEMA AUTO-UPGRADE (DEFENSIVE STARTUP INITIALIZATION) ───────────────────
 // Runs at module load, exactly like the original connectionQueue.js top-level
@@ -71,10 +75,36 @@ async function processConnectionQueue(page, options = {}) {
     skipped: 0,
     blocked: 0,
     sessionExpired: 0,
+    reclaimed: 0,
+    stopped: false,
   };
 
   const maxRetries = options.maxRetries || 5;
   const expiredPlatforms = new Set();
+
+  // Orphan recovery: any job still `running` when a new batch starts was
+  // abandoned by a prior stop/crash. Make them eligible again.
+  try {
+    const reclaimed = reclaimStuckRunningJobs(db, {
+      reason: "Reclaimed at connection-queue run start (prior run interrupted)",
+    });
+    report.reclaimed = reclaimed.connectionJobs;
+    if (reclaimed.connectionJobs > 0) {
+      queueLog(
+        "warn",
+        "connection_queue",
+        "SYSTEM",
+        `Reclaimed ${reclaimed.connectionJobs} connection job(s) stuck in running.`,
+      );
+    }
+  } catch (err) {
+    queueLog(
+      "warn",
+      "connection_queue",
+      "SYSTEM",
+      `Startup reclaim of stuck connection jobs failed: ${err.message}`,
+    );
+  }
 
   queueLog(
     "info",
@@ -128,11 +158,12 @@ async function processConnectionQueue(page, options = {}) {
 
   for (const job of eligibleJobs) {
     if (isConnectionQueueStopped()) {
+      report.stopped = true;
       queueLog(
         "info",
         "connection_queue",
         "SYSTEM",
-        "Connection queue stopped by user (stop button on automation page).",
+        "Connection queue stopped by user (Stop Queue).",
       );
       break;
     }
@@ -367,6 +398,23 @@ async function processConnectionQueue(page, options = {}) {
           job.id,
           `Failed to persist transaction outcomes in database: ${err.message}`,
         );
+      } finally {
+        // Safety net: never leave a job permanently stuck in `running`.
+        if (
+          reclaimJobIfStillRunning(
+            db,
+            "connection",
+            job.id,
+            "Outcome not finalized; reclaimed to pending after connection attempt",
+          )
+        ) {
+          queueLog(
+            "warn",
+            "connection_queue",
+            job.id,
+            "Job was still running after outcome handling — reclaimed to pending.",
+          );
+        }
       }
 
       // ── 7. STRAY-TAB CLEANUP (always, before any continue) ──────────────

@@ -18,6 +18,7 @@ const {
   getNextDayBusinessHourWindow,
   queueLog
 } = require("./utils/campaignUtils");
+const { reclaimStuckRunningJobs } = require("./utils/reclaimStuckJobs");
 
 /**
  * Checks if current hour matches target platform active execution hours.
@@ -183,6 +184,25 @@ function pauseCampaign(campaignId) {
 
   db.prepare("UPDATE campaigns SET status = 'paused', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(campaignId);
 
+  // Reclaim any in-flight jobs for THIS campaign so they don't sit forever
+  // in `running` if the worker was mid-action when the operator paused.
+  // The live queue loop also re-checks campaign status between jobs and
+  // will skip further work for this campaign.
+  let reclaimed = { connectionJobs: 0, dmJobs: 0 };
+  try {
+    reclaimed = reclaimStuckRunningJobs(db, {
+      campaignId,
+      reason: "Campaign paused by operator — job reclaimed to pending",
+    });
+  } catch (err) {
+    queueLog(
+      "warn",
+      "orchestrator",
+      campaignId,
+      `Failed to reclaim running jobs on pause: ${err.message}`,
+    );
+  }
+
   const hasMessagesTable = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages'")
     .get();
@@ -199,10 +219,16 @@ function pauseCampaign(campaignId) {
   }
 
   recordCampaignEvent(db, campaignId, null, "campaign_paused", {
-    previous_status: campaign.status
+    previous_status: campaign.status,
+    reclaimed,
   });
 
-  queueLog("info", "orchestrator", campaignId, "Campaign successfully paused.");
+  queueLog(
+    "info",
+    "orchestrator",
+    campaignId,
+    `Campaign successfully paused (reclaimed conn=${reclaimed.connectionJobs} dm=${reclaimed.dmJobs}).`,
+  );
 }
 
 /**

@@ -38,6 +38,11 @@ function setupEventListeners() {
   // Pause / Resume outreach click handler
   pauseResumeBtn.addEventListener("click", handleTogglePause);
 
+  // Stop in-flight connection/DM queue
+  if (stopQueueBtn) {
+    stopQueueBtn.addEventListener("click", handleStopQueue);
+  }
+
   // Manual outreach triggers click handlers
   runConnectionBtn.addEventListener("click", () => handleTriggerQueue("connection"));
   runDmBtn.addEventListener("click", () => handleTriggerQueue("dm"));

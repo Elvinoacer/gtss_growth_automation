@@ -129,11 +129,17 @@
               <span id="pause-resume-text">Pause outreach</span>
             </button>
 
+            <!-- Stop in-flight queue run (connection + DM workers) -->
+            <button id="stop-queue-btn" type="button" class="hidden border border-red-500/50 bg-red-500/10 hover:bg-red-500/20 text-red-400 font-semibold px-4 py-2 rounded flex items-center gap-1.5 transition-colors disabled:opacity-50">
+              <span class="material-symbols-outlined text-[18px]" id="stop-queue-icon">stop_circle</span>
+              <span id="stop-queue-text">Stop queue</span>
+            </button>
+
             <!-- Manual Queue Run Controls -->
-            <button id="run-connection-btn" class="border border-outline-variant hover:border-primary text-on-surface-variant hover:text-primary font-semibold px-4 py-2 rounded flex items-center gap-1.5 transition-colors">
+            <button id="run-connection-btn" class="border border-outline-variant hover:border-primary text-on-surface-variant hover:text-primary font-semibold px-4 py-2 rounded flex items-center gap-1.5 transition-colors disabled:opacity-50">
               <span class="material-symbols-outlined text-[18px]">play_circle</span> Connections Queue
             </button>
-            <button id="run-dm-btn" class="border border-outline-variant hover:border-primary text-on-surface-variant hover:text-primary font-semibold px-4 py-2 rounded flex items-center gap-1.5 transition-colors">
+            <button id="run-dm-btn" class="border border-outline-variant hover:border-primary text-on-surface-variant hover:text-primary font-semibold px-4 py-2 rounded flex items-center gap-1.5 transition-colors disabled:opacity-50">
               <span class="material-symbols-outlined text-[18px]">send</span> Messages Queue
             </button>
           </div>

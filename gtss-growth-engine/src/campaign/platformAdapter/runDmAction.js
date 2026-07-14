@@ -68,11 +68,13 @@ async function runDmAction(platform, page, lead, message, emitter) {
         return { outcome: "sent", error: null, metadata: {}, retryable: false };
       }
       if (res.outcome === "not_connected") {
+        // Preserve as not_connected so the DM queue can re-snooze (waiting for
+        // acceptance) instead of falsely marking the job as sent/skipped.
         return {
-          outcome: "skipped",
-          error: res.reason,
+          outcome: "not_connected",
+          error: res.reason || "Not a 1st-degree connection yet",
           metadata: {},
-          retryable: false,
+          retryable: true,
         };
       }
       if (res.outcome === "premium_required") {

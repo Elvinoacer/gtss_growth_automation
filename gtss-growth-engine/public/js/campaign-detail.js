@@ -21,7 +21,9 @@
  *   campaign-detail/api.js          — refreshCampaignDataSilently +
  *                                     loadCampaignDetail + loadConnectionJobs
  *                                     + loadDmJobs + loadAdvisoryLock +
- *                                     handleTogglePause + handleTriggerQueue
+ *                                     updateQueueControlButtons +
+ *                                     handleTogglePause + handleStopQueue +
+ *                                     handleTriggerQueue
  *   campaign-detail/renderHeader.js — renderHeaderInfo (title + platform
  *                                     badge + status badge + pause/resume
  *                                     button config)
@@ -34,7 +36,8 @@
  *                                     stream appender for campaign events and
  *                                     queue logs)
  *   campaign-detail/events.js       — setupEventListeners (tab/pagination/
- *                                     pause-resume/run-queue/clear-log clicks)
+ *                                     pause-resume/stop-queue/run-queue/
+ *                                     clear-log clicks)
  *                                     + setupSocketSubscriptions (joins
  *                                     `campaigns:<id>` + `campaigns` rooms,
  *                                     handles `event` + `queue:log` events)
