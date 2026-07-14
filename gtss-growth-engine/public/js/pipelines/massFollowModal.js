@@ -118,9 +118,12 @@ async function loadMassFollowTargets(filters = {}) {
   if (filters.platform) params.set('platform', filters.platform);
   if (filters.status) params.set('status', filters.status);
   params.set('limit', '200');
+  // Backend returns { targets, total, summary } directly (no ok/data wrapper).
   const res = await gtss.fetchJSON(`/api/pipelines/mass-follow/targets?${params.toString()}`);
-  if (!res.ok) throw new Error(res.error || 'Failed to load targets');
-  return res.data;
+  if (!res || !Array.isArray(res.targets)) {
+    throw new Error((res && res.error) || 'Failed to load targets');
+  }
+  return res;
 }
 
 function renderMassFollowTable(data) {
@@ -236,14 +239,11 @@ async function openMassFollowTargetsModal(id /* pipelineId, always 'mass_follow'
         method: 'POST',
         body: JSON.stringify({ targets }),
       });
-      if (res.ok) {
-        const d = res.data;
-        feedback.innerHTML = `<span style="color:#4ade80">✓ Added ${d.inserted} new, updated ${d.updated}${d.errors ? `, ${d.errors} error(s)` : ''}</span>`;
-        input.value = '';
-        await refreshMassFollowTable(getFilters());
-      } else {
-        feedback.innerHTML = `<span style="color:#f87171">✗ ${gtss.escapeHtml(res.error || 'Add failed')}</span>`;
-      }
+      // Backend returns { inserted, updated, errors, inserted_ids, updated_ids, errors_detail }
+      // (no ok/data wrapper). fetchJSON throws on non-2xx so reaching here means success.
+      feedback.innerHTML = `<span style="color:#4ade80">✓ Added ${res.inserted || 0} new, updated ${res.updated || 0}${res.errors ? `, ${res.errors} error(s)` : ''}</span>`;
+      input.value = '';
+      await refreshMassFollowTable(getFilters());
     } catch (err) {
       feedback.innerHTML = `<span style="color:#f87171">✗ ${gtss.escapeHtml(err.message)}</span>`;
     } finally {
@@ -268,13 +268,10 @@ async function openMassFollowTargetsModal(id /* pipelineId, always 'mass_follow'
         method: 'POST',
         body: JSON.stringify(body),
       });
-      if (res.ok) {
-        const d = res.data;
-        feedback.innerHTML = `<span style="color:#4ade80">Imported ${d.inserted || 0} new, updated ${d.updated || 0} from ${d.considered || 0} lead(s)</span>`;
-        await refreshMassFollowTable(getFilters());
-      } else {
-        feedback.innerHTML = `<span style="color:#f87171">${gtss.escapeHtml(res.error || 'Import failed')}</span>`;
-      }
+      // Backend returns { ok, inserted, updated, considered, platforms, statuses }.
+      // fetchJSON throws on non-2xx so reaching here means success.
+      feedback.innerHTML = `<span style="color:#4ade80">Imported ${res.inserted || 0} new, updated ${res.updated || 0} from ${res.considered || 0} lead(s)</span>`;
+      await refreshMassFollowTable(getFilters());
     } catch (err) {
       feedback.innerHTML = `<span style="color:#f87171">${gtss.escapeHtml(err.message)}</span>`;
     } finally {
@@ -292,12 +289,9 @@ async function openMassFollowTargetsModal(id /* pipelineId, always 'mass_follow'
       const targetId = retryBtn.dataset.targetId;
       try {
         const res = await gtss.fetchJSON(`/api/pipelines/mass-follow/targets/${targetId}/retry`, { method: 'POST' });
-        if (res.ok) {
-          gtss.showToast('Target reset to pending', 'success');
-          await refreshMassFollowTable(getFilters());
-        } else {
-          gtss.showToast(res.error || 'Retry failed', 'error', 6000);
-        }
+        // Backend returns { retried: true, id } (no ok wrapper). fetchJSON throws on non-2xx.
+        gtss.showToast('Target reset to pending', 'success');
+        await refreshMassFollowTable(getFilters());
       } catch (err) {
         gtss.showToast(err.message, 'error', 6000);
       }
@@ -306,12 +300,9 @@ async function openMassFollowTargetsModal(id /* pipelineId, always 'mass_follow'
       if (!confirm('Delete this target?')) return;
       try {
         const res = await gtss.fetchJSON(`/api/pipelines/mass-follow/targets/${targetId}`, { method: 'DELETE' });
-        if (res.ok) {
-          gtss.showToast('Target deleted', 'success');
-          await refreshMassFollowTable(getFilters());
-        } else {
-          gtss.showToast(res.error || 'Delete failed', 'error', 6000);
-        }
+        // Backend returns { deleted: true, id } (no ok wrapper). fetchJSON throws on non-2xx.
+        gtss.showToast('Target deleted', 'success');
+        await refreshMassFollowTable(getFilters());
       } catch (err) {
         gtss.showToast(err.message, 'error', 6000);
       }
@@ -339,12 +330,9 @@ async function openMassFollowTargetsModal(id /* pipelineId, always 'mass_follow'
           older_than_days: olderThanDays > 0 ? olderThanDays : undefined,
         }),
       });
-      if (res.ok) {
-        gtss.showToast(`Deleted ${res.data.deleted} target(s)`, 'success');
-        await refreshMassFollowTable(getFilters());
-      } else {
-        gtss.showToast(res.error || 'Clear failed', 'error', 6000);
-      }
+      // Backend returns { deleted: N } (no ok/data wrapper). fetchJSON throws on non-2xx.
+      gtss.showToast(`Deleted ${res.deleted || 0} target(s)`, 'success');
+      await refreshMassFollowTable(getFilters());
     } catch (err) {
       gtss.showToast(err.message, 'error', 6000);
     }
@@ -358,12 +346,14 @@ async function openMassFollowTargetsModal(id /* pipelineId, always 'mass_follow'
     runNowBtn.textContent = '⏳ Triggering…';
     try {
       const res = await gtss.fetchJSON('/api/pipelines/mass_follow/run', { method: 'POST' });
-      if (res.ok) {
+      // Backend returns { ok, message, seeded } OR { ok:false, error, reason, seeded }.
+      // fetchJSON throws on non-2xx; on 2xx with ok:false we surface the error.
+      if (res && res.ok) {
         gtss.showToast('Mass-follow pipeline started', 'success');
         close();
         loadPipelines();
       } else {
-        gtss.showToast(res.error || 'Run failed', 'error', 6000);
+        gtss.showToast((res && res.error) || 'Run failed', 'error', 6000);
       }
     } catch (err) {
       gtss.showToast(err.message, 'error', 6000);

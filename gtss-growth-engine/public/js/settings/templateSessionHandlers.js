@@ -65,7 +65,7 @@ async function saveInstagramSettings() {
       }
     });
 
-    const res = await window.gtss.fetchJSON("/api/settings/instagram", {
+    const res = await window.gtss.fetchJSON("/api/automation/instagram/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(formData),

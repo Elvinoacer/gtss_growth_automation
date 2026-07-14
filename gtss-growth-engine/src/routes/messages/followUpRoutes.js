@@ -88,8 +88,8 @@ module.exports = function registerFollowUpRoutes(router) {
     const days = Number(req.body.days) || 3;
 
     db.prepare(
-      `UPDATE messages SET snooze_until = datetime('now', '+' || @days || ' days') WHERE id = ?`,
-    ).run({ days }, id);
+      `UPDATE messages SET snooze_until = datetime('now', '+' || @days || ' days') WHERE id = @id`,
+    ).run({ days, id });
 
     return res.json({ success: true, id, snoozedFor: days });
   });

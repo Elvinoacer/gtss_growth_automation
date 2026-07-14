@@ -19,20 +19,34 @@
  *   6. resumeActiveAutomation — if a job is already running server-side
  *      (started from this tab before a refresh, or from another tab),
  *      rehydrate the running UI and reattach listeners
- *   7. startPolling(POLL_IDLE_MS) — NOTE: startPolling and POLL_IDLE_MS
- *      are NOT defined anywhere in the codebase (verified via grep). This
- *      call throws a ReferenceError at runtime, which rejects the async
- *      init() promise. The subsequent "Surface warnings for any expired
- *      sessions" loop is therefore unreachable. This is preserved
- *      verbatim from the original to avoid changing behavior — fixing
- *      the bug is out of scope for the refactor.
- *   8. (Unreachable) Surface warnings for any expired sessions.
+ *   7. Surface warnings for any expired sessions.
+ *   8. Start a 15s background poll that keeps queue + limits fresh even
+ *      when no socket event arrives (defensive fallback so the page never
+ *      feels stale if Socket.IO is silent).
  *
  * Also performs the initial UI state setup at the top level:
  *   - stopBtn.style.display = "none" (Stop button hidden until a run starts)
  *   - captchaBanner.style.display = "none" (CAPTCHA banner hidden until a
  *     captcha event arrives)
  */
+
+// Idle polling interval — keeps the queue + limits fresh even when no
+// socket event arrives. The original automation.js referenced this name
+// but never declared it (and never declared startPolling either), which
+// threw a ReferenceError at runtime and aborted init() before the expired-
+// session-warning loop could run. We declare both here so init() completes.
+const POLL_IDLE_MS = 15_000;
+
+function startPolling(intervalMs = POLL_IDLE_MS) {
+  setInterval(async () => {
+    try {
+      await Promise.all([loadQueue(), loadLimits(), loadSessionStatus()]);
+    } catch (err) {
+      // Silent — polling is best-effort. The socket will still deliver
+      // real-time updates when it's connected.
+    }
+  }, intervalMs);
+}
 
 // ----------------------------------------------------------------
 // Init
@@ -47,13 +61,9 @@ async function init() {
   await resumeActiveAutomation();
 
   // Start idle-mode background polling to keep data fresh.
-  // NOTE: startPolling / POLL_IDLE_MS are referenced but not defined
-  // anywhere in the codebase. This throws at runtime, rejecting init().
-  // Behavior preserved verbatim from the original automation.js.
   startPolling(POLL_IDLE_MS);
 
   // Surface warnings for any expired sessions (status already fetched).
-  // NOTE: unreachable because of the line above — preserved verbatim.
   for (const [platform, isValid] of Object.entries(sessionStatus)) {
     if (!isValid) {
       showToast(

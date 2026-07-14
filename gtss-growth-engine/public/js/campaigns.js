@@ -110,19 +110,25 @@
     emptyState.classList.remove("flex");
 
     campaigns.forEach((campaign) => {
-      // Stats calculating
+      // Stats calculating — the backend returns
+      //   stats.connection_jobs = { total, by_status: { accepted, sent, ... } }
+      //   stats.dm_jobs         = { total, by_status: { sent, replied, ... } }
+      // We default to an empty shape so the listing cards render "0 / 0 (0%)"
+      // before any jobs have been enqueued (e.g., for draft campaigns).
       const stats = campaign.stats || {
-        connection_jobs: { total: 0, sent: 0, accepted: 0, failed: 0, pending: 0 },
-        dm_jobs: { total: 0, sent: 0, replied: 0, failed: 0, pending: 0 }
+        connection_jobs: { total: 0, by_status: {} },
+        dm_jobs: { total: 0, by_status: {} },
       };
 
       // Extract details
+      const connByStatus = stats.connection_jobs.by_status || {};
       const totalConn = stats.connection_jobs.total || 0;
-      const acceptedConn = stats.connection_jobs.accepted || 0;
+      const acceptedConn = connByStatus.accepted || 0;
       const connPct = totalConn > 0 ? Math.round((acceptedConn / totalConn) * 100) : 0;
 
+      const dmByStatus = stats.dm_jobs.by_status || {};
       const totalDms = stats.dm_jobs.total || 0;
-      const sentDms = stats.dm_jobs.sent || 0;
+      const sentDms = dmByStatus.sent || 0;
       const dmPct = totalDms > 0 ? Math.round((sentDms / totalDms) * 100) : 0;
 
       // Platform badge style mapping
@@ -281,10 +287,12 @@
       // Clear inputs
       nameInput.value = "";
       
-      // Navigate to campaign detail directly for premium feel
-      if (res && res.campaignId) {
+      // The backend returns { success, campaign: { id, ... } } — read the id
+      // from the campaign object so the user lands on the detail page.
+      const newCampaignId = res && res.campaign ? res.campaign.id : (res && res.campaignId);
+      if (newCampaignId) {
         setTimeout(() => {
-          window.location.href = `/campaigns/${res.campaignId}`;
+          window.location.href = `/campaigns/${newCampaignId}`;
         }, 800);
       } else {
         await loadCampaigns(1);

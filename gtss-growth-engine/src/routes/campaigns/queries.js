@@ -49,6 +49,57 @@ function register({ router, requireDeps }) {
       const selectParams = [...params, limit, offset];
       const campaigns = db.prepare(selectQuery).all(selectParams);
 
+      // Attach per-campaign aggregate stats so the listing cards can show
+      // real progress (connections accepted, DMs sent, etc.) without making
+      // the user click into each campaign. This mirrors the per-detail
+      // metrics returned by GET /:id, but is computed in bulk for the page.
+      if (campaigns.length > 0) {
+        const campaignIds = campaigns.map((c) => c.id);
+        const placeholders = campaignIds.map(() => "?").join(",");
+
+        const connStats = db
+          .prepare(
+            `SELECT campaign_id, status, COUNT(*) as count
+             FROM connection_jobs
+             WHERE campaign_id IN (${placeholders})
+             GROUP BY campaign_id, status`,
+          )
+          .all(...campaignIds);
+        const dmStats = db
+          .prepare(
+            `SELECT campaign_id, status, COUNT(*) as count
+             FROM dm_jobs
+             WHERE campaign_id IN (${placeholders})
+             GROUP BY campaign_id, status`,
+          )
+          .all(...campaignIds);
+
+        const statsByCampaign = new Map();
+        for (const c of campaigns) {
+          statsByCampaign.set(c.id, {
+            connection_jobs: { total: 0, by_status: {} },
+            dm_jobs: { total: 0, by_status: {} },
+          });
+        }
+        for (const row of connStats) {
+          const s = statsByCampaign.get(row.campaign_id);
+          if (!s) continue;
+          s.connection_jobs.total += row.count;
+          s.connection_jobs.by_status[row.status] =
+            (s.connection_jobs.by_status[row.status] || 0) + row.count;
+        }
+        for (const row of dmStats) {
+          const s = statsByCampaign.get(row.campaign_id);
+          if (!s) continue;
+          s.dm_jobs.total += row.count;
+          s.dm_jobs.by_status[row.status] =
+            (s.dm_jobs.by_status[row.status] || 0) + row.count;
+        }
+        for (const c of campaigns) {
+          c.stats = statsByCampaign.get(c.id);
+        }
+      }
+
       return res.json({
         campaigns,
         pagination: {

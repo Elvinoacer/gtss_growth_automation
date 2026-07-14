@@ -136,11 +136,20 @@ function renderKeywords(data) {
     list.innerHTML = '<span class="muted">No keywords configured.</span>';
     return;
   }
+  // Keywords can be stored either as plain strings or as objects shaped like
+  // { keyword, platforms? } — extract a display string from either form so
+  // the list never shows "[object Object]".
+  const display = (kw) => {
+    if (kw && typeof kw === "object" && !Array.isArray(kw)) {
+      return String(kw.keyword || "");
+    }
+    return String(kw || "");
+  };
   list.innerHTML = data.keywords
     .map(
       (kw, idx) => `
     <div style="display: flex; align-items: center; gap: 8px;">
-      <span style="flex: 1; color: var(--gtss-text); font-size: 13px;">${idx + 1}. ${kw}</span>
+      <span style="flex: 1; color: var(--gtss-text); font-size: 13px;">${idx + 1}. ${window.gtss.escapeHtml(display(kw))}</span>
       <button class="secondary-button" data-remove-keyword="${idx}" type="button" style="min-height: 30px; padding: 0 8px; font-size: 12px;">✕</button>
     </div>
   `,
