@@ -1,0 +1,27 @@
+/**
+ * callouts.css — Settings page warning and info callout boxes
+ *
+ * Extracted from the original settings-page.css. .warning-box is the red
+ * "be careful" callout (e.g. when lowering daily limits below safety
+ * thresholds). .info-box is the blue informational callout.
+ */
+
+      /* ─── Warning + info boxes ─── */
+      .warning-box {
+        border: 1px solid rgba(239, 68, 68, 0.35);
+        border-radius: var(--settings-radius);
+        padding: 12px 14px;
+        color: #fecaca;
+        background: rgba(239, 68, 68, 0.12);
+        font-size: 12.5px;
+        line-height: 1.55;
+      }
+      .info-box {
+        border: 1px solid rgba(59, 130, 246, 0.28);
+        border-radius: var(--settings-radius);
+        padding: 12px 14px;
+        color: #bfdbfe;
+        background: rgba(59, 130, 246, 0.08);
+        font-size: 12.5px;
+        line-height: 1.55;
+      }

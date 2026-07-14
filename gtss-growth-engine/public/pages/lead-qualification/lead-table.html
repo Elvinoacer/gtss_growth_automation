@@ -1,0 +1,120 @@
+        <!-- ============ LEAD TABLE ============ -->
+        <section class="gtss-card" style="padding: 0; overflow: hidden">
+          <!-- Filter tabs -->
+          <div class="filter-tabs" id="filter-tabs">
+            <button class="filter-tab active" data-status="all">All</button>
+            <button class="filter-tab" data-status="pending">
+              Pending <span class="tab-count" id="tab-pending">0</span>
+            </button>
+            <button class="filter-tab" data-status="approved">
+              Approved <span class="tab-count" id="tab-approved">0</span>
+            </button>
+            <button class="filter-tab" data-status="rejected">
+              Rejected <span class="tab-count" id="tab-rejected">0</span>
+            </button>
+            <button class="filter-tab" data-status="scoring_failed">
+              AI Failed <span class="tab-count" id="tab-scoring-failed">0</span>
+            </button>
+            <button class="filter-tab" data-status="overridden">
+              Overridden <span class="tab-count" id="tab-overridden">0</span>
+            </button>
+          </div>
+
+          <div style="padding: 0 18px">
+            <!-- Toolbar -->
+            <div class="table-toolbar">
+              <div>
+                <select id="sort-select" class="sort-select">
+                  <option value="score_desc">Score ↓</option>
+                  <option value="score_asc">Score ↑</option>
+                  <option value="name_asc">Name A–Z</option>
+                  <option value="platform">Platform</option>
+                  <option value="date">Date</option>
+                </select>
+              </div>
+              <span
+                id="total-badge"
+                style="
+                  color: var(--gtss-muted);
+                  font-size: 13px;
+                  font-weight: 700;
+                "
+                >0 leads</span
+              >
+            </div>
+
+            <!-- Bulk actions -->
+            <div id="bulk-bar" class="bulk-bar">
+              <span class="bulk-count" id="bulk-count">0 selected</span>
+              <div class="bulk-actions">
+                <button
+                  id="bulk-approve"
+                  class="success-button"
+                  type="button"
+                  style="min-height: 32px; font-size: 13px"
+                >
+                  Approve Selected
+                </button>
+                <button
+                  id="bulk-reject"
+                  class="danger-button"
+                  type="button"
+                  style="min-height: 32px; font-size: 13px"
+                >
+                  Reject Selected
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Table -->
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 40px">
+                    <input
+                      id="select-all"
+                      type="checkbox"
+                      aria-label="Select all leads"
+                    />
+                  </th>
+                  <th>Name</th>
+                  <th>Platform</th>
+                  <th>Company</th>
+                  <th>Location</th>
+                  <th>Score</th>
+                  <th>Score Reason</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="leads-body"></tbody>
+            </table>
+            <div id="empty-state" class="empty-state">
+              <span class="search-icon">✓</span>
+              No leads found for this filter.
+            </div>
+          </div>
+
+          <!-- Pagination -->
+          <div class="pagination" style="padding: 14px 18px">
+            <button
+              id="prev-page"
+              class="secondary-button"
+              type="button"
+              style="min-height: 32px; font-size: 13px"
+            >
+              Previous
+            </button>
+            <span id="page-label">Page 1 of 1</span>
+            <button
+              id="next-page"
+              class="secondary-button"
+              type="button"
+              style="min-height: 32px; font-size: 13px"
+            >
+              Next
+            </button>
+          </div>
+        </section>

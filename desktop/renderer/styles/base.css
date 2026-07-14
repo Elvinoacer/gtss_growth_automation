@@ -1,0 +1,56 @@
+/* GTSS Growth Engine — desktop control center UI.
+ *
+ * Design strategy: the launcher is a small companion app, NOT the main UI.
+ * The main UI is the web app at localhost:3000. So this window is minimal:
+ * one big status hero, three big buttons (Start / Stop / Open Web App),
+ * an error card when things go wrong, and a collapsible "Advanced" section
+ * for power users.
+ *
+ * Visual style: dark slate, single accent color (indigo), generous
+ * whitespace. Feels like a small utility app (Clockify, Raycast) rather
+ * than a complex dashboard.
+ */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #0f172a;
+  --bg-elev: #1e293b;
+  --bg-elev-2: #334155;
+  --border: #334155;
+  --text: #f1f5f9;
+  --text-dim: #cbd5e1;
+  --text-muted: #64748b;
+  --accent: #6366f1;
+  --accent-hover: #4f46e5;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --danger-hover: #dc2626;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.4);
+  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+}
+
+html, body {
+  height: 100%;
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  overflow: hidden;
+  user-select: none;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+

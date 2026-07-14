@@ -1,0 +1,50 @@
+/**
+ * toolbar.css — Lead Qualification table sort + bulk-action bar
+ *
+ * Extracted from the original qual-page.css. .table-toolbar holds the
+ * .sort-select dropdown. .bulk-bar slides in when one or more rows are
+ * checked, showing the .bulk-count of selected leads and the .bulk-actions
+ * button cluster (bulk-approve / bulk-reject / etc.).
+ */
+
+      /* ---------- Sort & Bulk Bar ---------- */
+      .table-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 0;
+      }
+      .sort-select {
+        min-height: 36px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        padding: 6px 10px;
+        background: #0b1220;
+        color: var(--gtss-text);
+        font: inherit;
+        font-size: 13px;
+      }
+      .bulk-bar {
+        display: none;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        background: #0b1220;
+        margin-bottom: 10px;
+      }
+      .bulk-bar.visible {
+        display: flex;
+      }
+      .bulk-count {
+        color: var(--gtss-text);
+        font-size: 13px;
+        font-weight: 800;
+      }
+      .bulk-actions {
+        display: flex;
+        gap: 8px;
+        margin-left: auto;
+      }

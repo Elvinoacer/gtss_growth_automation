@@ -49,6 +49,15 @@
         },
       };
     </script>
+    <!--
+      CRM page — body markup is split into thematic partials under
+      public/pages/crm/. Each <div data-include="..."> placeholder is
+      resolved server-side by src/utils/renderPage.js (resolveIncludes)
+      at request time, so the rendered HTML is byte-equivalent to the
+      original monolithic crm.html. The small amount of page-specific
+      CSS (kanban drag state + drawer animation) stays inline below
+      since it is well under 500 lines.
+    -->
     <style>
       /* Kanban specific styles */
       .kanban-column {
@@ -91,464 +100,32 @@
   </head>
   <body data-page-title="CRM">
     <!-- SideNavBar -->
-    <nav
-      class="fixed left-0 top-0 h-full w-[260px] bg-[#2d3133] border-r border-outline-variant flex flex-col py-6 z-20"
-    >
-      <div class="px-6 mb-8 flex items-center gap-3">
-        <div
-          class="w-8 h-8 rounded bg-primary flex items-center justify-center text-on-primary font-bold"
-        >
-          G
-        </div>
-        <div>
-          <h1 class="text-lg font-bold text-[#eeefff]">Growth Engine</h1>
-          <p class="text-xs text-gray-400">GTSS Geistnal Ops</p>
-        </div>
-      </div>
-      <div class="flex-1 overflow-y-auto px-4 space-y-1">
-        <a
-          href="/"
-          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
-          ><span class="material-symbols-outlined">dashboard</span
-          ><span>Dashboard</span></a
-        >
-        <a
-          href="/discovery"
-          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
-          ><span class="material-symbols-outlined">search</span
-          ><span>Lead Discovery</span></a
-        >
-        <a
-          href="/qualification"
-          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
-          ><span class="material-symbols-outlined">verified_user</span
-          ><span>Qualification</span></a
-        >
-        <a
-          href="/messages"
-          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
-          ><span class="material-symbols-outlined">chat</span
-          ><span>Messages</span></a
-        >
-        <a
-          href="/automation"
-          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
-          ><span class="material-symbols-outlined">smart_toy</span
-          ><span>Automation</span></a
-        >
-        <!-- Active -->
-        <a
-          href="/crm"
-          class="flex items-center gap-3 px-3 py-2 rounded text-[#b4c5ff] bg-primary/20 font-bold border-l-4 border-primary"
-          ><span
-            class="material-symbols-outlined"
-            style="font-variation-settings: &quot;FILL&quot; 1"
-            >account_tree</span
-          ><span>CRM Pipeline</span></a
-        >
-        <a
-          href="/scheduler"
-          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
-          ><span class="material-symbols-outlined">calendar_month</span
-          ><span>Content Scheduler</span></a
-        >
-        <a
-          href="/settings"
-          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
-          ><span class="material-symbols-outlined">settings</span
-          ><span>Settings</span></a
-        >
-      </div>
-    </nav>
+    <div data-include="crm/sidebar.html"></div>
 
     <!-- Main Workspace -->
     <div
       class="flex-1 flex flex-col h-full ml-[260px] w-[calc(100%-260px)] relative bg-surface"
     >
       <!-- TopNavBar -->
-      <header
-        class="flex justify-between items-center h-16 px-6 bg-white border-b border-outline-variant z-10 shrink-0"
-      >
-        <h2 class="text-xl font-bold text-on-surface">CRM Pipeline</h2>
-        <div class="flex items-center gap-4">
-          <button
-            id="detect-replies-btn"
-            class="bg-primary text-white text-sm font-semibold px-4 py-2 rounded flex items-center gap-2 hover:bg-primary/90 transition-colors"
-          >
-            <span class="material-symbols-outlined text-sm">sync</span>
-            Detect Replies Now
-          </button>
-          <div class="w-8 h-8 rounded-full bg-gray-200 overflow-hidden ml-2">
-            <img
-              src="https://lh3.googleusercontent.com/aida-public/AB6AXuB-buy24dXyqW7b4GR571VAkvHdXkfYnO0hZVnht0VlC46fg7xk4tmq8h1UtIBtYtJKpH-_Kg_lviWbUpuqOll9m1uL-WfpBBmOEo6v1Qt-MM3Ua8TiI0fLldGcoe5xw65rAS77ocdJKwJ03AJJhKtJIc9DJHtBDjqikmam4kXyXFPLwHOyn4pgaMEYp-aBMXJiD20M-PaZoqFOuYkO4VWg1UixiqSyxhgOxBrtrUxGusXG6qTfUsnUe0vHa7dqS1CivCLcxjnOgKM"
-              alt="Profile"
-              class="w-full h-full object-cover"
-            />
-          </div>
-        </div>
-      </header>
+      <div data-include="crm/topbar.html"></div>
 
       <main class="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
         <!-- Stats Bar -->
-        <div class="grid grid-cols-4 gap-4">
-          <div
-            class="bg-white border border-outline-variant rounded p-4 flex flex-col"
-          >
-            <span class="text-sm text-on-surface-variant font-medium"
-              >Active Leads</span
-            >
-            <span
-              id="stat-total"
-              class="text-2xl font-bold text-on-surface mt-1"
-              >-</span
-            >
-          </div>
-          <div
-            class="bg-white border border-outline-variant rounded p-4 flex flex-col"
-          >
-            <span class="text-sm text-on-surface-variant font-medium"
-              >Avg. Days to Reply</span
-            >
-            <span
-              id="stat-reply-days"
-              class="text-2xl font-bold text-on-surface mt-1"
-              >-</span
-            >
-          </div>
-          <div
-            class="bg-white border border-outline-variant rounded p-4 flex flex-col"
-          >
-            <span class="text-sm text-on-surface-variant font-medium"
-              >Avg. Days to Convert</span
-            >
-            <span
-              id="stat-convert-days"
-              class="text-2xl font-bold text-on-surface mt-1"
-              >-</span
-            >
-          </div>
-          <div
-            class="bg-white border border-outline-variant rounded p-4 flex flex-col"
-          >
-            <span class="text-sm text-on-surface-variant font-medium"
-              >Conversion Rate</span
-            >
-            <span
-              id="stat-conv-rate"
-              class="text-2xl font-bold text-primary mt-1"
-              >-%</span
-            >
-          </div>
-        </div>
+        <div data-include="crm/stats-bar.html"></div>
 
         <!-- Toolbar: Search, Filters, View Toggle -->
-        <div
-          class="flex justify-between items-center bg-white border border-outline-variant rounded p-3 shrink-0"
-        >
-          <div class="flex gap-4 items-center">
-            <div class="relative">
-              <span
-                class="material-symbols-outlined absolute left-3 top-2.5 text-gray-400 text-sm"
-                >search</span
-              >
-              <input
-                type="text"
-                id="search-input"
-                placeholder="Search name or company..."
-                class="pl-9 pr-4 py-2 border border-outline-variant rounded text-sm w-64 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
-              />
-            </div>
-            <select
-              id="platform-filter"
-              class="border border-outline-variant rounded text-sm py-2 px-3 focus:border-primary focus:ring-1 outline-none"
-            >
-              <option value="">All Platforms</option>
-            </select>
-          </div>
-          <div class="flex bg-gray-100 rounded p-1">
-            <button
-              id="view-kanban-btn"
-              class="px-3 py-1.5 rounded text-sm font-medium bg-white shadow-sm text-on-surface flex items-center gap-2 transition-all"
-            >
-              <span class="material-symbols-outlined text-sm">view_column</span>
-              Kanban
-            </button>
-            <button
-              id="view-list-btn"
-              class="px-3 py-1.5 rounded text-sm font-medium text-on-surface-variant hover:text-on-surface flex items-center gap-2 transition-all"
-            >
-              <span class="material-symbols-outlined text-sm">table_rows</span>
-              List
-            </button>
-          </div>
-        </div>
+        <div data-include="crm/toolbar.html"></div>
 
         <!-- KANBAN VIEW -->
-        <div
-          id="view-kanban"
-          class="flex-1 flex gap-4 overflow-x-auto pb-4 min-h-0"
-        >
-          <!-- Messaged -->
-          <div
-            class="flex flex-col w-[300px] shrink-0 bg-gray-50 border border-outline-variant rounded-lg overflow-hidden"
-          >
-            <div
-              class="p-3 border-b border-outline-variant bg-white flex justify-between items-center"
-            >
-              <h3 class="font-semibold text-sm text-on-surface">Messaged</h3>
-              <span
-                id="count-messaged"
-                class="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded-full font-medium"
-                >0</span
-              >
-            </div>
-            <div
-              class="flex-1 p-2 space-y-2 overflow-y-auto kanban-column"
-              data-status="messaged"
-              id="col-messaged"
-            ></div>
-          </div>
-          <!-- Replied -->
-          <div
-            class="flex flex-col w-[300px] shrink-0 bg-blue-50/30 border border-outline-variant rounded-lg overflow-hidden"
-          >
-            <div
-              class="p-3 border-b border-outline-variant bg-white flex justify-between items-center"
-            >
-              <h3 class="font-semibold text-sm text-on-surface">Replied</h3>
-              <span
-                id="count-replied"
-                class="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full font-medium"
-                >0</span
-              >
-            </div>
-            <div
-              class="flex-1 p-2 space-y-2 overflow-y-auto kanban-column"
-              data-status="replied"
-              id="col-replied"
-            ></div>
-          </div>
-          <!-- Meeting Booked -->
-          <div
-            class="flex flex-col w-[300px] shrink-0 bg-purple-50/30 border border-outline-variant rounded-lg overflow-hidden"
-          >
-            <div
-              class="p-3 border-b border-outline-variant bg-white flex justify-between items-center"
-            >
-              <h3 class="font-semibold text-sm text-on-surface">
-                Meeting Booked
-              </h3>
-              <span
-                id="count-meeting_booked"
-                class="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full font-medium"
-                >0</span
-              >
-            </div>
-            <div
-              class="flex-1 p-2 space-y-2 overflow-y-auto kanban-column"
-              data-status="meeting_booked"
-              id="col-meeting_booked"
-            ></div>
-          </div>
-          <!-- Converted -->
-          <div
-            class="flex flex-col w-[300px] shrink-0 bg-green-50/30 border border-outline-variant rounded-lg overflow-hidden"
-          >
-            <div
-              class="p-3 border-b border-outline-variant bg-white flex justify-between items-center"
-            >
-              <h3 class="font-semibold text-sm text-on-surface">Converted</h3>
-              <span
-                id="count-converted"
-                class="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full font-medium"
-                >0</span
-              >
-            </div>
-            <div
-              class="flex-1 p-2 space-y-2 overflow-y-auto kanban-column"
-              data-status="converted"
-              id="col-converted"
-            ></div>
-          </div>
-          <!-- Lost -->
-          <div
-            class="flex flex-col w-[300px] shrink-0 bg-gray-50 border border-outline-variant rounded-lg overflow-hidden opacity-75"
-          >
-            <div
-              class="p-3 border-b border-outline-variant bg-white flex justify-between items-center"
-            >
-              <h3 class="font-semibold text-sm text-gray-500">Lost</h3>
-              <span
-                id="count-lost"
-                class="bg-gray-200 text-gray-500 text-xs px-2 py-0.5 rounded-full font-medium"
-                >0</span
-              >
-            </div>
-            <div
-              class="flex-1 p-2 space-y-2 overflow-y-auto kanban-column"
-              data-status="lost"
-              id="col-lost"
-            ></div>
-          </div>
-        </div>
+        <div data-include="crm/kanban-view.html"></div>
 
         <!-- LIST VIEW (Hidden by default) -->
-        <div
-          id="view-list"
-          class="hidden flex-1 bg-white border border-outline-variant rounded-lg overflow-hidden flex flex-col"
-        >
-          <div class="overflow-x-auto flex-1">
-            <table class="w-full text-left text-sm whitespace-nowrap">
-              <thead
-                class="bg-gray-50 border-b border-outline-variant sticky top-0"
-              >
-                <tr>
-                  <th class="px-4 py-3 font-semibold text-gray-600">
-                    Lead Name
-                  </th>
-                  <th class="px-4 py-3 font-semibold text-gray-600">Company</th>
-                  <th class="px-4 py-3 font-semibold text-gray-600">
-                    Platform
-                  </th>
-                  <th class="px-4 py-3 font-semibold text-gray-600">Status</th>
-                  <th class="px-4 py-3 font-semibold text-gray-600">
-                    Last Contact
-                  </th>
-                </tr>
-              </thead>
-              <tbody id="list-body" class="divide-y divide-outline-variant">
-                <!-- Populated by JS -->
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <div data-include="crm/list-view.html"></div>
       </main>
     </div>
 
-    <!-- Backdrop for Drawer -->
-    <div
-      id="drawer-backdrop"
-      class="fixed inset-0 bg-black/20 z-30 backdrop closed"
-    ></div>
-
-    <!-- Lead Detail Drawer -->
-    <div
-      id="lead-drawer"
-      class="fixed right-0 top-0 h-full w-[420px] bg-white shadow-2xl z-40 closed flex flex-col border-l border-outline-variant"
-    >
-      <div
-        class="px-6 py-4 border-b border-outline-variant flex justify-between items-center bg-gray-50"
-      >
-        <h2 class="text-lg font-bold text-on-surface">Lead Details</h2>
-        <button
-          id="close-drawer-btn"
-          class="text-gray-400 hover:text-gray-600 transition-colors"
-        >
-          <span class="material-symbols-outlined">close</span>
-        </button>
-      </div>
-
-      <div class="flex-1 overflow-y-auto p-6 space-y-6">
-        <!-- Header Info -->
-        <div>
-          <div class="flex justify-between items-start">
-            <div>
-              <h3 id="drawer-name" class="text-xl font-bold text-on-surface">
-                Name
-              </h3>
-              <p id="drawer-role-company" class="text-sm text-gray-600 mt-1">
-                Role at Company
-              </p>
-            </div>
-            <span
-              id="drawer-platform"
-              class="px-2 py-1 bg-gray-100 rounded text-xs font-semibold text-gray-600 capitalize"
-              >Platform</span
-            >
-          </div>
-          <div class="flex gap-2 mt-3">
-            <a
-              id="drawer-profile-url"
-              href="#"
-              target="_blank"
-              class="text-xs text-primary hover:underline flex items-center gap-1"
-            >
-              <span class="material-symbols-outlined text-[14px]">link</span>
-              Profile
-            </a>
-          </div>
-        </div>
-
-        <!-- Action Dropdown -->
-        <div
-          class="bg-gray-50 p-4 rounded border border-outline-variant space-y-3"
-        >
-          <h4 class="text-sm font-semibold text-on-surface">Next Action</h4>
-          <select
-            id="drawer-action-select"
-            class="w-full border border-outline-variant rounded text-sm py-2 px-3 focus:border-primary outline-none"
-          >
-            <option value="">Select an action...</option>
-            <option value="meeting_booked">Book Meeting</option>
-            <option value="converted">Mark as Converted</option>
-            <option value="lost">Mark as Lost</option>
-          </select>
-
-          <div id="action-meeting-fields" class="hidden space-y-2">
-            <input
-              type="date"
-              id="meeting-date"
-              class="w-full border border-outline-variant rounded text-sm py-2 px-3 outline-none focus:border-primary"
-            />
-            <input
-              type="text"
-              id="meeting-notes"
-              placeholder="Meeting link or notes..."
-              class="w-full border border-outline-variant rounded text-sm py-2 px-3 outline-none focus:border-primary"
-            />
-          </div>
-
-          <button
-            id="save-action-btn"
-            class="w-full bg-primary text-white text-sm font-semibold py-2 rounded hover:bg-primary/90 transition-colors hidden"
-          >
-            Save Action
-          </button>
-        </div>
-
-        <!-- Notes -->
-        <div>
-          <div class="flex justify-between items-center mb-2">
-            <h4 class="text-sm font-semibold text-on-surface">Notes</h4>
-            <span
-              id="notes-saved-indicator"
-              class="text-xs text-green-600 hidden flex items-center gap-1"
-              ><span class="material-symbols-outlined text-[14px]">check</span>
-              Saved</span
-            >
-          </div>
-          <textarea
-            id="drawer-notes"
-            rows="3"
-            class="w-full border border-outline-variant rounded text-sm p-3 outline-none focus:border-primary"
-            placeholder="Add notes here (auto-saves)..."
-          ></textarea>
-        </div>
-
-        <!-- Timeline -->
-        <div>
-          <h4 class="text-sm font-semibold text-on-surface mb-4">
-            Touchpoint Timeline
-          </h4>
-          <div
-            id="drawer-timeline"
-            class="relative pl-3 border-l-2 border-gray-200 space-y-6"
-          >
-            <!-- Populated by JS -->
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- Drawer backdrop + Lead Detail Drawer -->
+    <div data-include="crm/lead-drawer.html"></div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="/js/app.js"></script>

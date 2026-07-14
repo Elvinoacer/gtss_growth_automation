@@ -1,0 +1,78 @@
+        <!-- ============ TABLE SECTION ============ -->
+        <section class="gtss-card" style="padding: 0; overflow: hidden">
+          <!-- Tabs -->
+          <div class="filter-tabs" id="filter-tabs">
+            <button class="filter-tab active" data-status="all">All</button>
+            <button class="filter-tab" data-status="pending">
+              Pending <span class="tab-count" id="tab-pending">0</span>
+            </button>
+            <button class="filter-tab" data-status="approved">
+              Approved <span class="tab-count" id="tab-approved">0</span>
+            </button>
+            <button class="filter-tab" data-status="sent">
+              Sent <span class="tab-count" id="tab-sent">0</span>
+            </button>
+            <button class="filter-tab" data-status="follow_up">
+              Follow-ups <span class="tab-count" id="tab-followups">0</span>
+            </button>
+          </div>
+
+          <div style="padding: 0 16px">
+            <div class="filter-row" style="padding: 12px 0">
+              <select id="platform-filter" class="filter-select">
+                <option value="">All Platforms</option>
+              </select>
+              <input
+                id="search-input"
+                class="filter-input"
+                type="text"
+                placeholder="Search lead name..."
+                aria-label="Search"
+              />
+              <span
+                id="total-badge"
+                style="
+                  margin-left: auto;
+                  color: var(--gtss-muted);
+                  font-size: 13px;
+                  font-weight: 700;
+                "
+                >0 messages</span
+              >
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Lead Name</th>
+                  <th>Platform</th>
+                  <th>Company</th>
+                  <th>Preview</th>
+                  <th>Variant</th>
+                  <th>Status</th>
+                  <th>Generated</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="msg-body"></tbody>
+            </table>
+            <div id="empty-state" class="empty-state">
+              <span style="display: block; margin-bottom: 10px; font-size: 32px"
+                >📬</span
+              >
+              No messages found for this filter.
+            </div>
+          </div>
+
+          <div class="pagination" style="padding: 14px 16px">
+            <button id="prev-page" class="btn btn-muted btn-sm" type="button">
+              Previous
+            </button>
+            <span id="page-label">Page 1 of 1</span>
+            <button id="next-page" class="btn btn-muted btn-sm" type="button">
+              Next
+            </button>
+          </div>
+        </section>

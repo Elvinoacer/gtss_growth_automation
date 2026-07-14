@@ -1,0 +1,150 @@
+            <!-- Main Grid Layout for Table and Log -->
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-gutter">
+              <!-- Action Queue Table Container -->
+              <div
+                class="lg:col-span-8 bg-surface-container-lowest border border-outline-variant rounded-lg shadow-[0_4px_4px_rgba(0,0,0,0.04)] overflow-hidden flex flex-col h-[500px]"
+              >
+                <div
+                  class="px-4 py-3 border-b border-outline-variant flex justify-between items-center bg-surface-bright"
+                >
+                  <h3
+                    class="font-headline-md text-headline-md text-on-surface text-base"
+                  >
+                    Action Queue
+                  </h3>
+                  <div class="flex gap-2">
+                    <button
+                      class="text-secondary hover:text-on-surface transition-colors p-1 rounded hover:bg-surface-variant/50"
+                    >
+                      <span class="material-symbols-outlined text-sm"
+                        >filter_list</span
+                      >
+                    </button>
+                    <button
+                      class="text-secondary hover:text-on-surface transition-colors p-1 rounded hover:bg-surface-variant/50"
+                    >
+                      <span class="material-symbols-outlined text-sm"
+                        >more_vert</span
+                      >
+                    </button>
+                  </div>
+                </div>
+                <div class="flex-1 overflow-auto">
+                  <table class="w-full text-left border-collapse">
+                    <thead
+                      class="sticky top-0 bg-surface-bright shadow-sm z-10"
+                    >
+                      <tr>
+                        <th
+                          class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant w-10"
+                        >
+                          <input id="queue-select-all" type="checkbox" />
+                        </th>
+                        <th
+                          class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant w-1/4"
+                        >
+                          Lead Name
+                        </th>
+                        <th
+                          class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant w-1/6"
+                        >
+                          Platform
+                        </th>
+                        <th
+                          class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant w-1/6"
+                        >
+                          Action Type
+                        </th>
+                        <th
+                          class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant w-1/4"
+                        >
+                          Status
+                        </th>
+                        <th
+                          class="px-4 py-3 font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant text-right"
+                        >
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody
+                      id="queue-body"
+                      class="font-body-sm text-body-sm text-on-surface"
+                    >
+                      <!-- Populated by JS -->
+                    </tbody>
+                  </table>
+                  <div
+                    id="empty-state"
+                    class="p-10 text-center flex-1 flex flex-col justify-center"
+                  >
+                    <div
+                      class="w-12 h-12 rounded-full bg-surface-variant mx-auto flex items-center justify-center text-secondary mb-4"
+                    >
+                      <span class="material-symbols-outlined text-2xl"
+                        >check_circle</span
+                      >
+                    </div>
+                    <h3
+                      class="font-headline-md text-headline-md text-on-surface"
+                    >
+                      Queue is Empty
+                    </h3>
+                    <p
+                      class="font-body-sm text-body-sm text-on-surface-variant mt-2 max-w-[280px] mx-auto"
+                    >
+                      All approved messages have been processed. Approve more
+                      messages to run automation.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <!-- Live Execution Log Panel -->
+              <div
+                class="lg:col-span-4 bg-inverse-surface rounded-lg shadow-lg flex flex-col h-[500px] border border-outline-variant/20 overflow-hidden"
+              >
+                <div
+                  class="px-4 py-3 border-b border-outline-variant/30 flex justify-between items-center bg-inverse-surface/90"
+                >
+                  <h3
+                    class="font-label-caps text-label-caps text-inverse-on-surface flex items-center gap-2"
+                  >
+                    <span
+                      class="w-2 h-2 rounded-full bg-primary inline-block"
+                    ></span>
+                    Live Execution Log
+                  </h3>
+                  <div class="flex gap-3">
+                    <button
+                      id="log-clear-btn"
+                      class="font-label-caps text-label-caps text-outline hover:text-inverse-on-surface transition-colors"
+                    >
+                      Clear
+                    </button>
+                    <label
+                      class="flex items-center gap-2 cursor-pointer font-label-caps text-label-caps text-outline hover:text-inverse-on-surface transition-colors"
+                    >
+                      <input
+                        id="log-autoscroll"
+                        checked=""
+                        class="form-checkbox h-3 w-3 rounded text-primary border-outline-variant/50 focus:ring-0 bg-transparent"
+                        type="checkbox"
+                      />
+                      Scroll
+                    </label>
+                  </div>
+                </div>
+                <div
+                  id="log-container"
+                  class="flex-1 p-4 overflow-y-auto font-mono-code text-mono-code text-tertiary-fixed-dim space-y-1.5 selection:bg-surface-variant/30"
+                >
+                  <div class="flex gap-3">
+                    <span class="text-outline shrink-0">[System]</span>
+                    <span class="text-secondary-fixed-dim shrink-0">READY</span>
+                    <span class="text-inverse-on-surface"
+                      >Waiting for execution trigger...</span
+                    >
+                  </div>
+                </div>
+              </div>
+            </div>

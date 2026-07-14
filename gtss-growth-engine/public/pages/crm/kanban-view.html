@@ -1,0 +1,114 @@
+<!-- crm/kanban-view.html — CRM page Kanban board
+     Extracted from crm.html. The #view-kanban horizontal-scroll flex
+     row with 5 .kanban-column tiles: Messaged / Replied / Meeting
+     Booked / Converted / Lost. Each column has a header with a count
+     badge and a JS-populated .kanban-column body (data-status +
+     #col-*). Rendered server-side via data-include. -->
+
+        <div
+          id="view-kanban"
+          class="flex-1 flex gap-4 overflow-x-auto pb-4 min-h-0"
+        >
+          <!-- Messaged -->
+          <div
+            class="flex flex-col w-[300px] shrink-0 bg-gray-50 border border-outline-variant rounded-lg overflow-hidden"
+          >
+            <div
+              class="p-3 border-b border-outline-variant bg-white flex justify-between items-center"
+            >
+              <h3 class="font-semibold text-sm text-on-surface">Messaged</h3>
+              <span
+                id="count-messaged"
+                class="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded-full font-medium"
+                >0</span
+              >
+            </div>
+            <div
+              class="flex-1 p-2 space-y-2 overflow-y-auto kanban-column"
+              data-status="messaged"
+              id="col-messaged"
+            ></div>
+          </div>
+          <!-- Replied -->
+          <div
+            class="flex flex-col w-[300px] shrink-0 bg-blue-50/30 border border-outline-variant rounded-lg overflow-hidden"
+          >
+            <div
+              class="p-3 border-b border-outline-variant bg-white flex justify-between items-center"
+            >
+              <h3 class="font-semibold text-sm text-on-surface">Replied</h3>
+              <span
+                id="count-replied"
+                class="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full font-medium"
+                >0</span
+              >
+            </div>
+            <div
+              class="flex-1 p-2 space-y-2 overflow-y-auto kanban-column"
+              data-status="replied"
+              id="col-replied"
+            ></div>
+          </div>
+          <!-- Meeting Booked -->
+          <div
+            class="flex flex-col w-[300px] shrink-0 bg-purple-50/30 border border-outline-variant rounded-lg overflow-hidden"
+          >
+            <div
+              class="p-3 border-b border-outline-variant bg-white flex justify-between items-center"
+            >
+              <h3 class="font-semibold text-sm text-on-surface">
+                Meeting Booked
+              </h3>
+              <span
+                id="count-meeting_booked"
+                class="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full font-medium"
+                >0</span
+              >
+            </div>
+            <div
+              class="flex-1 p-2 space-y-2 overflow-y-auto kanban-column"
+              data-status="meeting_booked"
+              id="col-meeting_booked"
+            ></div>
+          </div>
+          <!-- Converted -->
+          <div
+            class="flex flex-col w-[300px] shrink-0 bg-green-50/30 border border-outline-variant rounded-lg overflow-hidden"
+          >
+            <div
+              class="p-3 border-b border-outline-variant bg-white flex justify-between items-center"
+            >
+              <h3 class="font-semibold text-sm text-on-surface">Converted</h3>
+              <span
+                id="count-converted"
+                class="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full font-medium"
+                >0</span
+              >
+            </div>
+            <div
+              class="flex-1 p-2 space-y-2 overflow-y-auto kanban-column"
+              data-status="converted"
+              id="col-converted"
+            ></div>
+          </div>
+          <!-- Lost -->
+          <div
+            class="flex flex-col w-[300px] shrink-0 bg-gray-50 border border-outline-variant rounded-lg overflow-hidden opacity-75"
+          >
+            <div
+              class="p-3 border-b border-outline-variant bg-white flex justify-between items-center"
+            >
+              <h3 class="font-semibold text-sm text-gray-500">Lost</h3>
+              <span
+                id="count-lost"
+                class="bg-gray-200 text-gray-500 text-xs px-2 py-0.5 rounded-full font-medium"
+                >0</span
+              >
+            </div>
+            <div
+              class="flex-1 p-2 space-y-2 overflow-y-auto kanban-column"
+              data-status="lost"
+              id="col-lost"
+            ></div>
+          </div>
+        </div>

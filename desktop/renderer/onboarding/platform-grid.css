@@ -1,0 +1,53 @@
+/* ─── Platform grid ─────────────────────────────────────────────────────── */
+
+.platform-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.platform-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.platform-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 16px;
+  color: white;
+  flex-shrink: 0;
+}
+
+.platform-logo.linkedin { background: #0a66c2; }
+.platform-logo.x { background: #000; }
+.platform-logo.facebook { background: #1877f2; }
+.platform-logo.instagram {
+  background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888);
+}
+
+.platform-name {
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1;
+}
+
+.platform-status {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.platform-status.logged-in {
+  color: var(--success);
+}
+

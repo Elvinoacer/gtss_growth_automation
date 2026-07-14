@@ -1,0 +1,39 @@
+            <!-- CAPTCHA/Warning Alert Banner -->
+            <div
+              id="captcha-banner"
+              style="display: none"
+              class="bg-error-container border border-error/20 rounded p-4 flex items-start sm:items-center gap-4 shadow-[0_4px_4px_rgba(0,0,0,0.04)]"
+            >
+              <div class="mt-0.5 sm:mt-0 text-error">
+                <span
+                  class="material-symbols-outlined"
+                  style="font-variation-settings: &quot;FILL&quot; 1"
+                  >warning</span
+                >
+              </div>
+              <div class="flex-1">
+                <h3
+                  class="font-headline-md text-headline-md text-on-error-container text-base"
+                >
+                  <span id="captcha-platform-text"></span> Activity Warning
+                </h3>
+                <p
+                  class="font-body-sm text-body-sm text-on-error-container/80 mt-1 sm:mt-0"
+                >
+                  Browser automation paused. CAPTCHA detected. Manual
+                  intervention required to clear status.
+                </p>
+              </div>
+              <button
+                id="manual-open-btn"
+                class="shrink-0 bg-surface text-primary font-label-caps text-label-caps px-4 py-2 rounded border border-primary hover:bg-surface-variant transition-colors mr-2"
+              >
+                Open Browser
+              </button>
+              <button
+                id="manual-resume-btn"
+                class="shrink-0 bg-error text-on-error font-label-caps text-label-caps px-4 py-2 rounded hover:bg-error/90 transition-colors"
+              >
+                Resume Run
+              </button>
+            </div>

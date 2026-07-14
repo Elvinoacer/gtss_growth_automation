@@ -1,0 +1,44 @@
+/**
+ * toolbar.css — Lead Discovery results/history headers + filter bar + bulk bar
+ *
+ * Extracted from the original discovery-page.css. .results-header and
+ * .history-header are the space-between flex rows that title the results
+ * table and history accordion (with a .count-badge on the right).
+ * .filter-bar is the 5-col filter row above the table. .bulk-bar slides
+ * in when rows are selected.
+ */
+
+      .results-header,
+      .bulk-bar,
+      .history-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .count-badge {
+        border-radius: 999px;
+        padding: 5px 10px;
+        background: rgb(59 130 246 / 18%);
+        color: var(--gtss-primary);
+        font-size: 13px;
+        font-weight: 900;
+      }
+      .filter-bar {
+        display: grid;
+        grid-template-columns: 180px 1fr 170px 170px auto;
+        gap: 12px;
+        margin: 18px 0;
+        align-items: end;
+      }
+      .bulk-bar {
+        display: none;
+        margin-bottom: 12px;
+        padding: 12px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        background: #0b1220;
+      }
+      .bulk-bar.visible {
+        display: flex;
+      }

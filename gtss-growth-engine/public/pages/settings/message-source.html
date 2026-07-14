@@ -1,0 +1,37 @@
+        <!-- ═══════════════════════════════════════════════════════════ MESSAGE GENERATION SOURCE (NEW centralized) -->
+        <section class="settings-section gtss-card" id="message-source-section" aria-labelledby="msg-source-heading">
+          <div class="section-head">
+            <div class="section-head__title">
+              <span class="section-head__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h10M4 17h7"/></svg>
+              </span>
+              <div class="section-head__heading">
+                <h2 id="msg-source-heading">Message Generation Source</h2>
+                <div class="section-head__sub">Choose whether outreach DMs are drafted by Gemini AI or by canonical templates.</div>
+              </div>
+            </div>
+            <div class="section-head__actions">
+              <span id="msg-source-result" class="inline-result" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+          <div class="info-box" style="margin-bottom: 14px;">
+            This is a global behavior switch — the backend reads it for every
+            message draft across all pipelines. Previously this lived only on
+            the Message Generator page; it is now centralized here.
+          </div>
+          <div class="control-card">
+            <div class="control-card__text">
+              <div class="control-card__title">Source</div>
+              <div class="control-card__desc">AI generates fresh, personalized copy per lead. Templates use your pre-written canonical messages with variable substitution.</div>
+            </div>
+            <div class="control-card__action">
+              <div class="segmented" role="radiogroup" aria-label="Message generation source">
+                <input type="radio" name="msg-source" id="msg-source-ai" value="ai" checked />
+                <label for="msg-source-ai" id="msg-source-ai-label">AI (Gemini)</label>
+                <input type="radio" name="msg-source" id="msg-source-template" value="template" />
+                <label for="msg-source-template" id="msg-source-template-label">Templates</label>
+              </div>
+              <button id="save-msg-source" class="primary-button" type="button">Save</button>
+            </div>
+          </div>
+        </section>

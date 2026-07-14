@@ -1,0 +1,37 @@
+/**
+ * checkbox-list.css — Settings page multi-select checkbox grid
+ *
+ * Extracted from the original settings-page.css. .checkbox-list is the 4-up
+ * grid of checkbox tiles used on panels like Notifications (pick which
+ * channels receive which alerts) and Pipeline Reliability.
+ */
+
+      /* ─── Checkbox grid ─── */
+      .checkbox-list {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(160px, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }
+      .checkbox-list label {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 8px 10px;
+        border: 1px solid var(--settings-border);
+        border-radius: var(--gtss-radius);
+        background: rgba(15, 23, 42, 0.45);
+        color: var(--gtss-text);
+        font-size: 12px;
+        cursor: pointer;
+        transition: border-color 150ms, background 150ms;
+      }
+      .checkbox-list label:hover {
+        border-color: rgba(96, 165, 250, 0.4);
+        background: rgba(59, 130, 246, 0.08);
+      }
+      .checkbox-list input[type="checkbox"] {
+        accent-color: var(--settings-accent);
+        width: 14px;
+        height: 14px;
+      }

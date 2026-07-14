@@ -1,0 +1,78 @@
+/**
+ * modal.css — Message Generator review modal overlay + header
+ *
+ * Extracted from the original msg-page.css. .modal-overlay is the
+ * full-screen backdrop; .modal is the centered 1060px-wide card with a
+ * header (title + sub + close button) and a flex body that holds the
+ * context sidebar and variants panel (split into their own modules).
+ */
+
+      /* ---------- Modal (Full-screen overlay) ---------- */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 1100;
+        background: rgba(0, 0, 0, 0.6);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        backdrop-filter: blur(4px);
+      }
+      .modal-overlay.open {
+        display: flex;
+      }
+      .modal {
+        width: 100%;
+        max-width: 1060px;
+        max-height: calc(100vh - 48px);
+        background: var(--gtss-card-bg);
+        border: 1px solid var(--gtss-card-border);
+        border-radius: 12px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+      }
+      .modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 18px 24px;
+        border-bottom: 1px solid var(--gtss-card-border);
+      }
+      .modal-header-left {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+      .modal-header-title {
+        font-size: 17px;
+        font-weight: 800;
+        color: var(--gtss-text);
+      }
+      .modal-header-sub {
+        font-size: 12px;
+        color: var(--gtss-muted);
+      }
+      .modal-close {
+        width: 34px;
+        height: 34px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        background: transparent;
+        color: var(--gtss-muted);
+        cursor: pointer;
+        font-size: 16px;
+        display: grid;
+        place-items: center;
+      }
+      .modal-close:hover {
+        color: var(--gtss-text);
+        background: #334155;
+      }
+      .modal-body {
+        flex: 1;
+        display: flex;
+        overflow: hidden;
+      }

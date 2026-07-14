@@ -1,0 +1,89 @@
+/* --------------------------------------------------------------------------
+   11. Utilities & Compatibility Overrides
+   -------------------------------------------------------------------------- */
+.text-muted,
+.muted,
+[class*="text-gray"],
+[class*="text-slate"],
+[class*="text-on-surface-variant"] {
+  color: var(--text-muted) !important;
+}
+
+[class*="text-black"],
+[class*="text-zinc-900"],
+[class*="text-slate-900"],
+[class*="text-gray-900"],
+[class*="text-on-surface"] {
+  color: var(--text) !important;
+}
+
+[class*="border-gray"],
+[class*="border-slate"],
+[class*="border-outline"],
+[class*="border-outline-variant"] {
+  border-color: var(--border) !important;
+}
+
+[class*="shadow"],
+.shadow,
+.shadow-lg,
+.shadow-xl {
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.18) !important;
+}
+
+.page-content .max-w-container-max,
+.page-content [class*="max-w-container-max"],
+body > div[class*="ml-[260px]"] [class*="max-w-container-max"],
+body > div[class*="ml-\\[260px\\]"] [class*="max-w-container-max"] {
+  max-width: 1220px !important;
+  margin-inline: auto !important;
+}
+
+.page-content .grid,
+body > div[class*="ml-[260px]"] .grid,
+body > div[class*="ml-\\[260px\\]"] .grid {
+  min-width: 0;
+}
+
+.page-content #stat-cards,
+body > div[class*="ml-[260px]"] #stat-cards,
+body > div[class*="ml-\\[260px\\]"] #stat-cards {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)) !important;
+}
+
+.page-content #limit-cards {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)) !important;
+}
+
+#view-kanban {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)) !important;
+  gap: var(--space-4) !important;
+  overflow: visible !important;
+}
+
+#view-kanban > div {
+  width: auto !important;
+  min-width: 0 !important;
+  min-height: 360px;
+}
+
+body[data-page-title="Automation"] .page-content > div > header {
+  display: none !important;
+}
+
+/* Settings tab-like side navigation when present/added later. */
+.settings-page {
+  width: min(1220px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: var(--space-6) 0 var(--space-8);
+}
+
+.settings-page::before {
+  content: "Operator settings";
+  display: block;
+  margin-bottom: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+

@@ -1,0 +1,44 @@
+/**
+ * table.css — Lead Qualification leads table shell
+ *
+ * Extracted from the original qual-page.css. .table-wrap is the scrolling
+ * container around the main leads table. Sticky th, hover-highlighted tr,
+ * and the column baseline typography. Cell-content widgets (badges,
+ * buttons, inline inputs) live in their own modules.
+ */
+
+      /* ---------- Table ---------- */
+      .table-wrap {
+        overflow: auto;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 1100px;
+      }
+      th,
+      td {
+        padding: 12px;
+        border-bottom: 1px solid var(--gtss-card-border);
+        text-align: left;
+        color: var(--gtss-text);
+        font-size: 14px;
+      }
+      th {
+        color: var(--gtss-muted);
+        font-size: 12px;
+        text-transform: uppercase;
+        position: sticky;
+        top: 0;
+        background: var(--gtss-card-bg);
+        z-index: 1;
+      }
+      tr {
+        cursor: pointer;
+        transition: background 120ms ease;
+      }
+      tr:hover {
+        background: rgb(59 130 246 / 6%);
+      }

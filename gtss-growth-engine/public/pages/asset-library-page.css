@@ -1,0 +1,30 @@
+/**
+ * asset-library-page.css — Asset Library page styles (module loader)
+ *
+ * Imports thematic split files from the asset-library-page/ subdirectory
+ * in dependency order. Original inline <style> block in asset-library.html
+ * was ~503 lines; this loader is the only stylesheet the Asset Library
+ * HTML references directly (via <link rel="stylesheet"
+ * href="/pages/asset-library-page.css">).
+ *
+ * File manifest (loaded in order):
+ *   asset-library-page/layout.css     — body backdrop, .asset-page grid,
+ *                                       card primitives, .section-title
+ *   asset-library-page/header.css     — .asset-header + .asset-header-stats
+ *   asset-library-page/toolbar.css    — .asset-toolbar upload form,
+ *                                       .asset-btn variants, .asset-toolbar-meta
+ *   asset-library-page/groups.css     — .new-group-row, .group-card,
+ *                                       .group-header, .group-asset-thumb,
+ *                                       @keyframes fadeUp
+ *   asset-library-page/all-assets.css — .asset-grid, .asset-card,
+ *                                       .asset-media, .asset-tag-pill,
+ *                                       .asset-empty-state
+ *   asset-library-page/responsive.css — @media (max-width: 900px / 600px)
+ */
+
+@import url("asset-library-page/layout.css");
+@import url("asset-library-page/header.css");
+@import url("asset-library-page/toolbar.css");
+@import url("asset-library-page/groups.css");
+@import url("asset-library-page/all-assets.css");
+@import url("asset-library-page/responsive.css");

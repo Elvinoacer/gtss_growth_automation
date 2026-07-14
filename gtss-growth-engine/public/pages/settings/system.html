@@ -1,0 +1,46 @@
+        <!-- ═══════════════════════════════════════════════════════════ SYSTEM -->
+        <section class="settings-section gtss-card" id="system-settings" aria-labelledby="system-heading">
+          <div class="section-head">
+            <div class="section-head__title">
+              <span class="section-head__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19 12h2M3 12h2M12 3v2M12 19v2M17 7l1.4-1.4M5.6 18.4 7 17M7 7 5.6 5.6M18.4 18.4 17 17"/></svg>
+              </span>
+              <div class="section-head__heading">
+                <h2 id="system-heading">Security &amp; Data</h2>
+                <div class="section-head__sub">Passphrase management and the irreversible "clear all data" control.</div>
+              </div>
+            </div>
+            <div class="section-head__actions">
+              <span id="app-version" class="muted"></span>
+            </div>
+          </div>
+          <div class="system-grid">
+            <div class="settings-card">
+              <h3>Change Passphrase</h3>
+              <p class="muted" style="font-size: 11.5px; margin: 0 0 14px; line-height: 1.55;">
+                Your passphrase encrypts platform sessions and API keys at rest. Choose a strong one — at least 12 characters.
+              </p>
+              <div class="form-grid">
+                <label class="field">Current passphrase
+                  <input id="current-passphrase" type="password" autocomplete="current-password" />
+                </label>
+                <label class="field">New passphrase
+                  <input id="new-passphrase" type="password" autocomplete="new-password" />
+                </label>
+                <label class="field">Confirm new passphrase
+                  <input id="confirm-passphrase" type="password" autocomplete="new-password" />
+                </label>
+                <button id="change-passphrase" class="primary-button" type="button">Change Passphrase</button>
+                <span id="passphrase-result" class="inline-result" role="status" aria-live="polite"></span>
+              </div>
+            </div>
+            <div class="settings-card">
+              <h3>Clear All Data</h3>
+              <p class="warning-box">This will permanently delete all leads, messages, and history. Cannot be undone.</p>
+              <label class="field">Type DELETE to confirm
+                <input id="delete-confirmation" type="text" autocomplete="off" />
+              </label>
+              <button id="clear-data" class="danger-button" type="button" disabled>Clear All Data</button>
+            </div>
+          </div>
+        </section>

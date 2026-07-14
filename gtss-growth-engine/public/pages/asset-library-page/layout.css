@@ -1,0 +1,74 @@
+/**
+ * layout.css — Asset Library page backdrop + grid + section headings
+ *
+ * Extracted from the original inline <style> block in asset-library.html.
+ * body[data-page-title="Asset Library"] sets the radial+linear dark
+ * backdrop. .asset-page is the page-level grid wrapper. .asset-card-
+ * surface / .group-card / .asset-card share a common card primitive.
+ * .section-title / .section-subtitle are the reusable uppercase heading
+ * treatment used by the "Asset Groups" and "All Assets" sections.
+ */
+
+      /* ─── Asset Library — refined layout ─────────────────────────────
+         Goals:
+           • Consistent with the rest of the app (Geist, dark surface, soft borders).
+           • Strong visual hierarchy: page header → toolbar → groups → all assets.
+           • Generous spacing; cards breathe; primary actions are obvious.
+           • Sticky toolbar + section headings so context is never lost. */
+
+      body[data-page-title="Asset Library"] {
+        background:
+          radial-gradient(900px 450px at 12% -10%, rgba(96, 165, 250, 0.12), transparent 60%),
+          radial-gradient(800px 500px at 92% 0%, rgba(56, 189, 248, 0.10), transparent 65%),
+          linear-gradient(180deg, #0a0f1d 0%, #0b1220 100%);
+        color: var(--gtss-text);
+        font-family: "Geist", sans-serif;
+      }
+
+      .page-content { padding-bottom: 48px; }
+
+      .asset-page {
+        display: grid;
+        gap: 28px;
+        padding: 28px;
+        max-width: 1280px;
+        margin: 0 auto;
+        position: relative;
+      }
+
+      /* ─── Card primitives ───────────────────────────────────────────── */
+      .asset-card-surface,
+      .group-card,
+      .asset-card {
+        background: rgba(15, 23, 42, 0.78);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: var(--gtss-radius);
+        box-shadow: 0 10px 24px rgba(2, 6, 23, 0.35);
+      }
+
+      /* ─── Section heading ───────────────────────────────────────────── */
+      .section-title {
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--gtss-text);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin: 0 0 12px 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .section-title::before {
+        content: "";
+        width: 3px;
+        height: 14px;
+        border-radius: 2px;
+        background: linear-gradient(180deg, var(--gtss-primary), #8b5cf6);
+      }
+      .section-subtitle {
+        margin: 0 0 16px;
+        font-size: 13px;
+        color: var(--gtss-muted);
+        line-height: 1.6;
+        max-width: 880px;
+      }

@@ -1,0 +1,83 @@
+        <section id="discovered-leads-section" class="discovery-card gtss-card">
+          <div class="results-header">
+            <h2>
+              Discovered Leads
+              <span id="total-count" class="count-badge">0</span>
+            </h2>
+          </div>
+          <div class="filter-bar">
+            <label class="filter-field"
+              >Platform
+              <select id="platform-filter">
+                <option value="">All</option>
+              </select>
+            </label>
+            <label class="filter-field"
+              >Keyword
+              <input
+                id="keyword-filter"
+                type="text"
+                placeholder="Filter source keyword"
+              />
+            </label>
+            <label class="filter-field"
+              >From
+              <input id="date-from-filter" type="date" />
+            </label>
+            <label class="filter-field"
+              >To
+              <input id="date-to-filter" type="date" />
+            </label>
+            <button id="apply-filters" class="secondary-button" type="button">
+              Apply Filters
+            </button>
+          </div>
+          <div id="bulk-bar" class="bulk-bar">
+            <span id="bulk-count">0 selected</span>
+            <div>
+              <button id="bulk-qualify" class="primary-button" type="button">
+                Qualify Selected (0)
+              </button>
+              <button id="bulk-dismiss" class="danger-button" type="button">
+                Dismiss Selected
+              </button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>
+                    <input
+                      id="select-all"
+                      type="checkbox"
+                      aria-label="Select all leads"
+                    />
+                  </th>
+                  <th>Name</th>
+                  <th>Role</th>
+                  <th>Company</th>
+                  <th>Location</th>
+                  <th>Platform</th>
+                  <th>Profile URL</th>
+                  <th>Discovered</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="results-body"></tbody>
+            </table>
+            <div id="empty-state" class="empty-state">
+              <span class="search-icon">⌕</span>
+              No leads discovered yet. Start a discovery run above.
+            </div>
+          </div>
+          <div class="pagination">
+            <button id="prev-page" class="secondary-button" type="button">
+              Previous
+            </button>
+            <span id="page-label">Page 1 of 1</span>
+            <button id="next-page" class="secondary-button" type="button">
+              Next
+            </button>
+          </div>
+        </section>

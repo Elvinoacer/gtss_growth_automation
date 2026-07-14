@@ -1,0 +1,159 @@
+/**
+ * section.css — Settings page section card + headings + grid card
+ *
+ * Extracted from the original settings-page.css. .settings-section is the
+ * generic outer card used by every category panel (API config, daily
+ * limits, etc.). .section-head holds the icon, title, sub-copy, and action
+ * row. .settings-grid + .settings-card are the 4-up card grid used inside
+ * sections like Platform Sessions.
+ */
+
+      /* ─── Section card ─── */
+      .settings-section {
+        padding: 26px 26px 22px;
+        border-radius: var(--settings-radius);
+        background: var(--settings-surface);
+        border: 1px solid var(--settings-border);
+        box-shadow: 0 18px 40px var(--settings-shadow);
+        position: relative;
+        z-index: 1;
+        animation: fadeUp 0.5s ease both;
+        scroll-margin-top: calc(var(--topbar-height) + 24px);
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+      .settings-section:hover {
+        border-color: rgba(96, 165, 250, 0.28);
+      }
+      .settings-section:nth-child(odd)  { animation-delay: 0.05s; }
+      .settings-section:nth-child(even) { animation-delay: 0.10s; }
+
+      /* Section header */
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 18px;
+        padding-bottom: 14px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+        flex-wrap: wrap;
+      }
+      .section-head__title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+      .section-head__icon {
+        width: 36px;
+        height: 36px;
+        flex: 0 0 auto;
+        display: grid;
+        place-items: center;
+        border-radius: 10px;
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.20), rgba(139, 92, 246, 0.10));
+        border: 1px solid rgba(59, 130, 246, 0.28);
+        color: #bfdbfe;
+      }
+      .section-head__icon svg {
+        width: 18px;
+        height: 18px;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 1.8;
+      }
+      .section-head__heading {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+      .section-head h2 {
+        margin: 0;
+        color: var(--gtss-text);
+        font-family: "Geist", sans-serif;
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: -0.005em;
+        line-height: 1.25;
+      }
+      .section-head__sub {
+        font-size: 11.5px;
+        color: var(--gtss-muted);
+        font-weight: 500;
+      }
+      .section-head__actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .settings-page h2,
+      .settings-page h3 {
+        font-family: "Geist", sans-serif;
+        letter-spacing: 0.01em;
+      }
+      .settings-card h3 {
+        margin: 0 0 8px;
+        color: var(--gtss-text);
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      /* Subsection labels (uniform treatment) */
+      .settings-section h3[style*="text-transform: uppercase"],
+      .settings-section h3[style*="letter-spacing"] {
+        margin: 0 0 14px !important;
+        font-size: 11.5px !important;
+        font-weight: 700 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.10em !important;
+        color: var(--gtss-muted) !important;
+        padding-bottom: 8px;
+        border-bottom: 1px dashed rgba(148, 163, 184, 0.16);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .settings-section h3[style*="text-transform: uppercase"]::before,
+      .settings-section h3[style*="letter-spacing"]::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: linear-gradient(135deg, var(--settings-accent), #8b5cf6);
+        flex: 0 0 auto;
+      }
+      .settings-section h3[style*="border-bottom: 1px dashed"] {
+        color: var(--gtss-primary) !important;
+        font-size: 13px !important;
+        font-weight: 700 !important;
+      }
+
+      .muted {
+        color: rgba(148, 163, 184, 0.85);
+      }
+
+      /* ─── Grids ─── */
+      .settings-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(180px, 1fr));
+        gap: 14px;
+      }
+      .settings-card {
+        padding: 18px;
+        border: 1px solid var(--settings-border);
+        border-radius: calc(var(--gtss-radius) + 2px);
+        background: var(--settings-surface-2);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+      }
+      .settings-card:hover {
+        border-color: rgba(96, 165, 250, 0.32);
+        transform: translateY(-1px);
+        box-shadow: 0 8px 20px rgba(2, 6, 23, 0.45);
+      }
+      .session-card {
+        display: grid;
+        gap: 10px;
+      }

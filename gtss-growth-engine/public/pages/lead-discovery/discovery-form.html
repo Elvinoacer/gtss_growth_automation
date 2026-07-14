@@ -1,0 +1,57 @@
+<!-- lead-discovery/discovery-form.html — Lead Discovery form panel
+     Extracted from lead-discovery.html. The "New Discovery" card with
+     the #discovery-form: search-query input (#keyword-input), platform
+     checkbox list (#platform-row), max-leads number input (#max-leads-
+     input), and the Start Discovery submit button (#start-discovery-
+     btn). Below the form is the #result-summary panel (hidden by
+     default). Includes a tiny inline <style> for the .visible state.
+     Rendered server-side via data-include. -->
+
+<div class="bg-surface-container-lowest rounded-lg border border-outline-variant p-5 shadow-sm">
+<h3 class="font-headline-md text-headline-md font-bold text-on-surface mb-1">New Discovery</h3>
+<p class="font-body-xs text-body-xs text-on-surface-variant mb-5">Configure parameters to hunt for new leads.</p>
+<form id="discovery-form" class="flex flex-col gap-4">
+<div>
+<label class="block font-label-caps text-label-caps text-tertiary-container mb-1.5">Search Query</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[18px]">search</span>
+<input id="keyword-input" name="keyword" class="w-full bg-surface border border-outline-variant rounded pl-9 pr-3 py-2 font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary" placeholder='e.g., "restaurant owner Nairobi"' type="text" value="restaurant owner Nairobi"/>
+</div>
+</div>
+<div>
+<label class="block font-label-caps text-label-caps text-tertiary-container mb-2">Platforms</label>
+<div id="platform-row" class="flex flex-col gap-2">
+<label class="flex items-center gap-2 cursor-pointer group">
+<input checked="" name="platforms" value="linkedin" class="rounded border-outline-variant text-primary focus:ring-primary w-4 h-4 bg-surface" type="checkbox"/>
+<span class="font-body-sm text-body-sm text-on-surface group-hover:text-primary transition-colors">LinkedIn</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer group">
+<input checked="" name="platforms" value="x" class="rounded border-outline-variant text-primary focus:ring-primary w-4 h-4 bg-surface" type="checkbox"/>
+<span class="font-body-sm text-body-sm text-on-surface group-hover:text-primary transition-colors">X Platform</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer group">
+<input name="platforms" value="facebook" class="rounded border-outline-variant text-primary focus:ring-primary w-4 h-4 bg-surface" type="checkbox"/>
+<span class="font-body-sm text-body-sm text-on-surface group-hover:text-primary transition-colors">Facebook</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer group">
+<input name="platforms" value="instagram" class="rounded border-outline-variant text-primary focus:ring-primary w-4 h-4 bg-surface" type="checkbox"/>
+<span class="font-body-sm text-body-sm text-on-surface group-hover:text-primary transition-colors">Instagram</span>
+</label>
+</div>
+</div>
+<div>
+<label class="block font-label-caps text-label-caps text-tertiary-container mb-1.5">Max Leads to collect</label>
+<input id="max-leads-input" name="maxLeads" class="w-full bg-surface border border-outline-variant rounded px-3 py-2 font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary" type="number" value="20"/>
+</div>
+<button id="start-discovery-btn" type="submit" class="w-full bg-primary text-on-primary font-label-caps text-label-caps py-2.5 rounded mt-2 hover:bg-primary/90 transition-colors flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-[18px]">travel_explore</span>
+                            Start Discovery
+                        </button>
+</form>
+<div id="result-summary" class="mt-4 p-3 bg-surface-container border border-outline-variant rounded-lg text-on-surface font-body-sm" style="display: none;">
+    <strong id="result-summary-text">Discovery complete: 0 new leads, 0 duplicates.</strong>
+</div>
+<style>
+#result-summary.visible { display: block !important; }
+</style>
+</div>

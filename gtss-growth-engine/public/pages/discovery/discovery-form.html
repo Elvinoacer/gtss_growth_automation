@@ -1,0 +1,201 @@
+        <section class="discovery-card gtss-card">
+          <h2>Start New Discovery Run</h2>
+          <form id="discovery-form" class="discovery-form">
+            <div class="field-grid">
+              <label class="field"
+                >Keyword
+                <input
+                  id="keyword-input"
+                  name="keyword"
+                  type="text"
+                  placeholder="e.g. restaurant owner Nairobi"
+                  required
+                />
+              </label>
+              <label class="field"
+                >Max leads to collect
+                <input
+                  id="max-leads-input"
+                  name="maxLeads"
+                  type="number"
+                  value="20"
+                  min="1"
+                  max="100"
+                />
+              </label>
+            </div>
+            <div
+              id="platform-row"
+              class="platform-row"
+              aria-label="Platforms"
+            ></div>
+
+            <!-- Instagram Discovery Options (Hidden by default) -->
+            <div id="ig-discovery-container" class="ig-discovery-container">
+              <div>
+                <span
+                  style="
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: var(--gtss-muted);
+                    display: block;
+                    margin-bottom: 8px;
+                  "
+                  >Instagram Discovery Strategy</span
+                >
+                <div class="strategy-row">
+                  <label class="strategy-option">
+                    <input
+                      type="radio"
+                      name="ig-strategy"
+                      value="hashtag"
+                      checked
+                    />
+                    <span>Hashtag</span>
+                  </label>
+                  <label class="strategy-option">
+                    <input
+                      type="radio"
+                      name="ig-strategy"
+                      value="geolocation"
+                    />
+                    <span>Geolocation</span>
+                  </label>
+                  <label class="strategy-option">
+                    <input type="radio" name="ig-strategy" value="competitor" />
+                    <span>Competitor</span>
+                  </label>
+                  <label class="strategy-option">
+                    <input type="radio" name="ig-strategy" value="suggested" />
+                    <span>Suggested</span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Hashtag Panel -->
+              <div id="ig-hashtag-panel" class="strategy-panel active">
+                <span style="font-size: 12px; color: var(--gtss-muted)"
+                  >Target Hashtags (Type and press Enter, or choose from
+                  defaults)</span
+                >
+                <div class="chip-container" id="hashtag-chip-container">
+                  <!-- Chips will be inserted here -->
+                  <input
+                    type="text"
+                    id="hashtag-chip-input"
+                    class="chip-input"
+                    placeholder="Add hashtag..."
+                  />
+                </div>
+              </div>
+
+              <!-- Geolocation Panel -->
+              <div id="ig-geolocation-panel" class="strategy-panel">
+                <span style="font-size: 12px; color: var(--gtss-muted)"
+                  >Target Geolocation</span
+                >
+                <div class="field">
+                  <select
+                    id="ig-location-select"
+                    style="
+                      min-height: 42px;
+                      border: 1px solid var(--gtss-card-border);
+                      border-radius: var(--gtss-radius);
+                      padding: 9px 11px;
+                      background: #0b1220;
+                      color: var(--gtss-text);
+                      font: inherit;
+                      width: 100%;
+                    "
+                  >
+                    <!-- Options populated from keywords.json -->
+                  </select>
+                </div>
+              </div>
+
+              <!-- Competitor Panel -->
+              <div id="ig-competitor-panel" class="strategy-panel">
+                <div
+                  style="
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 16px;
+                  "
+                >
+                  <label class="field">
+                    Competitor Username
+                    <input
+                      type="text"
+                      id="ig-competitor-username"
+                      placeholder="e.g. nairobieats"
+                    />
+                  </label>
+                  <label class="field">
+                    Max profiles to scrape
+                    <input
+                      type="number"
+                      id="ig-competitor-max"
+                      value="25"
+                      min="1"
+                      max="500"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <!-- Suggested Panel -->
+              <div id="ig-suggested-panel" class="strategy-panel">
+                <span
+                  style="
+                    font-size: 12px;
+                    color: var(--gtss-muted);
+                    font-style: italic;
+                  "
+                  >Will discover leads recommended/suggested by Instagram based
+                  on your niche.</span
+                >
+              </div>
+
+              <!-- Auto-Warmup Toggle -->
+              <div
+                style="
+                  display: flex;
+                  align-items: center;
+                  gap: 8px;
+                  margin-top: 8px;
+                "
+              >
+                <label class="strategy-option">
+                  <input type="checkbox" id="ig-auto-warmup" checked />
+                  <span>Auto-start warm-up for qualified leads</span>
+                </label>
+              </div>
+            </div>
+            <button class="primary-button" type="submit">
+              Start Discovery
+            </button>
+          </form>
+          <div id="running-panel" class="running-panel">
+            <div class="spinner-line">
+              <span class="spinner" aria-hidden="true"></span
+              ><span id="running-text">Discovering leads...</span>
+            </div>
+            <div id="live-log" class="live-log" aria-live="polite"></div>
+            <button id="stop-button" class="danger-button" type="button">
+              Stop
+            </button>
+          </div>
+          <div id="result-summary" class="result-summary gtss-card">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+              <span style="font-size:28px;color:#22c55e;font-weight:900;line-height:1">✓</span>
+              <div>
+                <strong id="result-summary-text" style="font-size:16px;color:var(--gtss-text);display:block">Discovery complete.</strong>
+                <div id="result-summary-detail" style="font-size:13px;color:var(--gtss-muted);margin-top:4px"></div>
+              </div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+              <a href="/qualification" class="primary-button" style="text-decoration:none;display:inline-flex;align-items:center;gap:6px">Proceed to Qualification →</a>
+              <a href="#results-section" class="secondary-button" style="text-decoration:none;display:inline-flex;align-items:center;gap:6px" onclick="document.getElementById('discovered-leads-section').scrollIntoView({behavior:'smooth'});return false">View Results Below ↓</a>
+            </div>
+          </div>
+        </section>

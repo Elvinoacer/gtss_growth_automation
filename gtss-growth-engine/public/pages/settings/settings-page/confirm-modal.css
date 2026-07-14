@@ -1,0 +1,39 @@
+/**
+ * confirm-modal.css — Settings page confirm modal
+ *
+ * Extracted from the original settings-page.css. .confirm-backdrop is the
+ * full-screen overlay shown when an irreversible action (reset settings,
+ * clear sessions) needs confirmation. The modal itself is a small centered
+ * card with a single confirm-actions row at the bottom.
+ */
+
+      /* ─── Confirm modal ─── */
+      .confirm-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 3000;
+        display: none;
+        place-items: center;
+        padding: 20px;
+        background: rgba(2, 6, 23, 0.72);
+        backdrop-filter: blur(4px);
+      }
+      .confirm-backdrop.visible {
+        display: grid;
+      }
+      .confirm-modal {
+        width: min(460px, 100%);
+        padding: 22px;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: var(--settings-radius);
+        background: #0b1220;
+        color: var(--gtss-text);
+        box-shadow: 0 20px 45px rgba(2, 6, 23, 0.6);
+        animation: fadeUp 0.25s ease both;
+      }
+      .confirm-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 18px;
+      }

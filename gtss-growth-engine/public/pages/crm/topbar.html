@@ -1,0 +1,27 @@
+<!-- crm/topbar.html — CRM page top navigation bar
+     Extracted from crm.html. The <header> inside the Main Workspace
+     wrapper, holding the "CRM Pipeline" page title on the left and the
+     "Detect Replies Now" button + profile avatar on the right. Rendered
+     server-side via data-include. -->
+
+      <header
+        class="flex justify-between items-center h-16 px-6 bg-white border-b border-outline-variant z-10 shrink-0"
+      >
+        <h2 class="text-xl font-bold text-on-surface">CRM Pipeline</h2>
+        <div class="flex items-center gap-4">
+          <button
+            id="detect-replies-btn"
+            class="bg-primary text-white text-sm font-semibold px-4 py-2 rounded flex items-center gap-2 hover:bg-primary/90 transition-colors"
+          >
+            <span class="material-symbols-outlined text-sm">sync</span>
+            Detect Replies Now
+          </button>
+          <div class="w-8 h-8 rounded-full bg-gray-200 overflow-hidden ml-2">
+            <img
+              src="https://lh3.googleusercontent.com/aida-public/AB6AXuB-buy24dXyqW7b4GR571VAkvHdXkfYnO0hZVnht0VlC46fg7xk4tmq8h1UtIBtYtJKpH-_Kg_lviWbUpuqOll9m1uL-WfpBBmOEo6v1Qt-MM3Ua8TiI0fLldGcoe5xw65rAS77ocdJKwJ03AJJhKtJIc9DJHtBDjqikmam4kXyXFPLwHOyn4pgaMEYp-aBMXJiD20M-PaZoqFOuYkO4VWg1UixiqSyxhgOxBrtrUxGusXG6qTfUsnUe0vHa7dqS1CivCLcxjnOgKM"
+              alt="Profile"
+              class="w-full h-full object-cover"
+            />
+          </div>
+        </div>
+      </header>

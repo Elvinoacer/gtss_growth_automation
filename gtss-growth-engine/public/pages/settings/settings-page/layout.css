@@ -1,0 +1,138 @@
+/**
+ * layout.css — Settings page grid + hero banner
+ *
+ * Extracted from the original settings-page.css. The .settings-page wrapper
+ * is the top-level grid (single column, max-width 1280px) with a soft
+ * gradient aura behind it (::before). The .settings-hero sits in the first
+ * row (full width) and holds the breadcrumb, title, description, status
+ * badge, and quick-jump chips.
+ */
+
+      /* ─── Page layout ─── */
+      .settings-page {
+        display: grid;
+        gap: 24px;
+        padding: 28px;
+        max-width: 1280px;
+        margin: 0 auto;
+        position: relative;
+      }
+      .settings-page::before {
+        content: "";
+        position: absolute;
+        inset: -40px -40px auto -40px;
+        height: 220px;
+        background:
+          radial-gradient(220px 120px at 15% 20%, rgba(96, 165, 250, 0.18), transparent 70%),
+          radial-gradient(260px 120px at 85% 0%, rgba(251, 191, 36, 0.12), transparent 70%);
+        opacity: 0.85;
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      /* ─── Hero ─── */
+      .settings-hero {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 20px;
+        flex-wrap: wrap;
+        padding: 28px 30px;
+        border-radius: var(--settings-radius);
+        background:
+          linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(139, 92, 246, 0.08) 60%, transparent 100%),
+          var(--settings-surface);
+        border: 1px solid var(--settings-border);
+        box-shadow: 0 18px 40px var(--settings-shadow);
+        position: relative;
+        z-index: 1;
+        animation: fadeUp 0.4s ease both;
+      }
+      .settings-hero-text { flex: 1 1 420px; min-width: 0; }
+      .settings-breadcrumb {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 10px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid var(--settings-border);
+        font-size: 11px;
+        color: var(--gtss-muted);
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      .settings-breadcrumb a {
+        color: var(--gtss-muted);
+        text-decoration: none;
+      }
+      .settings-breadcrumb a:hover { color: var(--gtss-text); }
+      .settings-breadcrumb .sep {
+        opacity: 0.5;
+      }
+      .settings-breadcrumb .current { color: var(--gtss-text); }
+      .settings-hero-text h1 {
+        margin: 0 0 8px;
+        font-family: "Geist", sans-serif;
+        font-size: 26px;
+        font-weight: 700;
+        color: var(--gtss-text);
+        letter-spacing: -0.015em;
+      }
+      .settings-hero-text p {
+        margin: 0;
+        font-size: 13px;
+        color: var(--gtss-muted);
+        max-width: 760px;
+        line-height: 1.6;
+      }
+      .settings-hero-actions {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 10px;
+      }
+      .settings-hero-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid var(--settings-border);
+        font-size: 12px;
+        color: var(--gtss-muted);
+        font-weight: 600;
+      }
+      .settings-hero-badge .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: var(--settings-success);
+        box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.18);
+        animation: pulse-active 2.6s ease-in-out infinite;
+      }
+      .settings-hero-quick {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .settings-hero-quick a {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--gtss-muted);
+        text-decoration: none;
+        padding: 5px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--settings-border);
+        background: rgba(15, 23, 42, 0.6);
+        transition: color 150ms, border-color 150ms, background 150ms;
+      }
+      .settings-hero-quick a:hover {
+        color: var(--gtss-text);
+        border-color: rgba(96, 165, 250, 0.5);
+        background: rgba(59, 130, 246, 0.10);
+      }

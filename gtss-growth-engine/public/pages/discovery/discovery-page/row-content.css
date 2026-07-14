@@ -1,0 +1,67 @@
+/**
+ * row-content.css — Lead Discovery row actions, empty state, pagination, history
+ *
+ * Extracted from the original discovery-page.css. .row-actions / .row-button
+ * are the per-row action buttons (with a .danger variant). .empty-state +
+ * .search-icon is the placeholder shown when the table has no rows.
+ * .pagination is the footer. .history-toggle / .history-body drive the
+ * collapsible run-history accordion. tr.fading is the fade-out transition
+ * used when a row is dismissed.
+ */
+
+      .row-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .row-button {
+        border: 1px solid var(--gtss-card-border);
+        border-radius: 6px;
+        padding: 6px 8px;
+        background: #0b1220;
+        color: var(--gtss-text);
+        cursor: pointer;
+      }
+      .row-button.danger {
+        color: #fecaca;
+      }
+      .empty-state {
+        display: none;
+        padding: 42px 16px;
+        text-align: center;
+        color: var(--gtss-muted);
+      }
+      .empty-state.visible {
+        display: block;
+      }
+      .search-icon {
+        display: block;
+        margin-bottom: 10px;
+        font-size: 32px;
+      }
+      .pagination {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 12px;
+        margin-top: 14px;
+        color: var(--gtss-muted);
+      }
+      .history-toggle {
+        width: 100%;
+        border: 0;
+        background: transparent;
+        color: var(--gtss-text);
+        text-align: left;
+        cursor: pointer;
+      }
+      .history-body {
+        display: none;
+        margin-top: 16px;
+      }
+      .history-body.visible {
+        display: block;
+      }
+      tr.fading {
+        opacity: 0;
+        transition: opacity 180ms ease;
+      }

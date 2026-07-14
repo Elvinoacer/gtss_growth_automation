@@ -1,0 +1,31 @@
+<!-- asset-library/groups-section.html — Asset Library "Asset Groups" section
+     Extracted from asset-library.html. The <section id="groups-section">
+     holds the section title + subtitle, the 4-col new-group row
+     (name / label / type / create button), and the #groups-list
+     container that JS populates with .group-card entries. Rendered
+     server-side via data-include. -->
+
+        <section id="groups-section">
+          <h2 class="section-title">Asset Groups</h2>
+          <p class="section-subtitle">
+            Group images that should be published together as a single post
+            (e.g. an Instagram carousel, or a multi-image LinkedIn/X post).
+            You can label each group and pick a post type. When the
+            <strong>Asset source</strong> is set to <em>My Asset Library</em>,
+            the posting pipeline will pick the next least-used group and
+            publish all its assets together.
+          </p>
+
+          <div class="new-group-row">
+            <input id="new-group-name" type="text" placeholder="New group name (e.g. 'Restaurant promo carousel')" />
+            <input id="new-group-label" type="text" placeholder="Label (optional)" />
+            <select id="new-group-type">
+              <option value="carousel">Carousel (multi-image)</option>
+              <option value="video">Video</option>
+              <option value="single">Single</option>
+            </select>
+            <button type="button" id="create-group-btn" class="asset-btn asset-btn-primary">+ Create Group</button>
+          </div>
+
+          <div id="groups-list"></div>
+        </section>

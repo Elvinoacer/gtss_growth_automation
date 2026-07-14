@@ -1,0 +1,30 @@
+/**
+ * buttons.css — Lead Discovery button color variants
+ *
+ * Extracted from the original discovery-page.css. The .primary-button /
+ * .secondary-button / .danger-button trio is this page's call-to-action
+ * family (separate from the global .btn family in /css/style.css). The
+ * base shared rules and per-color backgrounds live here.
+ */
+
+      .primary-button,
+      .secondary-button,
+      .danger-button {
+        min-height: 40px;
+        border: 0;
+        border-radius: var(--gtss-radius);
+        padding: 0 14px;
+        color: #ffffff;
+        font: inherit;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .primary-button {
+        background: var(--gtss-primary);
+      }
+      .secondary-button {
+        background: #334155;
+      }
+      .danger-button {
+        background: var(--gtss-danger);
+      }

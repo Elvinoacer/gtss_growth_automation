@@ -1,0 +1,90 @@
+/* ─── Status hero (the big circle + label) ──────────────────────────────── */
+
+.status-hero {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 28px 24px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+  box-shadow: var(--shadow);
+}
+
+.status-hero-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  position: relative;
+  background: var(--bg-elev-2);
+}
+
+.status-hero-icon.stopped::after {
+  content: "";
+  width: 16px;
+  height: 16px;
+  background: var(--text-muted);
+  border-radius: 3px;
+}
+
+.status-hero-icon.starting::after {
+  content: "";
+  width: 24px;
+  height: 24px;
+  border: 3px solid var(--warning);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.status-hero-icon.running {
+  background: rgba(16, 185, 129, 0.15);
+}
+.status-hero-icon.running::after {
+  content: "";
+  width: 18px;
+  height: 18px;
+  background: var(--success);
+  border-radius: 50%;
+  box-shadow: 0 0 16px var(--success);
+}
+
+.status-hero-icon.crashed {
+  background: rgba(239, 68, 68, 0.15);
+}
+.status-hero-icon.crashed::after {
+  content: "!";
+  color: var(--danger);
+  font-weight: 800;
+  font-size: 28px;
+  line-height: 1;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.status-hero-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.status-hero-label {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.status-hero-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

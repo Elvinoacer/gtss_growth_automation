@@ -1,0 +1,254 @@
+/* --------------------------------------------------------------------------
+   12. Responsive Overrides
+   -------------------------------------------------------------------------- */
+@media (max-width: 1280px) {
+  .page-content [class*="grid-cols-6"],
+  .page-content [class*="grid-cols-4"],
+  body > div[class*="ml-[260px]"] [class*="grid-cols-6"],
+  body > div[class*="ml-[260px]"] [class*="grid-cols-4"],
+  body > div[class*="ml-\\[260px\\]"] [class*="grid-cols-6"],
+  body > div[class*="ml-\\[260px\\]"] [class*="grid-cols-4"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .page-content [class*="grid-cols-3"],
+  body > div[class*="ml-[260px]"] [class*="grid-cols-3"],
+  body > div[class*="ml-\\[260px\\]"] [class*="grid-cols-3"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .page-content [class*="col-span-2"],
+  .page-content [class*="col-span-4"],
+  .page-content [class*="col-span-8"],
+  body > div[class*="ml-[260px]"] [class*="col-span-2"],
+  body > div[class*="ml-[260px]"] [class*="col-span-4"],
+  body > div[class*="ml-[260px]"] [class*="col-span-8"],
+  body > div[class*="ml-\\[260px\\]"] [class*="col-span-2"],
+  body > div[class*="ml-\\[260px\\]"] [class*="col-span-4"],
+  body > div[class*="ml-\\[260px\\]"] [class*="col-span-8"] {
+    grid-column: auto !important;
+  }
+}
+
+@media (max-width: 1024px) {
+  :root {
+    --sidebar-width: var(--sidebar-collapsed);
+  }
+
+  .gtss-sidebar {
+    width: var(--sidebar-collapsed);
+  }
+
+  .gtss-sidebar .gtss-brand-copy,
+  .gtss-sidebar .gtss-nav__label,
+  .gtss-sidebar .gtss-nav__link strong,
+  .gtss-sidebar .gtss-nav__badge,
+  .gtss-sidebar .nav-badge,
+  .gtss-sidebar .gtss-session-title,
+  .gtss-sidebar .gtss-session-name,
+  .gtss-sidebar .gtss-session-pill,
+  .gtss-sidebar .gtss-session-manage,
+  .gtss-sidebar .gtss-session-head,
+  .gtss-sidebar .gtss-quick-action,
+  .gtss-sidebar .gtss-sidebar-foot {
+    display: none !important;
+  }
+
+  .gtss-sidebar .gtss-nav__link,
+  .gtss-sidebar .gtss-session-row {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+
+  .gtss-topbar,
+  body.gtss-sidebar-collapsed .gtss-topbar {
+    left: var(--sidebar-collapsed);
+  }
+
+  .page-content,
+  body.gtss-sidebar-collapsed .page-content {
+    margin-left: var(--sidebar-collapsed);
+  }
+}
+
+@media (max-width: 768px) {
+  .gtss-sidebar {
+    inset: auto 0 0 0;
+    width: 100%;
+    height: 68px;
+    flex-direction: row;
+    align-items: center;
+    padding: var(--space-2);
+    border-top: 1px solid var(--border);
+    border-right: 0;
+  }
+
+  .gtss-sidebar__brand,
+  .gtss-session-status,
+  .gtss-sidebar-toggle,
+  .gtss-quick-action,
+  .gtss-sidebar-foot,
+  .gtss-nav__label,
+  .gtss-nav__group:nth-of-type(n + 3) {
+    display: none !important;
+  }
+
+  .gtss-nav {
+    width: 100%;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: var(--space-1);
+    overflow: visible;
+    padding: 0;
+  }
+
+  .gtss-nav__group {
+    display: contents;
+  }
+
+  .gtss-nav__link {
+    min-height: 52px;
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 2px;
+    padding: var(--space-1);
+  }
+
+  .gtss-nav__link strong {
+    display: block !important;
+    max-width: 100%;
+    font-size: 9px;
+  }
+
+  .gtss-topbar,
+  body.gtss-sidebar-collapsed .gtss-topbar {
+    left: 0;
+    grid-template-columns: 1fr auto;
+    min-height: 96px;
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .gtss-action-badge {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    min-width: 0;
+  }
+
+  .gtss-avatar-label,
+  .gtss-page-subtitle {
+    display: none;
+  }
+
+  .page-content,
+  body.gtss-sidebar-collapsed .page-content {
+    margin-left: 0;
+    padding-top: 96px;
+    padding-bottom: 76px;
+  }
+
+  .page-content > div > main,
+  body > div[class*="ml-[260px]"] > main,
+  body > div[class*="ml-\\[260px\\]"] > main {
+    padding: var(--space-4) !important;
+  }
+
+  .settings-page {
+    width: min(100% - 24px, 1220px);
+  }
+
+  .page-content [class*="grid-cols-"],
+  body > div[class*="ml-[260px]"] [class*="grid-cols-"],
+  body > div[class*="ml-\\[260px\\]"] [class*="grid-cols-"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@keyframes pulse-active {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
+  50% { box-shadow: 0 0 0 5px rgba(34, 197, 94, 0); }
+}
+
+/* Running pipeline card — subtle left-border pulse so the user can see at
+   a glance which pipeline is currently active. Combined with the live-dot
+   inside the status badge, this gives strong at-a-glance feedback. */
+.pipeline-card--running {
+  position: relative;
+  animation: pipeline-running-pulse 2.4s ease-in-out infinite;
+}
+@keyframes pipeline-running-pulse {
+  0%, 100% { box-shadow: 0 14px 40px rgba(0,0,0,0.18), inset 0 0 0 1px rgba(34,197,94,0.0); }
+  50% { box-shadow: 0 14px 40px rgba(0,0,0,0.18), inset 0 0 0 1px rgba(34,197,94,0.45); }
+}
+
+/* Spinner used inside action buttons while a fetch is in flight. */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toast-shrink {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Final page-level operator-console overrides loaded after legacy inline CSS. */
+body {
+  font-family: var(--font-body) !important;
+}
+
+/* Settings page 2-column layout: sticky nav on the left, sections on the right.
+   The page's own <style> block defines the visual treatment; this rule just
+   establishes the grid so nav and sections sit side-by-side. The hero sits
+   above both (grid-column: 1 / -1). */
+.settings-page {
+  display: grid !important;
+  grid-template-columns: 240px minmax(0, 1fr) !important;
+  align-items: start !important;
+  gap: var(--space-5) !important;
+  padding: var(--space-6) !important;
+}
+
+.settings-page::before {
+  display: none !important;
+}
+
+/* Sticky nav spans column 1; hero already declares grid-column: 1 / -1 so it
+   sits above both columns. Every settings-section + the confirm backdrop sit
+   in column 2. */
+.settings-nav {
+  grid-column: 1;
+}
+
+.settings-page > .settings-section,
+.settings-page > .gtss-card:not(.settings-nav),
+.settings-page > .confirm-backdrop {
+  grid-column: 2;
+  width: 100%;
+}
+
+@media (max-width: 960px) {
+  .settings-page {
+    grid-template-columns: 1fr !important;
+  }
+
+  .settings-nav,
+  .settings-page > .settings-section,
+  .settings-page > .gtss-card:not(.settings-nav),
+  .settings-page > .confirm-backdrop {
+    grid-column: 1;
+  }
+
+  .settings-nav {
+    position: static;
+  }
+}
+

@@ -1,0 +1,67 @@
+/**
+ * tabs.css — Settings page tab buttons, variable badges, and system grid
+ *
+ * Extracted from the original settings-page.css. .tabs / .tab-button is the
+ * horizontal pill-tab switcher used inside panels that have multiple
+ * sub-views (e.g. Context tab). .variable-badges are the clickable variable
+ * chips under prompt-template editors. .system-grid is the 2-up grid on the
+ * System panel.
+ */
+
+      /* ─── Tabs ─── */
+      .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 14px;
+      }
+      .tab-button {
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: var(--gtss-radius);
+        padding: 8px 12px;
+        background: rgba(15, 23, 42, 0.7);
+        color: var(--gtss-muted);
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+      }
+      .tab-button:hover {
+        border-color: rgba(96, 165, 250, 0.4);
+        color: var(--gtss-text);
+      }
+      .tab-button.active {
+        border-color: rgba(96, 165, 250, 0.7);
+        color: var(--gtss-text);
+        background: rgba(59, 130, 246, 0.2);
+      }
+
+      /* Variable badges */
+      .variable-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .variable-badge {
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 999px;
+        padding: 5px 10px;
+        background: rgba(15, 23, 42, 0.7);
+        color: var(--gtss-text);
+        cursor: pointer;
+        font-family: "Geist Mono", monospace;
+        font-size: 11px;
+        transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s;
+      }
+      .variable-badge:hover {
+        transform: translateY(-1px);
+        border-color: rgba(96, 165, 250, 0.5);
+        background: rgba(59, 130, 246, 0.10);
+      }
+
+      .system-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }

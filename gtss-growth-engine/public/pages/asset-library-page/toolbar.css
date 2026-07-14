@@ -1,0 +1,114 @@
+/**
+ * toolbar.css — Asset Library upload + pipeline settings toolbar
+ *
+ * Extracted from the original inline <style> block in asset-library.html.
+ * .asset-toolbar is the auto-fit grid holding the file input, tags input,
+ * asset-source / media-type selects, and the action row (.asset-toolbar-
+ * actions with .asset-btn-primary upload + .asset-btn-secondary save +
+ * .asset-toolbar-meta status line). @keyframes assetPulse powers the
+ * pulsing status dot.
+ */
+
+      /* ─── Upload + settings toolbar ─────────────────────────────────── */
+      .asset-toolbar {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px;
+        padding: 20px;
+        background: rgba(15, 23, 42, 0.78);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: var(--gtss-radius);
+        box-shadow: 0 10px 24px rgba(2, 6, 23, 0.35);
+      }
+      .asset-toolbar-label {
+        display: grid;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--gtss-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .asset-toolbar-label input,
+      .asset-toolbar-label select {
+        min-height: 40px;
+        border-radius: var(--gtss-radius);
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        background: rgba(15, 23, 42, 0.7);
+        color: var(--gtss-text);
+        padding: 0 12px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        text-transform: none;
+        letter-spacing: 0;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+      .asset-toolbar-label input[type="file"] {
+        padding: 8px 10px;
+        cursor: pointer;
+      }
+      .asset-toolbar-label input:focus,
+      .asset-toolbar-label select:focus {
+        outline: none;
+        border-color: rgba(96, 165, 250, 0.7);
+        box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.2);
+      }
+      .asset-toolbar-actions {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        padding-top: 4px;
+        border-top: 1px dashed rgba(148, 163, 184, 0.18);
+        margin-top: 4px;
+      }
+      .asset-btn {
+        min-height: 38px;
+        padding: 0 16px;
+        border-radius: var(--gtss-radius);
+        border: 1px solid transparent;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: transform 0.15s, box-shadow 0.2s, background 0.2s, border-color 0.2s;
+      }
+      .asset-btn-primary {
+        background: linear-gradient(135deg, rgba(37, 99, 235, 0.95), rgba(96, 165, 250, 0.9));
+        color: #fff;
+        border-color: rgba(96, 165, 250, 0.6);
+        box-shadow: 0 6px 14px rgba(37, 99, 235, 0.32);
+      }
+      .asset-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 10px 18px rgba(37, 99, 235, 0.4); }
+      .asset-btn-secondary {
+        background: rgba(30, 41, 59, 0.9);
+        color: #e2e8f0;
+        border-color: rgba(148, 163, 184, 0.25);
+      }
+      .asset-btn-secondary:hover { border-color: rgba(96, 165, 250, 0.45); transform: translateY(-1px); }
+      .asset-toolbar-meta {
+        margin-left: auto;
+        font-size: 12px;
+        color: var(--gtss-muted);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .asset-toolbar-meta .pulse {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--gtss-primary);
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5);
+        animation: assetPulse 2.2s infinite;
+      }
+      @keyframes assetPulse {
+        0%   { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45); }
+        70%  { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+      }

@@ -1,0 +1,59 @@
+/**
+ * settings-page.css — Settings page styles (module loader)
+ *
+ * Imports thematic split files from the settings-page/ subdirectory in
+ * dependency order. Original settings-page.css was ~947 lines; this loader
+ * is the only file the Settings HTML references directly (via
+ * <link rel="stylesheet" href="/pages/settings/settings-page.css">).
+ *
+ * All rules are scoped to selectors under .settings-* or
+ * body[data-page-title="Settings"], so the split is purely organizational —
+ * no selector overlap with the global stylesheet.
+ *
+ * File manifest (loaded in order):
+ *   settings-page/variables.css       — :root --settings-* tokens, body
+ *                                       backdrop, .page-content, skip link
+ *   settings-page/layout.css          — .settings-page grid, .settings-hero
+ *                                       (breadcrumb / title / badge / quick)
+ *   settings-page/nav.css             — .settings-nav sticky left column,
+ *                                       groups, active state
+ *   settings-page/section.css         — .settings-section card,
+ *                                       .section-head, .settings-card grid,
+ *                                       .session-card
+ *   settings-page/badges.css          — .status-badge / .status-active /
+ *                                       .status-expired pills
+ *   settings-page/forms.css           — .form-grid, .form-row, .field
+ *                                       input/textarea/select styling
+ *   settings-page/buttons.css         — .primary-button / .secondary-button /
+ *                                       .danger-button + .inline-result
+ *   settings-page/tables.css          — .limits-table daily-quotas table
+ *   settings-page/checkbox-list.css   — .checkbox-list multi-select grid
+ *   settings-page/tabs.css            — .tabs / .tab-button, .variable-badge
+ *                                       chips, .system-grid
+ *   settings-page/callouts.css        — .warning-box + .info-box
+ *   settings-page/control-card.css    — .control-card 2-col card +
+ *                                       .status-pill active/paused variants
+ *   settings-page/segmented.css       — .segmented radio-group control
+ *   settings-page/switch.css          — .switch toggle (track + thumb)
+ *   settings-page/confirm-modal.css   — .confirm-backdrop + .confirm-modal
+ *   settings-page/animations.css      — @keyframes fadeUp
+ *   settings-page/responsive.css      — @media (max-width: 1100px/760px)
+ */
+
+@import url("settings-page/variables.css");
+@import url("settings-page/layout.css");
+@import url("settings-page/nav.css");
+@import url("settings-page/section.css");
+@import url("settings-page/badges.css");
+@import url("settings-page/forms.css");
+@import url("settings-page/buttons.css");
+@import url("settings-page/tables.css");
+@import url("settings-page/checkbox-list.css");
+@import url("settings-page/tabs.css");
+@import url("settings-page/callouts.css");
+@import url("settings-page/control-card.css");
+@import url("settings-page/segmented.css");
+@import url("settings-page/switch.css");
+@import url("settings-page/confirm-modal.css");
+@import url("settings-page/animations.css");
+@import url("settings-page/responsive.css");

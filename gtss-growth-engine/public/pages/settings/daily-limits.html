@@ -1,0 +1,32 @@
+        <!-- ═══════════════════════════════════════════════════════════ DAILY ACTION LIMITS -->
+        <section class="settings-section gtss-card" id="daily-action-limits" aria-labelledby="limits-heading">
+          <div class="section-head">
+            <div class="section-head__title">
+              <span class="section-head__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+              </span>
+              <div class="section-head__heading">
+                <h2 id="limits-heading">Daily Action Limits</h2>
+                <div class="section-head__sub">Per-platform safety caps — keeps outreach under platform rate-limit thresholds.</div>
+              </div>
+            </div>
+            <div class="section-head__actions">
+              <button id="reset-limits" class="secondary-button" type="button">Reset to Defaults</button>
+              <button id="save-limits" class="primary-button" type="button">Save Limits</button>
+            </div>
+          </div>
+          <div class="limits-table-wrap">
+            <table class="limits-table">
+              <thead>
+                <tr>
+                  <th>Platform</th>
+                  <th>Connections/Requests</th>
+                  <th>DMs</th>
+                  <th>Follows</th>
+                  <th>Likes</th>
+                </tr>
+              </thead>
+              <tbody id="limits-body"></tbody>
+            </table>
+          </div>
+        </section>

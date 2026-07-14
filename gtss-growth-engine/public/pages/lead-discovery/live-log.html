@@ -1,0 +1,46 @@
+<!-- lead-discovery/live-log.html — Lead Discovery engine log panel
+     Extracted from lead-discovery.html. The fixed-height (240px)
+     dark-slate "Engine Log" card with a green pulsing dot + STOP
+     button in the header, and a monospace log body showing the
+     discovery task progress (timestamps + status lines, ending with
+     a blinking cursor placeholder). Rendered server-side via
+     data-include. -->
+
+<div class="bg-[#1E293B] rounded-lg border border-outline-variant shadow-sm flex flex-col overflow-hidden h-[240px]">
+<div class="flex justify-between items-center px-4 py-2 bg-inverse-surface border-b border-surface-variant/20">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+<span class="font-label-caps text-label-caps text-on-primary-container">Engine Log</span>
+</div>
+<button class="text-error font-label-caps text-[10px] hover:text-error-container transition-colors">STOP</button>
+</div>
+<div class="p-3 font-mono-code text-mono-code text-surface-dim flex-1 overflow-y-auto flex flex-col gap-1.5">
+<div class="flex gap-2">
+<span class="text-secondary-fixed-dim">[10:42:01]</span>
+<span class="text-on-primary-container">Initializing discovery task...</span>
+</div>
+<div class="flex gap-2">
+<span class="text-secondary-fixed-dim">[10:42:03]</span>
+<span class="text-on-primary-container">Connecting to LinkedIn API...</span>
+</div>
+<div class="flex gap-2">
+<span class="text-secondary-fixed-dim">[10:42:05]</span>
+<span class="text-primary-fixed-dim">Query: "restaurant owner Nairobi"</span>
+</div>
+<div class="flex gap-2">
+<span class="text-secondary-fixed-dim">[10:42:12]</span>
+<span class="text-green-400">Found 12 matching profiles.</span>
+</div>
+<div class="flex gap-2">
+<span class="text-secondary-fixed-dim">[10:42:15]</span>
+<span class="text-on-primary-container">Extracting contact data (1/12)...</span>
+</div>
+<div class="flex gap-2">
+<span class="text-secondary-fixed-dim">[10:42:18]</span>
+<span class="text-on-primary-container">Extracting contact data (2/12)...</span>
+</div>
+<div class="flex gap-2">
+<span class="text-secondary-fixed-dim animate-pulse">_</span>
+</div>
+</div>
+</div>

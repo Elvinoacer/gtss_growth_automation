@@ -1,0 +1,17 @@
+/**
+ * layout.css — Lead Qualification page top-level grid wrapper
+ *
+ * Extracted from the original qual-page.css. .qual-page is the page-level
+ * grid container that sets the gap + padding for the whole page. All other
+ * qual-page modules contribute panels that slot into this grid.
+ */
+
+      /* ================================================================
+         Qualification Page – Dark Theme (matches Discovery page patterns)
+         ================================================================ */
+
+      .qual-page {
+        display: grid;
+        gap: 22px;
+        padding: 28px;
+      }

@@ -1,0 +1,63 @@
+        <!-- ============ RUN BUTTON ============ -->
+        <section class="run-section">
+          <button id="run-all-btn" class="primary-button" type="button">
+            ⚡ Run Qualification on All Pending
+          </button>
+          <button id="stop-qualification-btn" class="secondary-button hidden" type="button">
+            Stop Scoring
+          </button>
+          <div class="manual-actions" id="manual-actions-menu">
+            <button
+              id="manual-actions-trigger"
+              class="secondary-button"
+              type="button"
+            >
+              Manual ▾
+            </button>
+            <div
+              id="manual-actions-dropdown"
+              class="manual-actions-dropdown"
+              hidden
+            >
+              <button
+                id="manual-qualify-all-btn"
+                class="manual-action-btn"
+                type="button"
+              >
+                <span class="material-symbols-outlined text-base"
+                  >done_all</span
+                >
+                Qualify all pending (no AI)
+              </button>
+              <button
+                id="manual-qualify-selected-btn"
+                class="manual-action-btn"
+                type="button"
+                hidden
+              >
+                <span class="material-symbols-outlined text-base"
+                  >checklist</span
+                >
+                Qualify selected (<span class="selected-count">0</span>)
+              </button>
+              <button
+                id="retry-failed-btn"
+                class="manual-action-btn"
+                type="button"
+              >
+                <span class="material-symbols-outlined text-base">refresh</span>
+                Retry AI on failed leads
+              </button>
+            </div>
+          </div>
+          <a
+            href="/messages"
+            id="proceed-to-messages-btn"
+            class="primary-button"
+            style="text-decoration:none;display:inline-flex;align-items:center;gap:8px;background:var(--gtss-success)"
+            title="Go to the Messages page to generate and approve outreach messages for your qualified leads"
+          >
+            Proceed to Messages →
+          </a>
+        </section>
+

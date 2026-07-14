@@ -1,0 +1,70 @@
+/**
+ * stat-cards.css — Message Generator top-of-page KPI cards
+ *
+ * Extracted from the original msg-page.css. .stat-grid is the 6-up row of
+ * KPI cards (pending / approved / sent / skipped / followup / unscored)
+ * shown above the message table. Each card has a colored dot, an uppercase
+ * label, and a big numeric value.
+ */
+
+      /* ---------- Stat Row ---------- */
+      .stat-grid {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 14px;
+      }
+      .stat-card {
+        padding: 18px;
+        background: var(--gtss-card-bg);
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        transition:
+          border-color 180ms ease,
+          box-shadow 180ms ease;
+      }
+      .stat-card:hover {
+        border-color: var(--gtss-primary);
+        box-shadow: 0 0 0 1px var(--gtss-primary);
+      }
+      .stat-label {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--gtss-muted);
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .stat-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+      }
+      .stat-dot.pending {
+        background: var(--gtss-warning);
+      }
+      .stat-dot.approved {
+        background: var(--gtss-success);
+      }
+      .stat-dot.sent {
+        background: var(--gtss-primary);
+      }
+      .stat-dot.skipped {
+        background: #64748b;
+      }
+      .stat-dot.followup {
+        background: #a78bfa;
+      }
+      .stat-dot.unscored {
+        background: #8b5cf6;
+      }
+      .stat-value {
+        font-size: 28px;
+        font-weight: 900;
+        color: var(--gtss-text);
+        line-height: 1;
+      }

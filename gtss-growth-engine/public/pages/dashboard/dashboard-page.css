@@ -1,0 +1,294 @@
+/**
+ * dashboard-page.css — Styles for the Dashboard page (public/pages/dashboard.html)
+ *
+ * Extracted verbatim from the original inline <style> block (dashboard.html
+ * lines 50–336). Loaded via <link> from the page head so it is browser-cached
+ * separately from the global stylesheet (/css/style.css).
+ */
+
+      :root {
+        color-scheme: dark;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      body {
+        background:
+          radial-gradient(
+            circle at top left,
+            rgba(14, 165, 233, 0.22),
+            transparent 30%
+          ),
+          radial-gradient(
+            circle at top right,
+            rgba(96, 165, 250, 0.18),
+            transparent 26%
+          ),
+          linear-gradient(180deg, #050b15 0%, #081120 45%, #09101b 100%);
+        color: #edf2ff;
+        font-family: Geist, system-ui, sans-serif;
+      }
+
+      .material-symbols-outlined {
+        font-variation-settings:
+          "FILL" 0,
+          "wght" 400,
+          "GRAD" 0,
+          "opsz" 24;
+      }
+
+      .glass-panel {
+        background: linear-gradient(
+          180deg,
+          rgba(8, 15, 30, 0.9),
+          rgba(15, 23, 42, 0.82)
+        );
+        border: 1px solid rgba(148, 163, 184, 0.26);
+        backdrop-filter: blur(22px);
+        -webkit-backdrop-filter: blur(22px);
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.3);
+      }
+
+      .glass-panel-soft {
+        background: rgba(11, 18, 34, 0.78);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+      }
+
+      .hero-orb {
+        position: absolute;
+        inset: auto auto 0 0;
+        width: clamp(220px, 30vw, 420px);
+        height: clamp(220px, 30vw, 420px);
+        border-radius: 999px;
+        background: radial-gradient(
+          circle,
+          rgba(14, 165, 233, 0.28),
+          rgba(14, 165, 233, 0) 68%
+        );
+        filter: blur(8px);
+        pointer-events: none;
+      }
+
+      .hero-grid {
+        position: relative;
+        overflow: hidden;
+      }
+
+      .hero-grid::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image:
+          linear-gradient(rgba(148, 163, 184, 0.07) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(148, 163, 184, 0.07) 1px, transparent 1px);
+        background-size: 38px 38px;
+        mask-image: linear-gradient(
+          180deg,
+          rgba(0, 0, 0, 0.4),
+          transparent 90%
+        );
+        pointer-events: none;
+      }
+
+      @keyframes float-in {
+        0% {
+          opacity: 0;
+          transform: translateY(14px) scale(0.985);
+        }
+        100% {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+
+      .animate-card {
+        animation: float-in 520ms ease-out both;
+      }
+
+      .animate-card:nth-child(2) {
+        animation-delay: 70ms;
+      }
+
+      .animate-card:nth-child(3) {
+        animation-delay: 140ms;
+      }
+
+      .animate-card:nth-child(4) {
+        animation-delay: 210ms;
+      }
+
+      .animate-card:nth-child(5) {
+        animation-delay: 280ms;
+      }
+
+      .animate-card:nth-child(6) {
+        animation-delay: 350ms;
+      }
+
+      .animate-card:nth-child(7) {
+        animation-delay: 420ms;
+      }
+
+      .focus-ring:focus-visible,
+      .page-content a:focus-visible,
+      .page-content button:focus-visible,
+      .gtss-sidebar a:focus-visible,
+      .gtss-sidebar button:focus-visible {
+        outline: 2px solid #38bdf8;
+        outline-offset: 3px;
+      }
+
+      .page-content {
+        background:
+          radial-gradient(
+            circle at top left,
+            rgba(14, 165, 233, 0.12),
+            transparent 28%
+          ),
+          radial-gradient(
+            circle at top right,
+            rgba(96, 165, 250, 0.1),
+            transparent 24%
+          ),
+          linear-gradient(180deg, #050b15 0%, #08111f 100%) !important;
+        color: #e2e8f0 !important;
+      }
+
+      .page-content > main {
+        background: transparent !important;
+      }
+
+      .dashboard-shell {
+        color: #e2e8f0;
+      }
+
+      .dashboard-shell section,
+      .dashboard-shell article,
+      .dashboard-shell .glass-panel,
+      .dashboard-shell .glass-panel-soft {
+        border-radius: 28px !important;
+      }
+
+      .page-content .glass-panel,
+      .page-content .glass-panel-soft {
+        color: #e2e8f0;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.34);
+      }
+
+      .page-content .glass-panel {
+        background: linear-gradient(
+          180deg,
+          rgba(15, 23, 42, 0.96),
+          rgba(15, 23, 42, 0.84)
+        );
+        border: 1px solid rgba(148, 163, 184, 0.22);
+      }
+
+      .page-content .glass-panel-soft {
+        background: rgba(15, 23, 42, 0.78);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+      }
+
+      .page-content .gtss-card,
+      .page-content .gtss-stat-card {
+        background: rgba(15, 23, 42, 0.78);
+        border-color: rgba(148, 163, 184, 0.18);
+        color: #e2e8f0;
+      }
+
+      .page-content .gtss-stat-card span,
+      .page-content .gtss-stat-card small {
+        color: #cbd5e1;
+      }
+
+      .page-content .gtss-stat-card strong {
+        color: #f8fafc;
+      }
+
+      .page-content .gtss-sidebar {
+        background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
+        border-right-color: rgba(148, 163, 184, 0.16);
+      }
+
+      .page-content .gtss-brand-label,
+      .page-content .gtss-nav__link,
+      .page-content .gtss-session-row,
+      .page-content .gtss-notification-item {
+        color: #cbd5e1;
+      }
+
+      .page-content .gtss-nav__link:hover,
+      .page-content .gtss-nav__link.active {
+        background: rgba(14, 165, 233, 0.16);
+        color: #ffffff;
+        border-left-color: #38bdf8;
+      }
+
+      .page-content .gtss-sidebar-toggle,
+      .page-content .gtss-bell,
+      .page-content .gtss-logout {
+        background: rgba(15, 23, 42, 0.9);
+        border-color: rgba(148, 163, 184, 0.18);
+        color: #f8fafc;
+      }
+
+      .page-content .gtss-session-status,
+      .page-content .gtss-notification-dropdown {
+        background: rgba(15, 23, 42, 0.9);
+        border-color: rgba(148, 163, 184, 0.18);
+      }
+
+      .page-content .gtss-status-dot {
+        box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.12);
+      }
+
+      .page-content .data-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .page-content .data-table th,
+      .page-content .data-table td {
+        padding: 14px 16px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+        text-align: left;
+      }
+
+      .page-content .data-table th {
+        color: #94a3b8;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .page-content .data-table td {
+        color: #e2e8f0;
+      }
+
+      .page-content .gtss-empty-state,
+      .page-content #actions-panel p,
+      .page-content #replies-feed p,
+      .page-content #upcoming-posts p {
+        color: #cbd5e1;
+      }
+
+      @media (max-width: 1024px) {
+        .hero-stack {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 820px) {
+        .dashboard-shell {
+          padding: 18px;
+        }
+
+        .hero-title {
+          font-size: clamp(2rem, 8vw, 3.25rem);
+        }
+      }

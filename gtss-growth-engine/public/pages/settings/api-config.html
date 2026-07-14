@@ -1,0 +1,45 @@
+        <!-- ═══════════════════════════════════════════════════════════ API CONFIGURATION -->
+        <section class="settings-section gtss-card" id="api-configuration" aria-labelledby="api-heading">
+          <div class="section-head">
+            <div class="section-head__title">
+              <span class="section-head__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m10 13-2 2-3-3 2-2 3 3Zm4-4 2-2 3 3-2 2-3-3Z"/><path d="M14 4 4 14l6 6 10-10-6-6Z"/></svg>
+              </span>
+              <div class="section-head__heading">
+                <h2 id="api-heading">AI / Gemini &amp; Email</h2>
+                <div class="section-head__sub">Gemini powers message generation, qualification, captions, and image prompts.</div>
+              </div>
+            </div>
+            <div class="section-head__actions">
+              <span id="gemini-result" class="inline-result" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+          <h3 style="margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--gtss-muted);">Gemini API Key</h3>
+          <div class="form-row" style="margin-bottom: 22px">
+            <label class="field">Gemini API Key
+              <input id="gemini-key" type="password" placeholder="gAI...xyz" autocomplete="off" />
+            </label>
+            <button id="toggle-gemini" class="secondary-button" type="button">Show</button>
+            <button id="save-gemini" class="primary-button" type="button">Save</button>
+            <button id="test-gemini" class="secondary-button" type="button">Test Connection</button>
+          </div>
+
+          <h3 style="margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--gtss-muted);">Email Notifications (Gmail App Password)</h3>
+          <p class="muted" style="margin: 0 0 12px; font-size: 12px; line-height: 1.55;">
+            Used to send you alerts about lead replies, expired sessions, and
+            daily limit warnings. Use a Gmail App Password, not your account
+            password.
+          </p>
+          <div class="form-row">
+            <label class="field">Gmail address
+              <input id="gmail-user" type="email" placeholder="you@gmail.com" autocomplete="off" />
+            </label>
+            <label class="field">Gmail app password
+              <input id="gmail-password" type="password" autocomplete="off" />
+            </label>
+            <button id="toggle-gmail" class="secondary-button" type="button">Show</button>
+            <button id="save-gmail" class="primary-button" type="button">Save</button>
+            <button id="test-email" class="secondary-button" type="button">Send Test Email</button>
+          </div>
+          <span id="email-result" class="inline-result" role="status" aria-live="polite" style="display:block; margin-top:10px;"></span>
+        </section>

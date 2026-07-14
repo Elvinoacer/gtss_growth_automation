@@ -1,0 +1,156 @@
+        <!-- ═══════════════════════════════════════════════════════════ BRAND CONTEXT -->
+        <section class="settings-section gtss-card" id="context-section" aria-labelledby="context-heading">
+          <div class="section-head">
+            <div class="section-head__title">
+              <span class="section-head__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z" stroke-linejoin="round"/><path d="M4 9h16M9 4v16"/></svg>
+              </span>
+              <div class="section-head__heading">
+                <h2 id="context-heading">Brand &amp; Audience Context</h2>
+                <div class="section-head__sub">Injected into every AI workflow — qualification, messages, captions, images.</div>
+              </div>
+            </div>
+            <div class="section-head__actions">
+              <span id="context-result" class="inline-result" role="status" aria-live="polite"></span>
+              <button id="preview-context-btn" class="secondary-button" type="button">Preview in Prompts</button>
+              <button id="reset-context-btn" class="secondary-button" type="button">Reset to Defaults</button>
+              <button id="save-context-btn" class="primary-button" type="button">Save Context</button>
+            </div>
+          </div>
+          <p class="muted" style="margin: 0 0 20px; font-size: 13px; line-height: 1.6;">
+            This context is injected into every AI workflow — lead qualification,
+            message generation, image generation, post captions, and Instagram
+            warmup. Configure it once here and it applies everywhere
+            automatically.
+          </p>
+
+          <!-- BUSINESS IDENTITY -->
+          <h3 style="margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--gtss-muted);">Business Identity</h3>
+          <div class="form-grid" style="margin-bottom: 24px">
+            <div class="form-row">
+              <label class="field" style="flex: 1">Company Name
+                <input id="ctx_biz_name" type="text" placeholder="GTSS" />
+              </label>
+              <label class="field" style="flex: 1">Industry
+                <input id="ctx_biz_industry" type="text" placeholder="Hospitality Technology" />
+              </label>
+              <label class="field" style="flex: 1">HQ Location
+                <input id="ctx_biz_location" type="text" placeholder="Nairobi, Kenya" />
+              </label>
+              <label class="field" style="flex: 1">Website
+                <input id="ctx_biz_website" type="text" placeholder="https://gtss.co.ke" />
+              </label>
+            </div>
+            <label class="field">Company Description
+              <span class="muted">(used in AI prompts)</span>
+              <textarea id="ctx_biz_description" style="min-height: 70px" placeholder="A Kenyan tech company that builds restaurant management software..."></textarea>
+            </label>
+          </div>
+
+          <!-- PRODUCT / SERVICE -->
+          <h3 style="margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--gtss-muted);">Product / Service</h3>
+          <div class="form-grid" style="margin-bottom: 24px">
+            <div class="form-row">
+              <label class="field" style="flex: 1">Product Name
+                <input id="ctx_product_name" type="text" placeholder="Restaurant Manager" />
+              </label>
+              <label class="field" style="flex: 2">One-Line Tagline
+                <input id="ctx_product_tagline" type="text" placeholder="Keep your restaurant running even when the internet goes down." />
+              </label>
+            </div>
+            <label class="field">Product Description
+              <span class="muted">(paragraph for AI context)</span>
+              <textarea id="ctx_product_description" style="min-height: 70px" placeholder="A localized POS and kitchen management system..."></textarea>
+            </label>
+            <label class="field">Value Proposition
+              <span class="muted">(single most compelling reason to buy)</span>
+              <input id="ctx_product_value_prop" type="text" placeholder="100% uptime even during internet outages." />
+            </label>
+            <div class="form-row" style="align-items: start; gap: 16px">
+              <div style="flex: 1">
+                <div class="field" style="margin-bottom: 8px">Key Features <span class="muted">(one per line)</span>
+                  <textarea id="ctx_product_key_features" style="min-height: 100px" placeholder="Offline-first operation&#10;Kitchen display routing&#10;M-Pesa integration"></textarea>
+                </div>
+              </div>
+              <div style="flex: 1">
+                <div class="field" style="margin-bottom: 8px">Pain Points Solved <span class="muted">(one per line)</span>
+                  <textarea id="ctx_product_pain_points" style="min-height: 100px" placeholder="ISP outages during peak hours&#10;Lost revenue during internet drops"></textarea>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- TARGET AUDIENCE -->
+          <h3 style="margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--gtss-muted);">Target Audience</h3>
+          <div class="form-grid" style="margin-bottom: 24px">
+            <label class="field">Ideal Customer Profile
+              <span class="muted">(full description for qualification AI)</span>
+              <textarea id="ctx_audience_ideal_profile" style="min-height: 70px" placeholder="Owner or manager of a food & beverage business in Kenya..."></textarea>
+            </label>
+            <div class="form-row" style="align-items: start; gap: 16px">
+              <label class="field" style="flex: 1">Target Industries
+                <span class="muted">(one per line, used for lead scoring)</span>
+                <textarea id="ctx_audience_industries" style="min-height: 90px" placeholder="restaurant&#10;cafe&#10;hotel&#10;bar&#10;lodge"></textarea>
+              </label>
+              <label class="field" style="flex: 1">Target Geographies <span class="muted">(one per line)</span>
+                <textarea id="ctx_audience_geographies" style="min-height: 90px" placeholder="Nairobi&#10;Mombasa&#10;Kenya"></textarea>
+              </label>
+              <label class="field" style="flex: 1">Exclude Industries
+                <span class="muted">(one per line, deprioritized)</span>
+                <textarea id="ctx_audience_exclude_industries" style="min-height: 90px" placeholder="fintech&#10;NGO&#10;government"></textarea>
+              </label>
+            </div>
+            <div>
+              <div class="field" style="margin-bottom: 8px">Lead Scoring Weights
+                <span class="muted">(must sum to 100)</span>
+              </div>
+              <div class="form-row" id="scoring-weights-row" style="gap: 12px; flex-wrap: wrap"></div>
+            </div>
+          </div>
+
+          <!-- SENDER IDENTITY -->
+          <h3 style="margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--gtss-muted);">Sender Identity</h3>
+          <div class="form-grid" style="margin-bottom: 24px">
+            <div class="form-row">
+              <label class="field" style="flex: 1">First Name
+                <input id="ctx_sender_name" type="text" placeholder="Elvin" />
+              </label>
+              <label class="field" style="flex: 1">Full Name
+                <input id="ctx_sender_full_name" type="text" placeholder="Elvin Ochieng" />
+              </label>
+              <label class="field" style="flex: 1">Role / Title
+                <input id="ctx_sender_role" type="text" placeholder="Founder & CEO" />
+              </label>
+            </div>
+            <label class="field" style="max-width: 360px">Message Sign-off
+              <textarea id="ctx_sender_sign_off" style="min-height: 60px" placeholder="Best,&#10;Elvin"></textarea>
+            </label>
+          </div>
+
+          <!-- CONTENT STYLE -->
+          <h3 style="margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--gtss-muted);">Content Style</h3>
+          <div class="form-grid">
+            <div class="form-row">
+              <label class="field" style="flex: 2">Default Tone
+                <span class="muted">(used in captions, messages, image prompts)</span>
+                <input id="ctx_content_tone" type="text" placeholder="friendly, professional, conversational" />
+              </label>
+              <label class="field" style="flex: 1">Language
+                <input id="ctx_content_language" type="text" placeholder="English" />
+              </label>
+            </div>
+            <label class="field">Default Call-to-Action
+              <input id="ctx_content_cta" type="text" placeholder="Book a free 15-minute demo" />
+            </label>
+            <div class="form-row" style="align-items: start; gap: 16px">
+              <label class="field" style="flex: 1">Post Themes
+                <span class="muted">(one per line — used for caption & image generation)</span>
+                <textarea id="ctx_content_post_themes" style="min-height: 90px" placeholder="uptime reliability&#10;Kenyan hospitality&#10;technology made simple"></textarea>
+              </label>
+              <label class="field" style="flex: 1">Default Image Style
+                <span class="muted">(visual brief for AI image generation)</span>
+                <textarea id="ctx_content_image_style" style="min-height: 90px" placeholder="warm, photorealistic, modern restaurant interior, East African setting"></textarea>
+              </label>
+            </div>
+          </div>
+        </section>

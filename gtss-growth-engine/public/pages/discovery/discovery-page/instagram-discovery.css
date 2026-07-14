@@ -1,0 +1,106 @@
+/**
+ * instagram-discovery.css — Lead Discovery Instagram strategy picker
+ *
+ * Extracted from the original discovery-page.css. .ig-discovery-container
+ * is the pink-tinted panel shown when Instagram is selected as a discovery
+ * source. Inside it, .strategy-row lets the user pick between hashtags /
+ * followers / competitors strategies; the matching .strategy-panel becomes
+ * active. Hashtag strategy uses a .chip-container with .chip entries and
+ * a borderless .chip-input for adding new hashtags. @keyframes fadeIn
+ * powers the panel transition.
+ */
+
+      .ig-discovery-container {
+        display: none;
+        flex-direction: column;
+        gap: 16px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        padding: 16px;
+        background: rgb(236 72 153 / 3%);
+      }
+      .ig-discovery-container.visible {
+        display: flex;
+      }
+      .strategy-row {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+      }
+      .strategy-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        color: var(--gtss-text);
+      }
+      .strategy-option input {
+        accent-color: var(--gtss-primary);
+      }
+      .strategy-panel {
+        display: none;
+        flex-direction: column;
+        gap: 8px;
+        animation: fadeIn 0.2s ease;
+      }
+      .strategy-panel.active {
+        display: flex;
+      }
+      .chip-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        padding: 8px 12px;
+        background: #0b1220;
+        min-height: 42px;
+        align-items: center;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--gtss-primary);
+        color: white;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .chip-remove {
+        cursor: pointer;
+        font-size: 10px;
+        font-weight: bold;
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 50%;
+        width: 14px;
+        height: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.15s;
+      }
+      .chip-remove:hover {
+        background: rgba(255, 255, 255, 0.4);
+      }
+      .chip-input {
+        border: none !important;
+        background: transparent !important;
+        padding: 0 !important;
+        min-height: auto !important;
+        outline: none !important;
+        flex: 1;
+        min-width: 100px;
+        color: var(--gtss-text) !important;
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(-4px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }

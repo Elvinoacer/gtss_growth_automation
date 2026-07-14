@@ -1,0 +1,43 @@
+/**
+ * tables.css — Settings page daily-limits table
+ *
+ * Extracted from the original settings-page.css. .limits-table is the
+ * per-platform daily-action quota table on the Daily Limits settings panel.
+ * Sticky header row, monospace-ish alignment, and inline-editable inputs.
+ */
+
+      /* ─── Tables ─── */
+      .limits-table-wrap {
+        overflow: auto;
+        border-radius: var(--gtss-radius);
+        border: 1px solid rgba(148, 163, 184, 0.16);
+      }
+      .limits-table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 720px;
+      }
+      .limits-table th,
+      .limits-table td {
+        padding: 12px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+        color: var(--gtss-text);
+        text-align: left;
+        font-size: 13px;
+      }
+      .limits-table th {
+        color: rgba(148, 163, 184, 0.8);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.10em;
+        font-weight: 700;
+        background: rgba(15, 23, 42, 0.6);
+        position: sticky;
+        top: 0;
+      }
+      .limits-table input {
+        width: 110px;
+      }
+      .limits-table tr:hover td {
+        background: rgba(15, 23, 42, 0.45);
+      }

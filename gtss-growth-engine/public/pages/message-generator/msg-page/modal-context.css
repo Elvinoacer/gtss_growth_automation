@@ -1,0 +1,72 @@
+/**
+ * modal-context.css — Message Generator modal left sidebar (lead context)
+ *
+ * Extracted from the original msg-page.css. .modal-context is the 320px
+ * left column of the review modal showing lead context (name, profile URL,
+ * score, notes). Includes the .ctx-label / .ctx-value typography and the
+ * .score-* colored score badges.
+ */
+
+      /* Context panel (left) */
+      .modal-context {
+        width: 320px;
+        flex-shrink: 0;
+        padding: 20px;
+        overflow-y: auto;
+        border-right: 1px solid var(--gtss-card-border);
+        background: #0b1220;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+      .ctx-label {
+        color: var(--gtss-muted);
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 4px;
+      }
+      .ctx-value {
+        color: var(--gtss-text);
+        font-size: 13px;
+      }
+      .ctx-value a {
+        color: #93c5fd;
+        text-decoration: underline;
+      }
+      .score-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 38px;
+        height: 24px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 900;
+        padding: 0 8px;
+      }
+      .score-red {
+        background: rgb(239 68 68 / 20%);
+        color: #fca5a5;
+      }
+      .score-amber {
+        background: rgb(245 158 11 / 20%);
+        color: #fcd34d;
+      }
+      .score-green {
+        background: rgb(34 197 94 / 20%);
+        color: #86efac;
+      }
+      .ctx-notes {
+        padding: 10px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        background: var(--gtss-card-bg);
+        color: var(--gtss-muted);
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        max-height: 120px;
+        overflow-y: auto;
+      }

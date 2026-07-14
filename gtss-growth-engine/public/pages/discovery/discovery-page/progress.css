@@ -1,0 +1,67 @@
+/**
+ * progress.css — Lead Discovery running panel + live log
+ *
+ * Extracted from the original discovery-page.css. .running-panel is the
+ * strip shown while a discovery crawl is in progress, containing a
+ * spinner + label (.spinner-line) and a scrolling .live-log pane with
+ * .log-* color variants per line severity. .result-summary is the
+ * post-run summary card. @keyframes spin powers the spinner.
+ */
+
+      .running-panel,
+      .result-summary {
+        display: none;
+        margin-top: 18px;
+        color: var(--gtss-text);
+      }
+      .running-panel.visible,
+      .result-summary.visible {
+        display: grid;
+        gap: 14px;
+      }
+      .spinner-line {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: var(--gtss-text);
+        font-weight: 800;
+      }
+      .spinner {
+        width: 22px;
+        height: 22px;
+        border: 3px solid #334155;
+        border-top-color: var(--gtss-primary);
+        border-radius: 999px;
+        animation: spin 900ms linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .live-log {
+        height: 200px;
+        overflow: auto;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        padding: 12px;
+        background: #020617;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 13px;
+      }
+      .log-info {
+        color: #94a3b8;
+      }
+      .log-success {
+        color: #22c55e;
+      }
+      .log-error {
+        color: #ef4444;
+      }
+      .log-warning {
+        color: #f59e0b;
+      }
+      .log-captcha {
+        color: #f97316;
+        font-weight: bold;
+      }

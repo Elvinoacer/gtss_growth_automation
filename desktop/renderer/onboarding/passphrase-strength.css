@@ -1,0 +1,42 @@
+/* ─── Passphrase match indicator ─────────────────────────────────────────
+   Real-time badge that appears below the confirm field while the user
+   types. Shows ✅ match / ❌ mismatch the moment both fields have content. */
+.match-indicator,
+.key-validation,
+.passphrase-strength {
+  font-size: 12px;
+  min-height: 16px;
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.match-indicator:empty,
+.key-validation:empty,
+.passphrase-strength:empty {
+  display: none;
+}
+
+.match-indicator.match {
+  color: var(--success);
+}
+
+.match-indicator.mismatch {
+  color: var(--danger);
+}
+
+.match-indicator.checking,
+.key-validation.checking,
+.passphrase-strength.checking {
+  color: var(--accent);
+}
+
+.key-validation.valid {
+  color: var(--success);
+}
+
+.key-validation.invalid {
+  color: var(--danger);
+}
+

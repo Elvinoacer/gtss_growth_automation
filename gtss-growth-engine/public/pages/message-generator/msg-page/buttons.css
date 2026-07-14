@@ -1,0 +1,58 @@
+/**
+ * buttons.css — Message Generator button family
+ *
+ * Extracted from the original msg-page.css. .btn is the base button class
+ * shared by every action button on the page; the color variants (.btn-
+ * primary / -success / -danger / -warning / -muted / -outline) and the
+ * .btn-sm size modifier layer on top.
+ */
+
+      /* ---------- Buttons ---------- */
+      .btn {
+        min-height: 38px;
+        border: 0;
+        border-radius: var(--gtss-radius);
+        padding: 0 16px;
+        color: #fff;
+        font: inherit;
+        font-weight: 800;
+        font-size: 13px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition:
+          opacity 120ms ease,
+          transform 80ms ease;
+      }
+      .btn:active {
+        transform: scale(0.97);
+      }
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .btn-primary {
+        background: var(--gtss-primary);
+      }
+      .btn-success {
+        background: var(--gtss-success);
+      }
+      .btn-danger {
+        background: var(--gtss-danger);
+      }
+      .btn-warning {
+        background: var(--gtss-warning);
+        color: #0f172a;
+      }
+      .btn-muted {
+        background: #334155;
+      }
+      .btn-outline {
+        background: transparent;
+        border: 1px solid var(--gtss-card-border);
+        color: var(--gtss-text);
+      }
+      .btn-sm {
+        min-height: 30px;
+        padding: 0 10px;
+        font-size: 12px;
+      }

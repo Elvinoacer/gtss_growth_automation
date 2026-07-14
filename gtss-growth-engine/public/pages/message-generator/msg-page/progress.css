@@ -1,0 +1,62 @@
+/**
+ * progress.css — Message Generator generate-progress panel
+ *
+ * Extracted from the original msg-page.css. .progress-panel is the
+ * indeterminate "Generating messages..." strip shown while the LLM is
+ * working. Includes a label with spinner, an animated progress track, and
+ * a status line. @keyframes spin powers the spinner.
+ */
+
+      /* ---------- Progress ---------- */
+      .progress-panel {
+        display: none;
+        padding: 18px;
+        background: var(--gtss-card-bg);
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        gap: 12px;
+      }
+      .progress-panel.visible {
+        display: grid;
+      }
+      .progress-label {
+        color: var(--gtss-text);
+        font-weight: 800;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .spinner {
+        width: 18px;
+        height: 18px;
+        border: 3px solid #334155;
+        border-top-color: var(--gtss-primary);
+        border-radius: 999px;
+        animation: spin 900ms linear infinite;
+        flex-shrink: 0;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .progress-track {
+        width: 100%;
+        height: 8px;
+        border-radius: 999px;
+        background: #0b1220;
+        overflow: hidden;
+      }
+      .progress-fill {
+        height: 100%;
+        width: 0%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--gtss-primary), #60a5fa);
+        transition: width 300ms ease;
+      }
+      .progress-text {
+        color: var(--gtss-muted);
+        font-size: 13px;
+        font-weight: 700;
+      }

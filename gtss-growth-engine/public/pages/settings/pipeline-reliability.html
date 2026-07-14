@@ -1,0 +1,47 @@
+        <!-- ═══════════════════════════════════════════════════════════ PIPELINE RELIABILITY -->
+        <section class="settings-section gtss-card" id="pipeline-reliability" aria-labelledby="reliability-heading">
+          <div class="section-head">
+            <div class="section-head__title">
+              <span class="section-head__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>
+              </span>
+              <div class="section-head__heading">
+                <h2 id="reliability-heading">Reliability &amp; Retries</h2>
+                <div class="section-head__sub">Retry behavior for failed actions and the content media source for posting.</div>
+              </div>
+            </div>
+            <div class="section-head__actions">
+              <span id="pipeline-reliability-result" class="inline-result" role="status" aria-live="polite"></span>
+              <button id="save-pipeline-reliability" class="primary-button" type="button">Save Settings</button>
+            </div>
+          </div>
+          <div class="form-row">
+            <label class="field">Retry Attempts
+              <input id="retry_max_attempts" type="number" min="1" max="10" />
+            </label>
+            <label class="field">Retry Delay Preset
+              <select id="retry_delay_preset">
+                <option value="aggressive">Aggressive</option>
+                <option value="conservative">Conservative</option>
+                <option value="patient">Patient</option>
+              </select>
+            </label>
+            <label class="field">Content Asset Source
+              <select id="content_asset_source">
+                <option value="ai">AI Generated</option>
+                <option value="library">My Asset Library</option>
+              </select>
+            </label>
+            <label class="field">Library Media Type
+              <select id="content_library_media_type">
+                <option value="image">Images</option>
+                <option value="video">Videos</option>
+                <option value="both">Both</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-row" style="margin-top: 14px">
+            <a class="secondary-button" href="/assets" style="display:inline-flex;align-items:center;text-decoration:none">Open Asset Library</a>
+            <a class="secondary-button" href="/pipelines" style="display:inline-flex;align-items:center;text-decoration:none">Configure DM Checker</a>
+          </div>
+        </section>

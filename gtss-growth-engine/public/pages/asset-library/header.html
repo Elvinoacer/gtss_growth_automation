@@ -1,0 +1,25 @@
+<!-- asset-library/header.html — Asset Library page header
+     Extracted from asset-library.html. The page <header> with H1,
+     description paragraph, and the live stats pill
+     (.asset-header-stats) showing total assets / groups / next-up.
+     Rendered server-side via data-include. -->
+
+        <header class="asset-header">
+          <div class="asset-header-text">
+            <h1>Asset Library</h1>
+            <p>
+              Upload, organise, and group media for your content pipeline. Grouped assets are
+              published together as a single post (e.g. an Instagram carousel or multi-image
+              LinkedIn post). The pipeline automatically picks the next least-used group when
+              Asset source is set to <em>My Asset Library</em>.
+            </p>
+          </div>
+          <div class="asset-header-stats" id="asset-header-stats">
+            <span class="dot"></span>
+            <span><strong id="stat-assets">0</strong> assets</span>
+            <span aria-hidden="true">·</span>
+            <span><strong id="stat-groups">0</strong> groups</span>
+            <span aria-hidden="true">·</span>
+            <span id="stat-next">No library assets yet</span>
+          </div>
+        </header>

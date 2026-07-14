@@ -1,0 +1,118 @@
+/**
+ * body-overrides.css — Lead Discovery page body backdrop + theme overrides
+ *
+ * Extracted from the original discovery-page.css. body[data-page-title=
+ * "Lead Discovery"] selectors override the global Material-tokens palette
+ * with the page's dark-slate theme: a radial+linear gradient backdrop,
+ * transparent .page-content, dark surfaces for every container variant,
+ * slate text colors, and a shared focus-visible ring (cyan) for every
+ * interactive element.
+ */
+
+      body[data-page-title="Lead Discovery"] {
+        background:
+          radial-gradient(
+            circle at top left,
+            rgb(14 165 233 / 14%),
+            transparent 28%
+          ),
+          radial-gradient(
+            circle at top right,
+            rgb(96 165 250 / 10%),
+            transparent 24%
+          ),
+          linear-gradient(180deg, #050b15 0%, #08111f 100%);
+        color: #e2e8f0;
+      }
+
+      body[data-page-title="Lead Discovery"] .page-content,
+      body[data-page-title="Lead Discovery"] .page-content > main {
+        background: transparent !important;
+        color: #e2e8f0;
+      }
+
+      body[data-page-title="Lead Discovery"] .discovery-page,
+      body[data-page-title="Lead Discovery"] .discovery-card,
+      body[data-page-title="Lead Discovery"] .bulk-bar,
+      body[data-page-title="Lead Discovery"] .result-summary,
+      body[data-page-title="Lead Discovery"] .table-wrap,
+      body[data-page-title="Lead Discovery"] .live-log,
+      body[data-page-title="Lead Discovery"] .history-body,
+      body[data-page-title="Lead Discovery"] .filter-bar,
+      body[data-page-title="Lead Discovery"] .results-header,
+      body[data-page-title="Lead Discovery"] .history-header,
+      body[data-page-title="Lead Discovery"] .pagination,
+      body[data-page-title="Lead Discovery"] .ig-discovery-container,
+      body[data-page-title="Lead Discovery"] .strategy-panel,
+      body[data-page-title="Lead Discovery"] .chip-container,
+      body[data-page-title="Lead Discovery"] .bg-surface-container-lowest,
+      body[data-page-title="Lead Discovery"] .bg-surface-container-low,
+      body[data-page-title="Lead Discovery"] .bg-surface-container,
+      body[data-page-title="Lead Discovery"] .bg-surface-container-high,
+      body[data-page-title="Lead Discovery"] .bg-surface-bright {
+        background-color: rgb(15 23 42 / 92%) !important;
+        border-color: rgb(148 163 184 / 22%) !important;
+      }
+
+      body[data-page-title="Lead Discovery"] .text-on-surface,
+      body[data-page-title="Lead Discovery"] .history-toggle,
+      body[data-page-title="Lead Discovery"] .strategy-option,
+      body[data-page-title="Lead Discovery"] .platform-option,
+      body[data-page-title="Lead Discovery"] .row-button,
+      body[data-page-title="Lead Discovery"] .url-link,
+      body[data-page-title="Lead Discovery"] th,
+      body[data-page-title="Lead Discovery"] td {
+        color: #e2e8f0 !important;
+      }
+
+      body[data-page-title="Lead Discovery"] .text-on-surface-variant,
+      body[data-page-title="Lead Discovery"] .field,
+      body[data-page-title="Lead Discovery"] .filter-field,
+      body[data-page-title="Lead Discovery"] .empty-state,
+      body[data-page-title="Lead Discovery"] .pagination,
+      body[data-page-title="Lead Discovery"] .log-info,
+      body[data-page-title="Lead Discovery"] .log-warning {
+        color: #94a3b8 !important;
+      }
+
+      body[data-page-title="Lead Discovery"] .text-tertiary-container,
+      body[data-page-title="Lead Discovery"] .text-outline-variant,
+      body[data-page-title="Lead Discovery"] .text-surface-variant {
+        color: #cbd5e1 !important;
+      }
+
+      body[data-page-title="Lead Discovery"] .row-button,
+      body[data-page-title="Lead Discovery"] .primary-button,
+      body[data-page-title="Lead Discovery"] .secondary-button,
+      body[data-page-title="Lead Discovery"] .danger-button,
+      body[data-page-title="Lead Discovery"] .history-toggle,
+      body[data-page-title="Lead Discovery"] .platform-option,
+      body[data-page-title="Lead Discovery"] .strategy-option,
+      body[data-page-title="Lead Discovery"] .chip-remove,
+      body[data-page-title="Lead Discovery"] input,
+      body[data-page-title="Lead Discovery"] select,
+      body[data-page-title="Lead Discovery"] button,
+      body[data-page-title="Lead Discovery"] textarea {
+        transition:
+          outline-color 0.15s ease,
+          box-shadow 0.15s ease,
+          border-color 0.15s ease,
+          background-color 0.15s ease,
+          color 0.15s ease;
+      }
+
+      body[data-page-title="Lead Discovery"] .row-button:focus-visible,
+      body[data-page-title="Lead Discovery"] .primary-button:focus-visible,
+      body[data-page-title="Lead Discovery"] .secondary-button:focus-visible,
+      body[data-page-title="Lead Discovery"] .danger-button:focus-visible,
+      body[data-page-title="Lead Discovery"] .history-toggle:focus-visible,
+      body[data-page-title="Lead Discovery"] .platform-option:focus-within,
+      body[data-page-title="Lead Discovery"] .strategy-option:focus-within,
+      body[data-page-title="Lead Discovery"] .chip-remove:focus-visible,
+      body[data-page-title="Lead Discovery"] input:focus-visible,
+      body[data-page-title="Lead Discovery"] select:focus-visible,
+      body[data-page-title="Lead Discovery"] textarea:focus-visible {
+        outline: 2px solid #38bdf8;
+        outline-offset: 2px;
+        box-shadow: 0 0 0 3px rgb(56 189 248 / 22%);
+      }

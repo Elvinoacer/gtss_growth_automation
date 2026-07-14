@@ -1,0 +1,70 @@
+/**
+ * filters.css — Message Generator filter row + tabs
+ *
+ * Extracted from the original msg-page.css. .filter-row is the horizontal
+ * toolbar above the table holding the status tabs (.filter-tabs / .filter-
+ * tab with .tab-count badges) plus the .filter-select and .filter-input
+ * controls for narrowing the visible rows.
+ */
+
+      /* ---------- Filter Row ---------- */
+      .filter-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .filter-tabs {
+        display: flex;
+        gap: 0;
+        border-bottom: 1px solid var(--gtss-card-border);
+      }
+      .filter-tab {
+        padding: 10px 16px;
+        border: 0;
+        background: transparent;
+        color: var(--gtss-muted);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 800;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition:
+          color 120ms ease,
+          border-color 120ms ease;
+      }
+      .filter-tab:hover {
+        color: var(--gtss-text);
+      }
+      .filter-tab.active {
+        color: var(--gtss-primary);
+        border-bottom-color: var(--gtss-primary);
+      }
+      .tab-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 18px;
+        height: 17px;
+        margin-left: 5px;
+        padding: 0 4px;
+        border-radius: 999px;
+        background: rgb(59 130 246 / 18%);
+        color: var(--gtss-primary);
+        font-size: 10px;
+        font-weight: 900;
+      }
+      .filter-select,
+      .filter-input {
+        min-height: 34px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        padding: 6px 10px;
+        background: #0b1220;
+        color: var(--gtss-text);
+        font: inherit;
+        font-size: 13px;
+      }
+      .filter-input {
+        width: 200px;
+      }

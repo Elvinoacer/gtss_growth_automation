@@ -1,0 +1,28 @@
+        <!-- ═══════════════════════════════════════════════════════════ PROMPT TEMPLATES -->
+        <section class="settings-section gtss-card" id="prompt-templates" aria-labelledby="prompts-heading">
+          <div class="section-head">
+            <div class="section-head__title">
+              <span class="section-head__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M4 4h16v12H4z"/><path d="M4 16l4 4M8 8h8M8 12h6"/></svg>
+              </span>
+              <div class="section-head__heading">
+                <h2 id="prompts-heading">Prompt Templates</h2>
+                <div class="section-head__sub">Per-platform message templates. Variables resolve from your Brand &amp; Audience Context.</div>
+              </div>
+            </div>
+            <div class="section-head__actions">
+              <span id="char-count" class="muted" aria-live="polite">0 chars</span>
+            </div>
+          </div>
+          <div id="template-tabs" class="tabs"></div>
+          <label class="field">Template
+            <textarea id="template-editor" aria-describedby="char-count"></textarea>
+          </label>
+          <div id="variable-badges" class="variable-badges" aria-label="Insert a template variable"></div>
+          <div class="form-row" style="margin-top: 14px">
+            <button id="save-template" class="primary-button" type="button">Save Template</button>
+            <button id="reset-template" class="secondary-button" type="button">Reset to Default</button>
+            <button id="apply-template-all" class="secondary-button" type="button" style="background: var(--gtss-success, #22c55e); color: #fff; border-color: var(--gtss-success, #22c55e);">⟳ Apply to All Messages</button>
+          </div>
+          <span id="template-apply-result" class="inline-result" role="status" aria-live="polite"></span>
+        </section>

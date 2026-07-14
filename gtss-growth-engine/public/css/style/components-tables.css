@@ -1,0 +1,90 @@
+/* --------------------------------------------------------------------------
+   8. Component: Tables
+   -------------------------------------------------------------------------- */
+.table-wrap,
+.gtss-table-wrap,
+.limits-table-wrap,
+.overflow-x-auto {
+  overflow: auto;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-lg) !important;
+  background: rgba(12, 20, 34, 0.64) !important;
+}
+
+.data-table,
+.gtss-data-table,
+.limits-table,
+table {
+  width: 100%;
+  border-collapse: collapse !important;
+  color: var(--text) !important;
+}
+
+.data-table thead th,
+.gtss-data-table thead th,
+.limits-table thead th,
+thead th {
+  padding: var(--space-3) var(--space-4) !important;
+  background: var(--surface-2) !important;
+  border-bottom: 1px solid var(--border-strong) !important;
+  color: var(--text-muted) !important;
+  font: 700 var(--text-xs) / 1 var(--font-body) !important;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.data-table thead th:hover,
+.gtss-data-table thead th:hover,
+.limits-table thead th:hover,
+thead th:hover {
+  color: var(--text) !important;
+}
+
+.data-table tbody tr,
+.gtss-data-table tbody tr,
+.limits-table tbody tr,
+tbody tr {
+  border-bottom: 1px solid var(--border) !important;
+}
+
+.data-table tbody tr:hover,
+.gtss-data-table tbody tr:hover,
+.limits-table tbody tr:hover,
+tbody tr:hover {
+  background: var(--surface-3) !important;
+}
+
+.data-table tbody td,
+.gtss-data-table tbody td,
+.limits-table tbody td,
+tbody td {
+  padding: var(--space-3) var(--space-4) !important;
+  border-bottom: 0 !important;
+  color: var(--text) !important;
+  font-size: var(--text-sm) !important;
+  vertical-align: middle;
+}
+
+tbody tr:last-child {
+  border-bottom: none !important;
+}
+
+.row-actions,
+.table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.gtss-table-pagination {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+

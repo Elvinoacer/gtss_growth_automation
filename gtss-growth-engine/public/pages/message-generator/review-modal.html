@@ -1,0 +1,125 @@
+    <!-- ============ REVIEW MODAL ============ -->
+    <div id="modal-overlay" class="modal-overlay">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-header-left">
+            <div class="modal-header-title" id="modal-title">
+              Review Message
+            </div>
+            <div class="modal-header-sub" id="modal-sub"></div>
+          </div>
+          <button
+            id="modal-close"
+            class="modal-close"
+            type="button"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+        <div class="modal-body">
+          <!-- Left: Context -->
+          <div class="modal-context">
+            <div>
+              <div class="ctx-label">Name</div>
+              <div class="ctx-value" id="ctx-name">—</div>
+            </div>
+            <div>
+              <div class="ctx-label">Role</div>
+              <div class="ctx-value" id="ctx-role">—</div>
+            </div>
+            <div>
+              <div class="ctx-label">Company</div>
+              <div class="ctx-value" id="ctx-company">—</div>
+            </div>
+            <div>
+              <div class="ctx-label">Platform</div>
+              <div class="ctx-value" id="ctx-platform">—</div>
+            </div>
+            <div>
+              <div class="ctx-label">Score</div>
+              <div class="ctx-value" id="ctx-score">—</div>
+            </div>
+            <div>
+              <div class="ctx-label">AI Reasoning</div>
+              <div class="ctx-notes" id="ctx-reasoning">—</div>
+            </div>
+            <div>
+              <div class="ctx-label">Notes</div>
+              <div class="ctx-notes" id="ctx-notes">—</div>
+            </div>
+          </div>
+          <!-- Right: Variants -->
+          <div class="modal-variants">
+            <div id="modal-platform-hint" style="font-size: 13px; color: var(--gtss-muted); background: rgb(59 130 246 / 6%); padding: 10px 14px; border-radius: var(--gtss-radius); border: 1px solid var(--gtss-card-border); margin-bottom: 12px; display: none; line-height: 1.5;"></div>
+            <div class="variant-section">
+              <div class="variant-header">
+                <div class="variant-label">
+                  <span class="variant-badge variant-a">A</span> Variant A
+                  <span
+                    style="
+                      font-weight: 400;
+                      color: var(--gtss-muted);
+                      font-size: 12px;
+                    "
+                    >(Warm & Direct)</span
+                  >
+                </div>
+                <div class="char-counter" id="char-counter-a">0 / 0</div>
+              </div>
+              <textarea
+                id="variant-a-textarea"
+                class="variant-textarea"
+                rows="6"
+              ></textarea>
+            </div>
+            <div class="variant-section">
+              <div class="variant-header">
+                <div class="variant-label">
+                  <span class="variant-badge variant-b">B</span> Variant B
+                  <span
+                    style="
+                      font-weight: 400;
+                      color: var(--gtss-muted);
+                      font-size: 12px;
+                    "
+                    >(Curiosity-driven)</span
+                  >
+                </div>
+                <div class="char-counter" id="char-counter-b">0 / 0</div>
+              </div>
+              <textarea
+                id="variant-b-textarea"
+                class="variant-textarea"
+                rows="6"
+              ></textarea>
+            </div>
+            <div id="regen-loading" class="regen-loading">
+              <span class="spinner"></span> Regenerating variants...
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="modal-approve-a" class="btn btn-success" type="button">
+            ✓ Approve Variant A
+          </button>
+          <button id="modal-approve-b" class="btn btn-primary" type="button">
+            ✓ Approve Variant B
+          </button>
+          <button id="modal-regenerate" class="btn btn-outline" type="button">
+            ↺ Regenerate Both
+          </button>
+          <span class="spacer"></span>
+          <button id="modal-skip" class="btn btn-danger btn-sm" type="button">
+            Skip This Lead
+          </button>
+          <button
+            id="modal-close-btn"
+            class="btn btn-muted btn-sm"
+            type="button"
+          >
+            ✕ Close
+          </button>
+        </div>
+      </div>
+    </div>

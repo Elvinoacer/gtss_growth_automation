@@ -1,0 +1,21 @@
+/**
+ * responsive.css — Lead Discovery media queries
+ *
+ * Extracted from the original discovery-page.css. At <=900px the form
+ * grids (field-grid / platform-row / filter-bar) collapse to a single
+ * column and the primary action button stretches full-width.
+ */
+
+      @media (max-width: 900px) {
+        .discovery-page {
+          padding: 18px;
+        }
+        .field-grid,
+        .platform-row,
+        .filter-bar {
+          grid-template-columns: 1fr;
+        }
+        .primary-button {
+          width: 100%;
+        }
+      }

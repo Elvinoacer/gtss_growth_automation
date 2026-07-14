@@ -1,0 +1,76 @@
+<!-- crm/sidebar.html — CRM page left side navigation bar
+     Extracted from crm.html. The fixed 260px-wide <nav> with the
+     "Growth Engine" brand mark and the list of nav links (Dashboard /
+     Lead Discovery / Qualification / Messages / Automation / CRM
+     Pipeline [active] / Content Scheduler / Settings). Rendered
+     server-side via data-include. -->
+
+    <nav
+      class="fixed left-0 top-0 h-full w-[260px] bg-[#2d3133] border-r border-outline-variant flex flex-col py-6 z-20"
+    >
+      <div class="px-6 mb-8 flex items-center gap-3">
+        <div
+          class="w-8 h-8 rounded bg-primary flex items-center justify-center text-on-primary font-bold"
+        >
+          G
+        </div>
+        <div>
+          <h1 class="text-lg font-bold text-[#eeefff]">Growth Engine</h1>
+          <p class="text-xs text-gray-400">GTSS Geistnal Ops</p>
+        </div>
+      </div>
+      <div class="flex-1 overflow-y-auto px-4 space-y-1">
+        <a
+          href="/"
+          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
+          ><span class="material-symbols-outlined">dashboard</span
+          ><span>Dashboard</span></a
+        >
+        <a
+          href="/discovery"
+          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
+          ><span class="material-symbols-outlined">search</span
+          ><span>Lead Discovery</span></a
+        >
+        <a
+          href="/qualification"
+          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
+          ><span class="material-symbols-outlined">verified_user</span
+          ><span>Qualification</span></a
+        >
+        <a
+          href="/messages"
+          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
+          ><span class="material-symbols-outlined">chat</span
+          ><span>Messages</span></a
+        >
+        <a
+          href="/automation"
+          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
+          ><span class="material-symbols-outlined">smart_toy</span
+          ><span>Automation</span></a
+        >
+        <!-- Active -->
+        <a
+          href="/crm"
+          class="flex items-center gap-3 px-3 py-2 rounded text-[#b4c5ff] bg-primary/20 font-bold border-l-4 border-primary"
+          ><span
+            class="material-symbols-outlined"
+            style="font-variation-settings: &quot;FILL&quot; 1"
+            >account_tree</span
+          ><span>CRM Pipeline</span></a
+        >
+        <a
+          href="/scheduler"
+          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
+          ><span class="material-symbols-outlined">calendar_month</span
+          ><span>Content Scheduler</span></a
+        >
+        <a
+          href="/settings"
+          class="flex items-center gap-3 px-3 py-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all"
+          ><span class="material-symbols-outlined">settings</span
+          ><span>Settings</span></a
+        >
+      </div>
+    </nav>

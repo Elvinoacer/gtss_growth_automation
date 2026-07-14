@@ -1,0 +1,71 @@
+/**
+ * layout.css — Lead Discovery page top-level grid + form fields
+ *
+ * Extracted from the original discovery-page.css. .discovery-page is the
+ * page-level grid wrapper. .discovery-card is the outer card; .discovery-
+ * form lays out the search form; .field-grid is the 2-col prompt / limits
+ * row; .platform-row is the 4-up platform-checkbox grid.
+ */
+
+      .discovery-page {
+        display: grid;
+        gap: 22px;
+        padding: 28px;
+      }
+      .discovery-card {
+        padding: 22px;
+      }
+      .discovery-card h2,
+      .history-header h2 {
+        margin: 0;
+        color: var(--gtss-text);
+        font-size: 20px;
+      }
+      .discovery-form {
+        display: grid;
+        gap: 18px;
+        margin-top: 18px;
+      }
+      .field-grid {
+        display: grid;
+        grid-template-columns: 1fr 220px;
+        gap: 16px;
+      }
+      .field,
+      .filter-field {
+        display: grid;
+        gap: 8px;
+        color: var(--gtss-muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .field input,
+      .filter-field input,
+      .filter-field select {
+        min-height: 42px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        padding: 9px 11px;
+        background: #0b1220;
+        color: var(--gtss-text);
+        font: inherit;
+      }
+      .platform-row {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(140px, 1fr));
+        gap: 10px;
+      }
+      .platform-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 42px;
+        padding: 10px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        color: var(--gtss-text);
+        cursor: pointer;
+      }
+      .platform-option input {
+        accent-color: var(--gtss-primary);
+      }

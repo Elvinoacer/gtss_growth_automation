@@ -1,0 +1,66 @@
+/**
+ * modal-variants.css — Message Generator modal right panel (A/B variants)
+ *
+ * Extracted from the original msg-page.css. .modal-variants is the right
+ * column of the review modal where the user edits the A and B message
+ * variants. Includes .variant-section / .variant-header / .variant-label,
+ * the .char-* counter color states, and the .variant-textarea editor.
+ */
+
+      /* Variants panel (right) */
+      .modal-variants {
+        flex: 1;
+        padding: 20px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .variant-section {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .variant-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .variant-label {
+        font-size: 13px;
+        font-weight: 800;
+        color: var(--gtss-text);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .char-counter {
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .char-ok {
+        color: var(--gtss-muted);
+      }
+      .char-warn {
+        color: var(--gtss-warning);
+      }
+      .char-over {
+        color: var(--gtss-danger);
+      }
+      .variant-textarea {
+        width: 100%;
+        min-height: 140px;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        padding: 12px;
+        background: #0b1220;
+        color: var(--gtss-text);
+        font: inherit;
+        font-size: 13px;
+        line-height: 1.6;
+        resize: vertical;
+      }
+      .variant-textarea:focus {
+        border-color: var(--gtss-primary);
+        outline: none;
+      }

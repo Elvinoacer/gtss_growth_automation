@@ -1,0 +1,57 @@
+/* ─── Sessions health card (Control tab) ─────────────────────────────────
+   Inline banner shown in the Control tab when the launcher detects that
+   one or more required browser sessions (LinkedIn, Facebook, Instagram,
+   Google Gemini) are missing. Clicking the "Sign in…" button opens the
+   full sessions modal below. */
+.sessions-health {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  margin: 16px 0;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: var(--radius);
+}
+
+.sessions-health.ok {
+  background: rgba(16, 185, 129, 0.06);
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+.sessions-health-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.sessions-health.ok .sessions-health-icon {
+  background: rgba(16, 185, 129, 0.18);
+  color: var(--success);
+}
+
+.sessions-health-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.sessions-health-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.sessions-health-meta {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+

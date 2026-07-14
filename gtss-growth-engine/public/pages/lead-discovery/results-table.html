@@ -1,0 +1,158 @@
+<!-- lead-discovery/results-table.html — Lead Discovery results table
+     Extracted from lead-discovery.html. The right-column results card
+     with: a header row (title + "12 Pending" badge + Filter and
+     "Qualify Selected" buttons), the discovered-leads <table> with
+     sticky thead (Lead Info / Company & Location / Platform /
+     Actions) and 3 sample lead rows (David Kamau / Sarah Mutuku /
+     John Ochieng), and a pagination footer ("Showing 1-12 of 12
+     discovered leads" + prev/next chevrons). Rendered server-side
+     via data-include. -->
+
+<div class="flex-1 bg-surface-container-lowest rounded-lg border border-outline-variant shadow-sm flex flex-col overflow-hidden">
+<!-- Table Header Actions -->
+<div class="px-5 py-4 border-b border-outline-variant flex justify-between items-center bg-surface-bright">
+<div class="flex items-center gap-3">
+<h3 class="font-headline-md text-headline-md font-bold text-on-surface">Discovery Results</h3>
+<span class="bg-primary-container/10 text-primary font-label-caps text-label-caps px-2 py-0.5 rounded-full">12 Pending</span>
+</div>
+<div class="flex gap-2">
+<button class="bg-surface-container-high hover:bg-surface-variant text-on-surface font-label-caps text-label-caps py-1.5 px-3 rounded border border-outline-variant transition-colors flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[16px]">filter_list</span>
+                            Filter
+                        </button>
+<button class="bg-primary text-on-primary font-label-caps text-label-caps py-1.5 px-4 rounded transition-colors flex items-center gap-1.5 hover:bg-primary/90">
+<span class="material-symbols-outlined text-[16px]">rule</span>
+                            Qualify Selected
+                        </button>
+</div>
+</div>
+<!-- Table Wrapper -->
+<div class="flex-1 overflow-auto">
+<table class="w-full text-left border-collapse">
+<thead class="sticky top-0 bg-surface-container-low border-b border-outline-variant shadow-[0_1px_0_0_#e2e8f0]">
+<tr>
+<th class="py-2.5 px-4 w-10">
+<input class="rounded border-outline-variant text-primary focus:ring-primary w-4 h-4 bg-surface" type="checkbox"/>
+</th>
+<th class="py-2.5 px-4 font-label-caps text-label-caps text-tertiary-container uppercase tracking-wider whitespace-nowrap">Lead Info</th>
+<th class="py-2.5 px-4 font-label-caps text-label-caps text-tertiary-container uppercase tracking-wider whitespace-nowrap">Company &amp; Location</th>
+<th class="py-2.5 px-4 font-label-caps text-label-caps text-tertiary-container uppercase tracking-wider whitespace-nowrap">Platform</th>
+<th class="py-2.5 px-4 font-label-caps text-label-caps text-tertiary-container uppercase tracking-wider whitespace-nowrap text-right">Actions</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant/50 bg-surface-container-lowest">
+<!-- Row 1 -->
+<tr class="hover:bg-surface-container-low/50 transition-colors group">
+<td class="py-3 px-4 align-top">
+<input class="rounded border-outline-variant text-primary focus:ring-primary w-4 h-4 bg-surface mt-1" type="checkbox"/>
+</td>
+<td class="py-3 px-4 align-top">
+<div class="font-body-sm text-body-sm font-semibold text-on-surface">David Kamau</div>
+<div class="font-body-xs text-body-xs text-on-surface-variant mt-0.5">Owner / Founder</div>
+</td>
+<td class="py-3 px-4 align-top">
+<div class="font-body-sm text-body-sm text-on-surface">Nairobi Grill House</div>
+<div class="font-body-xs text-body-xs text-on-surface-variant mt-0.5 flex items-center gap-1">
+<span class="material-symbols-outlined text-[12px]">location_on</span>
+                                        Nairobi, KE
+                                    </div>
+</td>
+<td class="py-3 px-4 align-top">
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[12px] text-primary" style="font-variation-settings: 'FILL' 1;">fiber_manual_record</span>
+<span class="font-body-xs text-body-xs text-on-surface-variant">LinkedIn</span>
+</div>
+</td>
+<td class="py-3 px-4 align-top text-right">
+<div class="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-tertiary hover:text-primary transition-colors p-1" title="View Profile">
+<span class="material-symbols-outlined text-[18px]">open_in_new</span>
+</button>
+<button class="text-tertiary hover:text-primary transition-colors p-1" title="Add to Queue">
+<span class="material-symbols-outlined text-[18px]">queue</span>
+</button>
+</div>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="hover:bg-surface-container-low/50 transition-colors group">
+<td class="py-3 px-4 align-top">
+<input class="rounded border-outline-variant text-primary focus:ring-primary w-4 h-4 bg-surface mt-1" type="checkbox"/>
+</td>
+<td class="py-3 px-4 align-top">
+<div class="font-body-sm text-body-sm font-semibold text-on-surface">Sarah Mutuku</div>
+<div class="font-body-xs text-body-xs text-on-surface-variant mt-0.5">Managing Director</div>
+</td>
+<td class="py-3 px-4 align-top">
+<div class="font-body-sm text-body-sm text-on-surface">Spice Route Bistro</div>
+<div class="font-body-xs text-body-xs text-on-surface-variant mt-0.5 flex items-center gap-1">
+<span class="material-symbols-outlined text-[12px]">location_on</span>
+                                        Nairobi, KE
+                                    </div>
+</td>
+<td class="py-3 px-4 align-top">
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[12px] text-primary" style="font-variation-settings: 'FILL' 1;">fiber_manual_record</span>
+<span class="font-body-xs text-body-xs text-on-surface-variant">LinkedIn</span>
+</div>
+</td>
+<td class="py-3 px-4 align-top text-right">
+<div class="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-tertiary hover:text-primary transition-colors p-1" title="View Profile">
+<span class="material-symbols-outlined text-[18px]">open_in_new</span>
+</button>
+<button class="text-tertiary hover:text-primary transition-colors p-1" title="Add to Queue">
+<span class="material-symbols-outlined text-[18px]">queue</span>
+</button>
+</div>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="hover:bg-surface-container-low/50 transition-colors group">
+<td class="py-3 px-4 align-top">
+<input class="rounded border-outline-variant text-primary focus:ring-primary w-4 h-4 bg-surface mt-1" type="checkbox"/>
+</td>
+<td class="py-3 px-4 align-top">
+<div class="font-body-sm text-body-sm font-semibold text-on-surface">John Ochieng</div>
+<div class="font-body-xs text-body-xs text-on-surface-variant mt-0.5">Proprietor</div>
+</td>
+<td class="py-3 px-4 align-top">
+<div class="font-body-sm text-body-sm text-on-surface">The Local Cafe</div>
+<div class="font-body-xs text-body-xs text-on-surface-variant mt-0.5 flex items-center gap-1">
+<span class="material-symbols-outlined text-[12px]">location_on</span>
+                                        Nairobi, KE
+                                    </div>
+</td>
+<td class="py-3 px-4 align-top">
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[12px] text-surface-variant/80" style="font-variation-settings: 'FILL' 1;">fiber_manual_record</span>
+<span class="font-body-xs text-body-xs text-on-surface-variant">X Platform</span>
+</div>
+</td>
+<td class="py-3 px-4 align-top text-right">
+<div class="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-tertiary hover:text-primary transition-colors p-1" title="View Profile">
+<span class="material-symbols-outlined text-[18px]">open_in_new</span>
+</button>
+<button class="text-tertiary hover:text-primary transition-colors p-1" title="Add to Queue">
+<span class="material-symbols-outlined text-[18px]">queue</span>
+</button>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<!-- Table Pagination -->
+<div class="px-5 py-3 border-t border-outline-variant bg-surface-bright flex justify-between items-center">
+<span class="font-body-xs text-body-xs text-on-surface-variant">Showing 1-12 of 12 discovered leads</span>
+<div class="flex items-center gap-2">
+<button class="text-tertiary hover:text-on-surface disabled:opacity-50 p-1">
+<span class="material-symbols-outlined text-[20px]">chevron_left</span>
+</button>
+<button class="text-tertiary hover:text-on-surface disabled:opacity-50 p-1">
+<span class="material-symbols-outlined text-[20px]">chevron_right</span>
+</button>
+</div>
+</div>
+</div>

@@ -1,0 +1,46 @@
+<!-- crm/toolbar.html — CRM page search/filter/view-toggle toolbar
+     Extracted from crm.html. The space-between flex row holding the
+     search input (#search-input), platform filter select (#platform-
+     filter), and the Kanban/List view toggle button group. Rendered
+     server-side via data-include. -->
+
+        <div
+          class="flex justify-between items-center bg-white border border-outline-variant rounded p-3 shrink-0"
+        >
+          <div class="flex gap-4 items-center">
+            <div class="relative">
+              <span
+                class="material-symbols-outlined absolute left-3 top-2.5 text-gray-400 text-sm"
+                >search</span
+              >
+              <input
+                type="text"
+                id="search-input"
+                placeholder="Search name or company..."
+                class="pl-9 pr-4 py-2 border border-outline-variant rounded text-sm w-64 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+              />
+            </div>
+            <select
+              id="platform-filter"
+              class="border border-outline-variant rounded text-sm py-2 px-3 focus:border-primary focus:ring-1 outline-none"
+            >
+              <option value="">All Platforms</option>
+            </select>
+          </div>
+          <div class="flex bg-gray-100 rounded p-1">
+            <button
+              id="view-kanban-btn"
+              class="px-3 py-1.5 rounded text-sm font-medium bg-white shadow-sm text-on-surface flex items-center gap-2 transition-all"
+            >
+              <span class="material-symbols-outlined text-sm">view_column</span>
+              Kanban
+            </button>
+            <button
+              id="view-list-btn"
+              class="px-3 py-1.5 rounded text-sm font-medium text-on-surface-variant hover:text-on-surface flex items-center gap-2 transition-all"
+            >
+              <span class="material-symbols-outlined text-sm">table_rows</span>
+              List
+            </button>
+          </div>
+        </div>

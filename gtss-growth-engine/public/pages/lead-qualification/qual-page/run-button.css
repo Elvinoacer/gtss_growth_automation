@@ -1,0 +1,98 @@
+/**
+ * run-button.css — Lead Qualification run/manual-actions bar + button family
+ *
+ * Extracted from the original qual-page.css. .run-section is the top action
+ * row holding the main "Qualify" button + a dropdown of manual one-off
+ * actions (.manual-actions-dropdown with .manual-action-btn entries). Also
+ * defines the shared .primary-button / .secondary-button / .danger-button /
+ * .success-button / .warning-button color variants used across the page.
+ */
+
+      /* ---------- Run Button ---------- */
+      .run-section {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+      }
+      .manual-actions {
+        position: relative;
+      }
+      .manual-actions-dropdown {
+        position: absolute;
+        top: calc(100% + 8px);
+        right: 0;
+        width: 280px;
+        z-index: 20;
+        padding: 6px 0;
+        background: var(--gtss-card-bg);
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+      }
+      .manual-action-btn {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border: 0;
+        background: transparent;
+        color: var(--gtss-text);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        text-align: left;
+        cursor: pointer;
+      }
+      .manual-action-btn:hover {
+        background: rgb(59 130 246 / 6%);
+      }
+      .manual-action-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .primary-button,
+      .secondary-button,
+      .danger-button,
+      .success-button,
+      .warning-button {
+        min-height: 40px;
+        border: 0;
+        border-radius: var(--gtss-radius);
+        padding: 0 18px;
+        color: #ffffff;
+        font: inherit;
+        font-weight: 800;
+        cursor: pointer;
+        white-space: nowrap;
+        transition:
+          opacity 120ms ease,
+          transform 80ms ease;
+      }
+      .primary-button:active,
+      .secondary-button:active,
+      .danger-button:active,
+      .success-button:active {
+        transform: scale(0.97);
+      }
+      .primary-button {
+        background: var(--gtss-primary);
+      }
+      .primary-button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .secondary-button {
+        background: #334155;
+      }
+      .danger-button {
+        background: var(--gtss-danger);
+      }
+      .success-button {
+        background: var(--gtss-success);
+      }
+      .warning-button {
+        background: var(--gtss-warning);
+        color: #0f172a;
+      }

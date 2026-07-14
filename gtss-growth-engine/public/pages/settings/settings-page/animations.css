@@ -1,0 +1,12 @@
+/**
+ * animations.css — Settings page keyframes
+ *
+ * Extracted from the original settings-page.css. fadeUp is the entrance
+ * animation used by .settings-hero, .settings-section, and .confirm-modal.
+ */
+
+      /* ─── Animations ─── */
+      @keyframes fadeUp {
+        from { opacity: 0; transform: translateY(10px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }

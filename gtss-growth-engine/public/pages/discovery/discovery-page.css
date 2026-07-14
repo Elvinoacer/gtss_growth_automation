@@ -1,0 +1,39 @@
+/**
+ * discovery-page.css — Lead Discovery page styles (module loader)
+ *
+ * Imports thematic split files from the discovery-page/ subdirectory in
+ * dependency order. Original discovery-page.css was ~509 lines; this
+ * loader is the only file the Lead Discovery HTML references directly
+ * (via <link rel="stylesheet" href="/pages/discovery/discovery-page.css">).
+ *
+ * File manifest (loaded in order):
+ *   discovery-page/layout.css               — .discovery-page grid, .discovery-card,
+ *                                             .discovery-form, .field-grid,
+ *                                             .platform-row / .platform-option
+ *   discovery-page/buttons.css              — .primary/.secondary/.danger-button
+ *   discovery-page/progress.css             — .running-panel + spinner + .live-log
+ *   discovery-page/toolbar.css              — .results-header / .history-header /
+ *                                             .count-badge / .filter-bar / .bulk-bar
+ *   discovery-page/table.css                — .table-wrap, th/td shell
+ *   discovery-page/badges.css               — .platform-* pills + .url-link
+ *   discovery-page/row-content.css          — .row-actions/.row-button,
+ *                                             .empty-state, .pagination,
+ *                                             .history-toggle/.history-body, tr.fading
+ *   discovery-page/responsive.css           — @media (max-width: 900px)
+ *   discovery-page/instagram-discovery.css  — .ig-discovery-container, .strategy-*,
+ *                                             .chip-container/.chip/.chip-input,
+ *                                             @keyframes fadeIn
+ *   discovery-page/body-overrides.css       — body[data-page-title="Lead Discovery"]
+ *                                             backdrop + dark theme + focus ring
+ */
+
+@import url("discovery-page/layout.css");
+@import url("discovery-page/buttons.css");
+@import url("discovery-page/progress.css");
+@import url("discovery-page/toolbar.css");
+@import url("discovery-page/table.css");
+@import url("discovery-page/badges.css");
+@import url("discovery-page/row-content.css");
+@import url("discovery-page/responsive.css");
+@import url("discovery-page/instagram-discovery.css");
+@import url("discovery-page/body-overrides.css");

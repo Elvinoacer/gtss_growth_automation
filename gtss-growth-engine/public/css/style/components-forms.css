@@ -1,0 +1,89 @@
+/* --------------------------------------------------------------------------
+   6. Component: Forms
+   -------------------------------------------------------------------------- */
+.field,
+.form-field,
+.settings-field,
+.filter-field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.field-label,
+.form-label,
+.settings-label,
+label {
+  color: var(--text-muted) !important;
+  font: 700 var(--text-xs) / 1.2 var(--font-body) !important;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.field-input,
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  min-height: 40px;
+  width: 100%;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius-sm) !important;
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
+  font: 500 var(--text-sm) / 1.4 var(--font-body) !important;
+}
+
+textarea {
+  min-height: 112px;
+  padding-block: var(--space-3);
+  resize: vertical;
+}
+
+.field-input:focus,
+input:not([type="checkbox"]):not([type="radio"]):focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-glow) !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint) !important;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
+}
+
+.platform-picker,
+.platform-options,
+.checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.platform-option,
+.toggle-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: rgba(17, 28, 46, 0.78);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.platform-option:has(input:checked),
+.toggle-pill.active {
+  border-color: rgba(59, 130, 246, 0.44);
+  background: rgba(59, 130, 246, 0.14);
+  color: #bfdbfe;
+}
+

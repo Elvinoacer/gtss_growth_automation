@@ -1,0 +1,36 @@
+<!-- crm/list-view.html — CRM page list/table view
+     Extracted from crm.html. The #view-list table view (hidden by
+     default; toggled visible by the toolbar Kanban/List switch). Has a
+     sticky thead with Lead Name / Company / Platform / Status / Last
+     Contact columns and a JS-populated #list-body tbody. Rendered
+     server-side via data-include. -->
+
+        <div
+          id="view-list"
+          class="hidden flex-1 bg-white border border-outline-variant rounded-lg overflow-hidden flex flex-col"
+        >
+          <div class="overflow-x-auto flex-1">
+            <table class="w-full text-left text-sm whitespace-nowrap">
+              <thead
+                class="bg-gray-50 border-b border-outline-variant sticky top-0"
+              >
+                <tr>
+                  <th class="px-4 py-3 font-semibold text-gray-600">
+                    Lead Name
+                  </th>
+                  <th class="px-4 py-3 font-semibold text-gray-600">Company</th>
+                  <th class="px-4 py-3 font-semibold text-gray-600">
+                    Platform
+                  </th>
+                  <th class="px-4 py-3 font-semibold text-gray-600">Status</th>
+                  <th class="px-4 py-3 font-semibold text-gray-600">
+                    Last Contact
+                  </th>
+                </tr>
+              </thead>
+              <tbody id="list-body" class="divide-y divide-outline-variant">
+                <!-- Populated by JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>

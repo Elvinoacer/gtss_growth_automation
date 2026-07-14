@@ -1,0 +1,17 @@
+/**
+ * layout.css — Message Generator page top-level grid wrapper
+ *
+ * Extracted from the original msg-page.css. .msg-page is the page-level
+ * grid container that sets the gap + padding for the whole page. All other
+ * msg-page modules contribute panels that slot into this grid.
+ */
+
+      /* ================================================================
+         Message Generator – Dark Theme
+         ================================================================ */
+
+      .msg-page {
+        display: grid;
+        gap: 22px;
+        padding: 28px;
+      }

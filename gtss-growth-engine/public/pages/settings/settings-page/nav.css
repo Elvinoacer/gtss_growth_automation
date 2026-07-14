@@ -1,0 +1,89 @@
+/**
+ * nav.css — Settings page left-side sticky category nav
+ *
+ * Extracted from the original settings-page.css. .settings-nav is the
+ * sticky left-column navigation that lists every settings category as an
+ * <a> link. It has grouped sections separated by dashed dividers, an
+ * uppercase group label, and an "active" state with a left accent rail.
+ */
+
+      /* ─── Settings nav (left sticky column) ─── */
+      .settings-nav {
+        position: sticky;
+        top: calc(var(--topbar-height) + 20px);
+        grid-column: 1;
+        display: grid;
+        gap: 4px;
+        padding: 14px;
+        border: 1px solid var(--settings-border);
+        border-radius: var(--settings-radius);
+        background:
+          radial-gradient(360px 160px at 100% 0%, rgba(59, 130, 246, 0.08), transparent 70%),
+          linear-gradient(180deg, rgba(17, 28, 46, 0.96), rgba(12, 20, 34, 0.96));
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.25);
+        z-index: 2;
+        max-height: calc(100vh - var(--topbar-height) - 40px);
+        overflow-y: auto;
+        align-self: start;
+      }
+      .settings-nav__header {
+        padding: 4px 8px 10px;
+        margin-bottom: 4px;
+        border-bottom: 1px solid var(--settings-border);
+        color: var(--gtss-text-faint);
+        font: 700 10px/1 "Geist", sans-serif;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .settings-nav__group {
+        display: grid;
+        gap: 2px;
+        padding: 8px 0;
+      }
+      .settings-nav__group + .settings-nav__group {
+        border-top: 1px dashed rgba(148, 163, 184, 0.12);
+      }
+      .settings-nav__group-label {
+        padding: 4px 8px 2px;
+        color: var(--gtss-text-faint);
+        font-size: 9.5px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .settings-nav a {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border: 1px solid transparent;
+        border-radius: var(--gtss-radius);
+        color: var(--gtss-muted);
+        font-size: 12.5px;
+        font-weight: 600;
+        text-decoration: none;
+        transition: background 150ms, color 150ms, border-color 150ms, transform 150ms;
+      }
+      .settings-nav a:hover,
+      .settings-nav a:focus-visible {
+        border-color: var(--settings-border);
+        background: rgba(59, 130, 246, 0.10);
+        color: var(--gtss-text);
+        transform: translateX(2px);
+        outline: none;
+      }
+      .settings-nav a:focus-visible {
+        outline: 2px solid var(--settings-accent);
+        outline-offset: 1px;
+      }
+      .settings-nav a.active {
+        background: linear-gradient(90deg, rgba(59, 130, 246, 0.22), rgba(59, 130, 246, 0.04));
+        border-color: rgba(59, 130, 246, 0.36);
+        color: var(--gtss-text);
+        box-shadow: inset 3px 0 0 var(--settings-accent);
+      }
+      .settings-nav a .nav-icon {
+        flex: 0 0 14px;
+        color: currentColor;
+        opacity: 0.8;
+      }

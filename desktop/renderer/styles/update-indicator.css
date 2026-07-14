@@ -1,0 +1,79 @@
+/* ─── Update indicator (topbar pill) ───────────────────────────────────────
+   Compact, clickable pill in the topbar that reflects the updater state
+   machine. Clicking opens the dedicated update modal (see below).
+   Color states mirror the sessions-health badge convention:
+     .ok    → green (update available)
+     .busy  → blue (downloading / installing)
+     .warn  → amber (downloaded, ready to install)
+     .error → red (update failed) */
+.update-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.update-indicator:hover { background: rgba(0, 0, 0, 0.08); }
+.update-indicator:active { transform: scale(0.97); }
+.update-indicator.hidden { display: none; }
+.update-indicator .update-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+.update-indicator.ok {
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.45);
+  color: #86efac;
+}
+.update-indicator.ok .update-dot {
+  background: #22c55e;
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5);
+  animation: updatePulse 2.2s infinite;
+}
+.update-indicator.busy {
+  background: rgba(99, 102, 241, 0.14);
+  border-color: rgba(99, 102, 241, 0.45);
+  color: #c7d2fe;
+}
+.update-indicator.busy .update-dot {
+  background: var(--accent);
+  animation: updatePulse 1.4s infinite;
+}
+.update-indicator.warn {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #fcd34d;
+}
+.update-indicator.warn .update-dot { background: #f59e0b; }
+.update-indicator.error {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+}
+.update-indicator.error .update-dot { background: #ef4444; }
+.update-indicator .update-progress {
+  padding: 1px 7px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.update-indicator .update-progress.hidden { display: none; }
+
+@keyframes updatePulse {
+  0%   { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.55); }
+  70%  { box-shadow: 0 0 0 7px rgba(99, 102, 241, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+}
+

@@ -1,0 +1,77 @@
+/**
+ * table.css — Message Generator leads table + pagination + empty state
+ *
+ * Extracted from the original msg-page.css. .table-wrap is the scrolling
+ * container around the main leads table. Sticky th, hover-highlighted tr,
+ * .msg-preview truncated cell, .row-actions button cluster, .empty-state
+ * placeholder, and .pagination footer.
+ */
+
+      /* ---------- Table ---------- */
+      .table-wrap {
+        overflow: auto;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 960px;
+      }
+      th,
+      td {
+        padding: 11px 12px;
+        border-bottom: 1px solid var(--gtss-card-border);
+        text-align: left;
+        color: var(--gtss-text);
+        font-size: 13px;
+      }
+      th {
+        color: var(--gtss-muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        position: sticky;
+        top: 0;
+        background: var(--gtss-card-bg);
+        z-index: 1;
+      }
+      tr {
+        cursor: pointer;
+        transition: background 120ms ease;
+      }
+      tr:hover {
+        background: rgb(59 130 246 / 6%);
+      }
+
+      .msg-preview {
+        max-width: 280px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--gtss-muted);
+        font-size: 13px;
+      }
+      .row-actions {
+        display: flex;
+        gap: 6px;
+      }
+
+      .empty-state {
+        display: none;
+        padding: 42px 16px;
+        text-align: center;
+        color: var(--gtss-muted);
+      }
+      .empty-state.visible {
+        display: block;
+      }
+      .pagination {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 12px;
+        margin-top: 14px;
+        color: var(--gtss-muted);
+        font-size: 13px;
+      }

@@ -1,0 +1,100 @@
+    <!-- ============ DRAWER ============ -->
+    <div id="drawer-overlay" class="drawer-overlay"></div>
+    <aside id="drawer" class="drawer">
+      <div class="drawer-header">
+        <div class="drawer-header-left">
+          <span
+            id="drawer-name"
+            style="font-size: 16px; font-weight: 800; color: var(--gtss-text)"
+          ></span>
+          <span id="drawer-platform-badge" class="platform-badge"></span>
+          <span id="drawer-score-badge" class="score-badge"></span>
+        </div>
+        <button
+          id="drawer-close"
+          class="drawer-close"
+          type="button"
+          aria-label="Close drawer"
+        >
+          ✕
+        </button>
+      </div>
+      <div class="drawer-body">
+        <div>
+          <div class="drawer-field-label">Role</div>
+          <div class="drawer-field-value" id="drawer-role">—</div>
+        </div>
+        <div>
+          <div class="drawer-field-label">Company</div>
+          <div class="drawer-field-value" id="drawer-company">—</div>
+        </div>
+        <div>
+          <div class="drawer-field-label">Location</div>
+          <div class="drawer-field-value" id="drawer-location">—</div>
+        </div>
+        <div>
+          <div class="drawer-field-label">Website</div>
+          <div class="drawer-field-value" id="drawer-website">—</div>
+        </div>
+        <div>
+          <div class="drawer-field-label">Profile URL</div>
+          <div class="drawer-field-value" id="drawer-profile-url">—</div>
+        </div>
+        <div>
+          <div class="drawer-field-label">AI Qualification Reasoning</div>
+          <div class="reasoning-box" id="drawer-reasoning">—</div>
+        </div>
+        <div>
+          <div class="drawer-field-label">Score Override</div>
+          <div class="drawer-score-row">
+            <input
+              id="drawer-score-input"
+              class="drawer-score-input"
+              type="number"
+              min="0"
+              max="100"
+              value="0"
+            />
+            <button
+              id="drawer-save-score"
+              class="primary-button"
+              type="button"
+              style="min-height: 36px; font-size: 13px"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+        <div>
+          <div class="drawer-field-label">Notes</div>
+          <textarea
+            id="drawer-notes"
+            class="drawer-notes"
+            placeholder="Add notes about this lead..."
+          ></textarea>
+        </div>
+        <div>
+          <div class="drawer-field-label">Touchpoint History</div>
+          <div class="touchpoint-placeholder">No touchpoints yet</div>
+        </div>
+      </div>
+      <div class="drawer-footer">
+        <button
+          id="drawer-manual-qualify"
+          class="success-button"
+          type="button"
+          style="display: none"
+        >
+          Qualify manually
+        </button>
+        <button id="drawer-approve" class="success-button" type="button">
+          Approve
+        </button>
+        <button id="drawer-reject" class="danger-button" type="button">
+          Reject
+        </button>
+        <button id="drawer-skip" class="secondary-button" type="button">
+          Skip
+        </button>
+      </div>
+    </aside>

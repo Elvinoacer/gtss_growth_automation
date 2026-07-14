@@ -1,0 +1,44 @@
+<!-- asset-library/upload-toolbar.html — Asset Library upload + pipeline settings
+     Extracted from asset-library.html. The <form id="asset-upload-form">
+     is the auto-fit grid toolbar with file input, tags input, asset-
+     source / media-type selects, and the action row (upload + save
+     pipeline settings + status meta). Rendered server-side via
+     data-include. -->
+
+        <form id="asset-upload-form" class="asset-toolbar">
+          <label class="asset-toolbar-label">
+            Upload media
+            <input id="asset-files" type="file" name="assets" multiple accept="image/*,video/*" />
+          </label>
+          <label class="asset-toolbar-label">
+            Tags
+            <input id="asset-tags" type="text" placeholder="tag1, tag2" />
+          </label>
+          <label class="asset-toolbar-label">
+            Asset source
+            <select id="asset-source">
+              <option value="ai">AI Generated</option>
+              <option value="library">My Asset Library</option>
+            </select>
+          </label>
+          <label class="asset-toolbar-label">
+            Media type
+            <select id="asset-media-type">
+              <option value="image">Images</option>
+              <option value="video">Videos</option>
+              <option value="both">Both</option>
+            </select>
+          </label>
+          <div class="asset-toolbar-actions">
+            <button type="submit" class="asset-btn asset-btn-primary">
+              <span aria-hidden="true">↑</span> Upload
+            </button>
+            <button id="save-asset-settings" type="button" class="asset-btn asset-btn-secondary">
+              Save pipeline settings
+            </button>
+            <span class="asset-toolbar-meta">
+              <span class="pulse"></span>
+              <span id="asset-next">No library assets yet</span>
+            </span>
+          </div>
+        </form>

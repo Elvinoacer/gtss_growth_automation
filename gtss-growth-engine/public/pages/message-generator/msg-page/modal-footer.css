@@ -1,0 +1,30 @@
+/**
+ * modal-footer.css — Message Generator modal footer + regenerate loader
+ *
+ * Extracted from the original msg-page.css. .modal-footer is the sticky
+ * bottom bar with the approve / send / regenerate actions and a flex
+ * spacer. .regen-loading is the inline "Regenerating…" indicator shown
+ * next to the regenerate button while the LLM is working.
+ */
+
+      .modal-footer {
+        display: flex;
+        gap: 10px;
+        padding: 16px 24px;
+        border-top: 1px solid var(--gtss-card-border);
+        flex-wrap: wrap;
+      }
+      .modal-footer .spacer {
+        flex: 1;
+      }
+      .regen-loading {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        color: var(--gtss-muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .regen-loading.visible {
+        display: flex;
+      }

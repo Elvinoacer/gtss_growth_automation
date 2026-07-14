@@ -1,0 +1,104 @@
+<!-- lead-discovery/sidebar.html — Lead Discovery page left side nav
+     Extracted from lead-discovery.html. The fixed 260px-wide <nav>
+     with the Growth Engine brand mark + rocket icon, the "Quick-run
+     Automation" button, the nav link list (Dashboard / Lead Discovery
+     [active] / Qualification / Messages / Automation / CRM Pipeline /
+     Content Scheduler / Settings), and the "Active Platforms" status
+     list at the bottom. Rendered server-side via data-include. -->
+
+<nav class="fixed left-0 top-0 h-full w-[260px] bg-inverse-surface dark:bg-inverse-surface border-r border-outline-variant flex flex-col py-6 z-20">
+<div class="px-6 mb-8 flex items-center gap-3">
+<div class="w-8 h-8 bg-primary rounded flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-on-primary font-bold text-lg">rocket_launch</span>
+</div>
+<div>
+<h1 class="text-headline-md font-bold text-on-primary-container font-headline-md tracking-tight">Growth Engine</h1>
+<p class="font-body-xs text-body-xs text-surface-variant/70">GTSS Geistnal Ops</p>
+</div>
+</div>
+<button class="mx-6 mb-6 bg-primary text-on-primary rounded font-label-caps text-label-caps py-2.5 px-4 flex items-center justify-center gap-2 hover:bg-primary-fixed-dim transition-colors scale-98 active:opacity-80">
+<span class="material-symbols-outlined text-[18px]">play_arrow</span>
+            Quick-run Automation
+        </button>
+<div class="flex-1 overflow-y-auto mt-2">
+<ul class="flex flex-col gap-1 px-3">
+<!-- Dashboard -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span>Dashboard</span>
+</a>
+</li>
+<!-- Lead Discovery (ACTIVE) -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-primary-fixed bg-primary-fixed-variant/20 font-bold border-l-4 border-primary scale-98 active:opacity-80 transition-all" href="#">
+<span class="material-symbols-outlined">search</span>
+<span>Lead Discovery</span>
+</a>
+</li>
+<!-- Qualification -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80" href="#">
+<span class="material-symbols-outlined">verified_user</span>
+<span>Qualification</span>
+</a>
+</li>
+<!-- Messages -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80" href="#">
+<span class="material-symbols-outlined">chat</span>
+<span>Messages</span>
+</a>
+</li>
+<!-- Automation -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80" href="#">
+<span class="material-symbols-outlined">smart_toy</span>
+<span>Automation</span>
+</a>
+</li>
+<!-- CRM Pipeline -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80" href="#">
+<span class="material-symbols-outlined">account_tree</span>
+<span>CRM Pipeline</span>
+</a>
+</li>
+<!-- Content Scheduler -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80" href="#">
+<span class="material-symbols-outlined">calendar_month</span>
+<span>Content Scheduler</span>
+</a>
+</li>
+<!-- Settings -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-surface-variant font-body-sm hover:text-white hover:bg-surface-variant/10 transition-colors scale-98 active:opacity-80" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span>Settings</span>
+</a>
+</li>
+</ul>
+</div>
+<div class="mt-auto px-6 pt-6 border-t border-surface-variant/20">
+<p class="font-label-caps text-label-caps text-surface-variant/50 mb-3 uppercase tracking-wider">Active Platforms</p>
+<ul class="flex flex-col gap-2">
+<li class="flex items-center gap-2 text-surface-variant font-body-sm">
+<span class="material-symbols-outlined text-[10px] text-green-400" style="font-variation-settings: 'FILL' 1;">fiber_manual_record</span>
+<span>LinkedIn</span>
+</li>
+<li class="flex items-center gap-2 text-surface-variant font-body-sm">
+<span class="material-symbols-outlined text-[10px] text-green-400" style="font-variation-settings: 'FILL' 1;">fiber_manual_record</span>
+<span>X Platform</span>
+</li>
+<li class="flex items-center gap-2 text-surface-variant font-body-sm">
+<span class="material-symbols-outlined text-[10px] text-surface-variant/30" style="font-variation-settings: 'FILL' 1;">fiber_manual_record</span>
+<span>Facebook</span>
+</li>
+<li class="flex items-center gap-2 text-surface-variant font-body-sm">
+<span class="material-symbols-outlined text-[10px] text-surface-variant/30" style="font-variation-settings: 'FILL' 1;">fiber_manual_record</span>
+<span>Instagram</span>
+</li>
+</ul>
+</div>
+</nav>

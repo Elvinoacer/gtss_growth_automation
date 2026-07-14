@@ -1,0 +1,32 @@
+/**
+ * table.css — Lead Discovery results table shell
+ *
+ * Extracted from the original discovery-page.css. .table-wrap is the
+ * scrolling container around the discovered-leads table. Sticky-proof th,
+ * baseline td typography. Cell-content widgets (badges, links, row
+ * buttons) live in their own modules.
+ */
+
+      .table-wrap {
+        overflow: auto;
+        border: 1px solid var(--gtss-card-border);
+        border-radius: var(--gtss-radius);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 980px;
+      }
+      th,
+      td {
+        padding: 12px;
+        border-bottom: 1px solid var(--gtss-card-border);
+        text-align: left;
+        color: var(--gtss-text);
+        font-size: 14px;
+      }
+      th {
+        color: var(--gtss-muted);
+        font-size: 12px;
+        text-transform: uppercase;
+      }

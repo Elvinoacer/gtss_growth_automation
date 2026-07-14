@@ -1,0 +1,63 @@
+/**
+ * variables.css — Settings page root custom properties + body backdrop
+ *
+ * Extracted from the original settings-page.css. Defines the --settings-*
+ * color/surface/radius tokens used by every other settings-page module, plus
+ * the page-level body background gradient and the bottom padding for
+ * .page-content. Also houses the visually-hidden skip link.
+ */
+
+      /* ─────────────────────────────────────────────────────────────────
+         Settings page — premium redesign
+         Design principles:
+         • Calm dark surface with subtle accent gradients
+         • Sticky category nav on the left, content on the right
+         • Each section is a self-contained card with a clear header,
+           supporting copy, and a strategically placed action row
+         • Accessibility: skip-link, focus-visible, ARIA landmarks,
+           aria-live regions for inline results, semantic headings
+         ───────────────────────────────────────────────────────────────── */
+      :root {
+        --settings-surface: rgba(12, 18, 32, 0.86);
+        --settings-surface-2: rgba(10, 16, 28, 0.9);
+        --settings-border: rgba(148, 163, 184, 0.18);
+        --settings-shadow: rgba(2, 6, 23, 0.55);
+        --settings-radius: calc(var(--gtss-radius) + 4px);
+        --settings-success: #22c55e;
+        --settings-danger: #ef4444;
+        --settings-warning: #f59e0b;
+        --settings-accent: #3b82f6;
+        --settings-accent-soft: rgba(59, 130, 246, 0.12);
+      }
+
+      body[data-page-title="Settings"] {
+        background:
+          radial-gradient(900px 450px at 10% -10%, rgba(250, 204, 21, 0.10), transparent 60%),
+          radial-gradient(800px 500px at 95% 0%, rgba(96, 165, 250, 0.14), transparent 65%),
+          linear-gradient(180deg, #0a0f1d 0%, #0b1220 100%);
+        color: var(--gtss-text);
+        font-family: "Geist", sans-serif;
+      }
+
+      .page-content {
+        padding-bottom: 60px;
+      }
+
+      /* Skip link */
+      .settings-skip-link {
+        position: absolute;
+        left: 12px;
+        top: -40px;
+        z-index: 2000;
+        padding: 8px 14px;
+        border-radius: var(--gtss-radius);
+        background: var(--settings-accent);
+        color: #fff !important;
+        font-size: 12px;
+        font-weight: 700;
+        text-decoration: none;
+        transition: top 150ms ease;
+      }
+      .settings-skip-link:focus {
+        top: 12px;
+      }

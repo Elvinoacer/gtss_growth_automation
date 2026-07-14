@@ -1,0 +1,44 @@
+/**
+ * segmented.css — Settings page segmented radio-group control
+ *
+ * Extracted from the original settings-page.css. .segmented is a pill-shaped
+ * wrapper around a group of <input type="radio"> + <label> pairs that
+ * renders like iOS segmented controls. Used on the Context and Pipeline
+ * Config panels to pick between a small fixed set of modes.
+ */
+
+      /* ─── Segmented control (radio group styled) ─── */
+      .segmented {
+        display: inline-flex;
+        padding: 3px;
+        border: 1px solid var(--settings-border);
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.7);
+        gap: 2px;
+      }
+      .segmented input[type="radio"] {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+      .segmented label {
+        padding: 7px 14px;
+        border-radius: 999px;
+        color: var(--gtss-muted);
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: color 150ms, background 150ms;
+        white-space: nowrap;
+      }
+      .segmented label:hover { color: var(--gtss-text); }
+      .segmented input[type="radio"]:checked + label,
+      .segmented label.is-checked {
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.85), rgba(96, 165, 250, 0.85));
+        color: #fff;
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.30);
+      }
+      .segmented input[type="radio"]:focus-visible + label {
+        outline: 2px solid var(--settings-accent);
+        outline-offset: 2px;
+      }

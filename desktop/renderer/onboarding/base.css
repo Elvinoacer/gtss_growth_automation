@@ -1,0 +1,50 @@
+/* Onboarding wizard — additional styles layered on top of styles.css. */
+
+.onboarding-body {
+  display: grid;
+  place-items: center;
+  padding: 32px 20px;
+  overflow-y: auto;
+  user-select: none;
+}
+
+.onboard-shell {
+  width: min(640px, 100%);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 32px;
+  box-shadow: var(--shadow-lg);
+}
+
+.onboard-hero {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.onboard-hero .brand-mark {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  color: white;
+  font-size: 28px;
+  margin: 0 auto 16px;
+}
+
+.onboard-hero h1 {
+  font-size: 22px;
+  margin-bottom: 6px;
+}
+
+.onboard-hero p {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 460px;
+  margin: 0 auto;
+}
+

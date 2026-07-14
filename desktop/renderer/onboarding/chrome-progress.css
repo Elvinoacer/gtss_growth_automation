@@ -1,0 +1,48 @@
+/* ─── Live progress strip (Chrome startup) ──────────────────────────────
+   Animated bar + text line shown while Chrome is starting up so the user
+   sees continuous feedback instead of a frozen "Chrome: starting…" label. */
+.sessions-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+
+.sessions-progress[hidden] { display: none; }
+
+.sessions-progress-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-elev-2);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.sessions-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 30%;
+  background: linear-gradient(90deg, var(--accent), #8b5cf6);
+  border-radius: 3px;
+  animation: progressShimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes progressShimmer {
+  0% { left: -30%; width: 30%; }
+  50% { left: 35%; width: 50%; }
+  100% { left: 100%; width: 30%; }
+}
+
+.sessions-progress-text {
+  color: var(--text-dim);
+  min-width: 200px;
+}
+

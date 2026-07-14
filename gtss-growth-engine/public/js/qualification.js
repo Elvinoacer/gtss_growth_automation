@@ -1,864 +1,134 @@
-/* ================================================================
-   Qualification Page – Frontend Logic
-   ================================================================ */
+/* global gtss, io */
+/**
+ * qualification.js — Lead Qualification page (module loader)
+ *
+ * Features (split across the qualification/ subdirectory):
+ *   - Paginated lead table with per-status filter tabs (all / pending /
+ *     approved / rejected / scoring_failed / overridden), sort dropdown
+ *     (score / name / platform / date), and per-row checkboxes for bulk
+ *     actions
+ *   - Stats cards: pending / qualified / deprioritized / overridden /
+ *     scoring-failed; pulses the "Proceed to Messages" CTA when qualified
+ *     leads exist
+ *   - Bulk "Run All" with live Socket.IO progress panel + legacy SSE
+ *     trigger + resume-on-page-load (reattaches to an in-flight job) +
+ *     Stop button
+ *   - Manual-actions dropdown: Qualify All Manually (no AI), Qualify
+ *     Selected Manually, Retry Failed (re-runs AI on scoring-failed leads)
+ *   - Lead detail drawer: name / platform / score / role / company /
+ *     location / website + profile URL / AI reasoning / inline score
+ *     override / notes auto-save / Approve / Reject / Skip
+ *   - Inline score-override input on the score cell (Enter to commit,
+ *     Escape to cancel)
+ *   - URL-hash filter restore on page load
+ *
+ * This file is a thin loader. The actual UI code has been split into
+ * thematic files in the qualification/ subdirectory for maintainability
+ * (each <500 lines). Each split file is loaded synchronously via
+ * document.write() during the initial page parse, preserving the original
+ * single-<script> behavior — the HTML still references
+ * `/js/qualification.js`, and every split file shares the same global
+ * scope exactly as the original IIFE did (the original was a single IIFE
+ * whose entire body has been hoisted into the global lexical environment
+ * of classic <script> tags).
+ *
+ * File manifest (loaded in dependency order):
+ *   qualification/state.js              — gtss API destructure (fetchJSON,
+ *                                         showToast, getSocket), shared
+ *                                         mutable state (currentFilter,
+ *                                         currentSort, currentPage,
+ *                                         pageLimit (const), totalLeads,
+ *                                         selectedIds, openDrawerLead,
+ *                                         activeSocketHandler, activeJobId,
+ *                                         cachedLeads), cached DOM refs
+ *                                         (stat/tab/progress/filter/table/
+ *                                         bulk/drawer refs)
+ *   qualification/helpers.js            — platformLabel, platformClass,
+ *                                         scoreColorClass, statusClass,
+ *                                         truncate, escapeHtml
+ *   qualification/stats.js              — loadStats (stat-card + tab
+ *                                         counter refresh + Proceed CTA
+ *                                         pulse toggle)
+ *   qualification/table.js              — sortQueryParam, loadLeads,
+ *                                         renderTable, renderPagination,
+ *                                         updateBulkBar
+ *   qualification/manualActions.js      — closeManualActionsMenu,
+ *                                         toggleManualActionsMenu
+ *   qualification/qualificationStream.js
+ *                                       — attachQualificationStream
+ *                                         (Socket.IO + legacy SSE listener
+ *                                         for a qualification batch job)
+ *   qualification/runQualification.js   — runQualification,
+ *                                         stopQualification,
+ *                                         resumeActiveQualification +
+ *                                         the stop-qualification-btn
+ *                                         listener (immediate)
+ *   qualification/actions.js            — updateLeadStatus, overrideScore,
+ *                                         bulkStatusUpdate,
+ *                                         manualQualifyLeads,
+ *                                         retryFailedLeads
+ *   qualification/drawer.js             — openDrawer, closeDrawer,
+ *                                         startInlineOverride
+ *   qualification/events.js             — all top-level event listeners
+ *                                         (filter tabs, sort, Run All,
+ *                                         manual-actions dropdown +
+ *                                         click-outside, manual-qualify /
+ *                                         retry buttons, select-all, row
+ *                                         delegation, bulk approve/reject,
+ *                                         pagination, drawer events,
+ *                                         notes auto-save)
+ *   qualification/init.js               — restoreFilterFromHash +
+ *                                         launch-time boot (loadStats →
+ *                                         loadLeads →
+ *                                         resumeActiveQualification)
+ *
+ * Original qualification.js was ~864 lines; this loader is the only file
+ * the HTML references directly (see public/pages/lead-qualification.html
+ * line 1020).
+ */
 
 (function () {
-  "use strict";
-
-  const { fetchJSON, showToast, getSocket } = window.gtss;
-
-  // ---- State ----
-  let currentFilter = "all";
-  let currentSort = "score_desc";
-  let currentPage = 1;
-  const pageLimit = 20;
-  let totalLeads = 0;
-  let selectedIds = new Set();
-  let openDrawerLead = null;
-  let activeSocketHandler = null;
-  let activeJobId = null;
-  let cachedLeads = [];
-
-  // ---- DOM refs ----
-  const statPending = document.getElementById("stat-pending");
-  const statQualified = document.getElementById("stat-qualified");
-  const statDeprioritized = document.getElementById("stat-deprioritized");
-  const statOverridden = document.getElementById("stat-overridden");
-  const statScoringFailed = document.getElementById("stat-scoring-failed");
-  const tabPending = document.getElementById("tab-pending");
-  const tabApproved = document.getElementById("tab-approved");
-  const tabRejected = document.getElementById("tab-rejected");
-  const tabOverridden = document.getElementById("tab-overridden");
-  const tabScoringFailed = document.getElementById("tab-scoring-failed");
-
-  const runAllBtn = document.getElementById("run-all-btn");
-  const stopQualificationBtn = document.getElementById("stop-qualification-btn");
-  const manualActionsMenu = document.getElementById("manual-actions-menu");
-  const manualActionsTrigger = document.getElementById(
-    "manual-actions-trigger",
-  );
-  const manualActionsDropdown = document.getElementById(
-    "manual-actions-dropdown",
-  );
-  const manualQualifyAllBtn = document.getElementById("manual-qualify-all-btn");
-  const manualQualifySelectedBtn = document.getElementById(
-    "manual-qualify-selected-btn",
-  );
-  const retryFailedBtn = document.getElementById("retry-failed-btn");
-  const progressPanel = document.getElementById("progress-panel");
-  const progressFill = document.getElementById("progress-fill");
-  const progressText = document.getElementById("progress-text");
-  const progressLabelText = document.getElementById("progress-label-text");
-
-  const filterTabs = document.getElementById("filter-tabs");
-  const sortSelect = document.getElementById("sort-select");
-  const totalBadge = document.getElementById("total-badge");
-  const leadsBody = document.getElementById("leads-body");
-  const emptyState = document.getElementById("empty-state");
-  const bulkBar = document.getElementById("bulk-bar");
-  const bulkCount = document.getElementById("bulk-count");
-  const bulkApprove = document.getElementById("bulk-approve");
-  const bulkReject = document.getElementById("bulk-reject");
-  const selectAll = document.getElementById("select-all");
-  const prevPage = document.getElementById("prev-page");
-  const nextPage = document.getElementById("next-page");
-  const pageLabel = document.getElementById("page-label");
-
-  // Drawer refs
-  const drawerOverlay = document.getElementById("drawer-overlay");
-  const drawer = document.getElementById("drawer");
-  const drawerClose = document.getElementById("drawer-close");
-  const drawerName = document.getElementById("drawer-name");
-  const drawerPlatformBadge = document.getElementById("drawer-platform-badge");
-  const drawerScoreBadge = document.getElementById("drawer-score-badge");
-  const drawerRole = document.getElementById("drawer-role");
-  const drawerCompany = document.getElementById("drawer-company");
-  const drawerLocation = document.getElementById("drawer-location");
-  const drawerWebsite = document.getElementById("drawer-website");
-  const drawerProfileUrl = document.getElementById("drawer-profile-url");
-  const drawerReasoning = document.getElementById("drawer-reasoning");
-  const drawerScoreInput = document.getElementById("drawer-score-input");
-  const drawerSaveScore = document.getElementById("drawer-save-score");
-  const drawerNotes = document.getElementById("drawer-notes");
-  const drawerManualQualify = document.getElementById("drawer-manual-qualify");
-  const drawerApprove = document.getElementById("drawer-approve");
-  const drawerReject = document.getElementById("drawer-reject");
-  const drawerSkip = document.getElementById("drawer-skip");
-
-  // ----------------------------------------------------------------
-  // Helpers
-  // ----------------------------------------------------------------
-
-  function platformLabel(platform) {
-    return window.gtss.formatPlatformLabel(platform) || platform || "—";
-  }
-
-  function platformClass(platform) {
-    return `platform-${(platform || "").toLowerCase()}`;
-  }
-
-  function scoreColorClass(score) {
-    if (score == null) return "";
-    if (score < 40) return "score-red";
-    if (score < 70) return "score-amber";
-    return "score-green";
-  }
-
-  function statusClass(status) {
-    return `status-${(status || "discovered").toLowerCase()}`;
-  }
-
-  function truncate(text, len) {
-    if (!text) return "—";
-    return text.length > len ? text.slice(0, len) + "..." : text;
-  }
-
-  function escapeHtml(str) {
-    const el = document.createElement("span");
-    el.textContent = str || "";
-    return el.innerHTML;
-  }
-
-  // ----------------------------------------------------------------
-  // Stats
-  // ----------------------------------------------------------------
-
-  async function loadStats() {
-    try {
-      const stats = await fetchJSON("/api/qualification/stats");
-      statPending.textContent = stats.pending;
-      statQualified.textContent = stats.qualified;
-      statDeprioritized.textContent = stats.deprioritized;
-      statOverridden.textContent = stats.overridden;
-
-      // Toggle the gentle pulse on the "Proceed to Messages" button when
-      // there are qualified leads ready to move to outreach.
-      const proceedBtn = document.getElementById("proceed-to-messages-btn");
-      if (proceedBtn) {
-        if (stats.qualified > 0) {
-          proceedBtn.classList.add("proceed-pulse");
-        } else {
-          proceedBtn.classList.remove("proceed-pulse");
-        }
-      }
-      if (statScoringFailed) {
-        statScoringFailed.textContent = stats.scoring_failed || 0;
-      }
-      tabPending.textContent = stats.pending;
-      tabApproved.textContent = stats.qualified;
-      tabRejected.textContent = stats.deprioritized;
-      tabOverridden.textContent = stats.overridden;
-      if (tabScoringFailed) {
-        tabScoringFailed.textContent = stats.scoring_failed || 0;
-      }
-    } catch (err) {
-      console.error("Failed to load stats", err);
-    }
-  }
-
-  // ----------------------------------------------------------------
-  // Lead table
-  // ----------------------------------------------------------------
-
-  function sortQueryParam() {
-    const map = {
-      score_desc: "score_desc",
-      score_asc: "score_asc",
-      name_asc: "name_asc",
-      platform: "platform",
-      date: "date",
-    };
-    return map[currentSort] || "score_desc";
-  }
-
-  async function loadLeads() {
-    try {
-      const params = new URLSearchParams({
-        status: currentFilter,
-        sort: sortQueryParam(),
-        page: currentPage,
-        limit: pageLimit,
-      });
-
-      const data = await fetchJSON(`/api/qualification/leads?${params}`);
-      totalLeads = data.total;
-      cachedLeads = data.leads;
-      renderTable(data.leads);
-      renderPagination();
-      totalBadge.textContent = `${data.total} leads`;
-    } catch (err) {
-      showToast(err.message, "error");
-    }
-  }
-
-  function renderTable(leads) {
-    if (!leads || leads.length === 0) {
-      leadsBody.innerHTML = "";
-      emptyState.classList.add("visible");
-      return;
-    }
-
-    emptyState.classList.remove("visible");
-
-    leadsBody.innerHTML = leads
-      .map((lead) => {
-        const checked = selectedIds.has(lead.id) ? "checked" : "";
-        const scoreVal = lead.lead_score != null ? lead.lead_score : "—";
-        const scoreClass =
-          lead.lead_score != null ? scoreColorClass(lead.lead_score) : "";
-        const reasonFull = escapeHtml(lead.score_reason || "");
-        const reasonShort = escapeHtml(truncate(lead.score_reason, 60));
-        const approveLabel =
-          lead.status === "scoring_failed" ? "Qualify" : "Approve";
-        const approveTitle =
-          lead.status === "scoring_failed" ? "Qualify manually" : "Approve";
-
-        return `<tr data-lead-id="${lead.id}">
-        <td><input type="checkbox" class="lead-checkbox" data-id="${lead.id}" ${checked} aria-label="Select lead"></td>
-        <td>${escapeHtml(lead.name || "—")}</td>
-        <td><span class="platform-badge ${platformClass(lead.platform)}">${platformLabel(lead.platform)}</span></td>
-        <td>${escapeHtml(lead.company || "—")}</td>
-        <td>${escapeHtml(lead.location || "—")}</td>
-        <td class="score-cell" data-id="${lead.id}">
-          <span class="score-badge ${scoreClass}">${scoreVal}</span>
-        </td>
-        <td>
-          <span class="reason-text" data-full="${reasonFull}" data-short="${reasonShort}" title="${reasonFull}">${reasonShort}</span>
-        </td>
-        <td><span class="status-pill ${statusClass(lead.status)}">${lead.status || "discovered"}</span></td>
-        <td>
-          <div class="row-actions">
-            <button class="row-button approve" data-action="approve" data-id="${lead.id}" title="${approveTitle}">${approveLabel}</button>
-            <button class="row-button reject" data-action="reject" data-id="${lead.id}" title="Reject">✕</button>
-            <button class="row-button override" data-action="override" data-id="${lead.id}" title="Override Score">✎</button>
-          </div>
-        </td>
-      </tr>`;
-      })
-      .join("");
-  }
-
-  function renderPagination() {
-    const totalPages = Math.max(1, Math.ceil(totalLeads / pageLimit));
-    pageLabel.textContent = `Page ${currentPage} of ${totalPages}`;
-    prevPage.disabled = currentPage <= 1;
-    nextPage.disabled = currentPage >= totalPages;
-  }
-
-  function updateBulkBar() {
-    const count = selectedIds.size;
-    if (count > 0) {
-      bulkBar.classList.add("visible");
-      bulkCount.textContent = `${count} selected`;
-    } else {
-      bulkBar.classList.remove("visible");
-    }
-
-    if (manualQualifySelectedBtn) {
-      const countLabel =
-        manualQualifySelectedBtn.querySelector(".selected-count");
-      if (count > 0) {
-        manualQualifySelectedBtn.hidden = false;
-        if (countLabel) countLabel.textContent = count;
-      } else {
-        manualQualifySelectedBtn.hidden = true;
-        if (countLabel) countLabel.textContent = "0";
-      }
-    }
-  }
-
-  function closeManualActionsMenu() {
-    if (manualActionsDropdown) {
-      manualActionsDropdown.hidden = true;
-    }
-  }
-
-  function toggleManualActionsMenu() {
-    if (!manualActionsDropdown) return;
-    manualActionsDropdown.hidden = !manualActionsDropdown.hidden;
-  }
-
-  function attachQualificationStream(
-    jobId,
-    doneLabel = "Qualification complete!",
-  ) {
-    // Legacy SSE to trigger backend stream
-    const legacySSE = window.gtss.initSSE(`/api/qualification/stream/${jobId}`, () => {});
-
-    const socket = getSocket();
-    if (!socket) return;
-
-    function onQualEvent(event) {
-      if (!event) return;
-      if (event.jobId && String(event.jobId) !== String(jobId)) return;
-
-      if (event.type === "progress") {
-        const pct =
-          event.total > 0
-            ? Math.round((event.processed / event.total) * 100)
-            : 0;
-        progressFill.style.width = `${pct}%`;
-        progressText.textContent = `${event.processed} / ${event.total} leads scored`;
-      }
-
-      if (event.type === "scored") {
-        loadLeads();
-      }
-
-      if (event.type === "stopped") {
-        progressLabelText.textContent = event.message || "Qualification stopped.";
-        showToast("Qualification stopped.", "warn");
-        cleanup();
-        runAllBtn.disabled = false;
-        stopQualificationBtn?.classList.add("hidden");
-        activeJobId = null;
-        loadStats();
-        loadLeads();
-      }
-
-      if (event.type === "done") {
-        progressFill.style.width = "100%";
-        progressLabelText.textContent = doneLabel;
-        progressText.textContent = `${event.result.processed} processed — ${event.result.qualified} qualified, ${event.result.deprioritized} deprioritized`;
-        showToast(
-          `Qualification complete: ${event.result.qualified} qualified`,
-          "success",
-        );
-        showToast(
-          "Qualification complete! Click 'Proceed to Messages' to generate outreach messages.",
-          "success",
-          8000,
-        );
-
-        cleanup();
-        runAllBtn.disabled = false;
-        stopQualificationBtn?.classList.add("hidden");
-        activeJobId = null;
-        loadStats();
-        loadLeads();
-
-        setTimeout(() => {
-          progressPanel.classList.remove("visible");
-        }, 5000);
-      }
-
-      if (event.type === "error") {
-        showToast(`Error: ${event.message}`, "error");
-      }
-    }
-
-    function cleanup() {
-      socket.off('qualification:event', onQualEvent);
-      if (legacySSE) legacySSE.close();
-      activeSocketHandler = null;
-    }
-
-    activeSocketHandler = onQualEvent;
-    socket.on('qualification:event', onQualEvent);
-  }
-
-  // ----------------------------------------------------------------
-  // Run Qualification
-  // ----------------------------------------------------------------
-
-  async function runQualification() {
-    runAllBtn.disabled = true;
-    progressPanel.classList.add("visible");
-    progressFill.style.width = "0%";
-    progressText.textContent = "Starting...";
-    progressLabelText.textContent = "Scoring leads with Gemini AI...";
-
-    try {
-      const { jobId } = await fetchJSON("/api/qualification/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-
-      if (!jobId) {
-        showToast("No pending leads to qualify", "info");
-        progressPanel.classList.remove("visible");
-        runAllBtn.disabled = false;
-        return;
-      }
-
-      activeJobId = jobId;
-      stopQualificationBtn?.classList.remove("hidden");
-      attachQualificationStream(jobId, "Qualification complete!");
-    } catch (err) {
-      showToast(err.message, "error");
-      progressPanel.classList.remove("visible");
-      runAllBtn.disabled = false;
-    }
-  }
-
-  async function stopQualification() {
-    if (!activeJobId) return;
-    await fetchJSON(`/api/qualification/stop/${activeJobId}`, { method: "POST" });
-    showToast("Stop signal sent.", "warn");
-  }
-
-  // Called once on page load. If a qualification batch is already running
-  // (started from this tab before a refresh, or from another tab),
-  // rehydrate the progress panel and reattach the live listener instead of
-  // showing the idle Run button as if nothing were happening.
-  async function resumeActiveQualification() {
-    try {
-      const status = await fetchJSON("/api/qualification/active");
-      if (!status.active) return;
-
-      activeJobId = status.jobId;
-      runAllBtn.disabled = true;
-      stopQualificationBtn?.classList.remove("hidden");
-      progressPanel.classList.add("visible");
-      progressText.textContent = "Reconnecting...";
-      progressLabelText.textContent = "Scoring leads with Gemini AI...";
-      attachQualificationStream(status.jobId, "Qualification complete!");
-    } catch (err) {
-      console.error("Failed to check active qualification job", err);
-    }
-  }
-
-  stopQualificationBtn?.addEventListener("click", stopQualification);
-
-  // ----------------------------------------------------------------
-  // Actions: Approve / Reject / Override
-  // ----------------------------------------------------------------
-
-  async function updateLeadStatus(id, status) {
-    try {
-      await fetchJSON(`/api/qualification/leads/${id}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-      showToast(`Lead ${status}`, "success");
-      loadStats();
-      loadLeads();
-      if (openDrawerLead && openDrawerLead.id === id) {
-        openDrawerLead.status = status;
-      }
-    } catch (err) {
-      showToast(err.message, "error");
-    }
-  }
-
-  async function overrideScore(id, score) {
-    try {
-      const updated = await fetchJSON(`/api/qualification/leads/${id}/score`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ score }),
-      });
-      showToast(`Score overridden to ${score}`, "success");
-      loadStats();
-      loadLeads();
-      if (openDrawerLead && openDrawerLead.id === id) {
-        openDrawerLead = updated;
-      }
-      return updated;
-    } catch (err) {
-      showToast(err.message, "error");
-    }
-  }
-
-  async function bulkStatusUpdate(ids, status) {
-    try {
-      await fetchJSON("/api/qualification/leads/bulk/status", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadIds: [...ids], status }),
-      });
-      showToast(`${ids.size} leads ${status}`, "success");
-      selectedIds.clear();
-      updateBulkBar();
-      loadStats();
-      loadLeads();
-    } catch (err) {
-      showToast(err.message, "error");
-    }
-  }
-
-  async function manualQualifyLeads(payload, successMessage) {
-    try {
-      const result = await fetchJSON(
-        "/api/qualification/leads/bulk/manual-qualify",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        },
-      );
-
-      if (!result.updated) {
-        showToast(result.message || "No leads matched", "info");
-        return;
-      }
-
-      showToast(successMessage(result.updated), "success");
-      selectedIds.clear();
-      updateBulkBar();
-      await loadStats();
-      await loadLeads();
-    } catch (err) {
-      showToast(err.message, "error");
-    }
-  }
-
-  async function retryFailedLeads() {
-    try {
-      const res = await fetchJSON("/api/qualification/retry-failed", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-
-      if (!res.jobId) {
-        showToast(res.message || "No failed leads to retry", "info");
-        return;
-      }
-
-      runAllBtn.disabled = true;
-      progressPanel.classList.add("visible");
-      progressFill.style.width = "0%";
-      progressText.textContent = "Starting...";
-      progressLabelText.textContent = "Retrying AI on failed leads...";
-      attachQualificationStream(res.jobId, "Retry complete!");
-    } catch (err) {
-      showToast(err.message, "error");
-      progressPanel.classList.remove("visible");
-      runAllBtn.disabled = false;
-    }
-  }
-
-  // ----------------------------------------------------------------
-  // Drawer
-  // ----------------------------------------------------------------
-
-  function openDrawer(lead) {
-    openDrawerLead = lead;
-    drawerName.textContent = lead.name || "—";
-    drawerPlatformBadge.textContent = platformLabel(lead.platform);
-    drawerPlatformBadge.className = `platform-badge ${platformClass(lead.platform)}`;
-
-    if (lead.lead_score != null) {
-      drawerScoreBadge.textContent = lead.lead_score;
-      drawerScoreBadge.className = `score-badge ${scoreColorClass(lead.lead_score)}`;
-    } else {
-      drawerScoreBadge.textContent = "—";
-      drawerScoreBadge.className = "score-badge";
-    }
-
-    drawerRole.textContent = lead.role || "—";
-    drawerCompany.textContent = lead.company || "—";
-    drawerLocation.textContent = lead.location || "—";
-
-    if (lead.website) {
-      drawerWebsite.innerHTML = `<a href="${escapeHtml(lead.website)}" target="_blank" rel="noopener">${escapeHtml(lead.website)}</a>`;
-    } else {
-      drawerWebsite.textContent = "—";
-    }
-
-    if (lead.profile_url) {
-      drawerProfileUrl.innerHTML = `<a href="${escapeHtml(lead.profile_url)}" target="_blank" rel="noopener">${escapeHtml(lead.profile_url)}</a>`;
-    } else {
-      drawerProfileUrl.textContent = "—";
-    }
-
-    drawerReasoning.textContent =
-      lead.score_reason || "No AI reasoning available yet.";
-    drawerScoreInput.value = lead.lead_score || 0;
-    drawerNotes.value = lead.notes || "";
-
-    const showManualQualify = ["discovered", "scoring_failed"].includes(
-      lead.status,
-    );
-    if (drawerManualQualify) {
-      drawerManualQualify.style.display = showManualQualify ? "" : "none";
-    }
-    drawerApprove.style.display = showManualQualify ? "none" : "";
-
-    drawerOverlay.classList.add("open");
-    drawer.classList.add("open");
-  }
-
-  function closeDrawer() {
-    drawerOverlay.classList.remove("open");
-    drawer.classList.remove("open");
-    openDrawerLead = null;
-  }
-
-  // ----------------------------------------------------------------
-  // Inline score override
-  // ----------------------------------------------------------------
-
-  function startInlineOverride(id, cell) {
-    const current = cell.querySelector(".score-badge");
-    const currentScore = current ? parseInt(current.textContent) || 0 : 0;
-    cell.innerHTML = `<input class="inline-score-input" type="number" min="0" max="100" value="${currentScore}" data-id="${id}" autofocus>`;
-    const input = cell.querySelector(".inline-score-input");
-    input.focus();
-    input.select();
-
-    const confirm = async () => {
-      const newScore = Math.max(0, Math.min(100, parseInt(input.value) || 0));
-      await overrideScore(id, newScore);
-    };
-
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") confirm();
-      if (e.key === "Escape") loadLeads();
-    });
-
-    input.addEventListener("blur", confirm);
-  }
-
-  // ----------------------------------------------------------------
-  // Event listeners
-  // ----------------------------------------------------------------
-
-  // Filter tabs
-  filterTabs.addEventListener("click", (e) => {
-    const tab = e.target.closest(".filter-tab");
-    if (!tab) return;
-    filterTabs
-      .querySelectorAll(".filter-tab")
-      .forEach((t) => t.classList.remove("active"));
-    tab.classList.add("active");
-    currentFilter = tab.dataset.status;
-    currentPage = 1;
-    window.location.hash = currentFilter;
-    loadLeads();
+  // The split files in dependency order. state.js must load first (it
+  // declares every shared `let`/`const` binding in the global lexical
+  // environment, plus the gtss API destructure); init.js must load last
+  // (it runs the launch-time boot sequence, which references functions
+  // declared in every other split file). runQualification.js must come
+  // before events.js because runQualification.js wires up the
+  // stop-qualification-btn listener at parse time and events.js expects
+  // `runQualification` to exist when its own listeners fire (function
+  // declarations are hoisted anyway, but explicit ordering keeps the
+  // dependency graph readable). manualActions.js must come before
+  // events.js because events.js calls closeManualActionsMenu /
+  // toggleManualActionsMenu from its handlers (same hoisting rationale).
+  var files = [
+    'qualification/state.js',
+    'qualification/helpers.js',
+    'qualification/stats.js',
+    'qualification/table.js',
+    'qualification/manualActions.js',
+    'qualification/qualificationStream.js',
+    'qualification/runQualification.js',
+    'qualification/actions.js',
+    'qualification/drawer.js',
+    'qualification/events.js',
+    'qualification/init.js'
+  ];
+
+  // Resolve the base URL of THIS script (qualification.js) so the split
+  // files load from the same directory regardless of how the app is
+  // mounted. `document.currentScript.src` is e.g. "/js/qualification.js"
+  // (or an absolute URL like "http://host/js/qualification.js"); stripping
+  // the trailing "qualification.js" leaves the "/js/" base, so e.g.
+  // "qualification/state.js" resolves to "/js/qualification/state.js".
+  var base = (document.currentScript && document.currentScript.src)
+    ? document.currentScript.src.replace(/qualification\.js$/, '')
+    : 'js/';
+
+  // document.write() of a <script> tag during parse is synchronous — the
+  // browser blocks on fetching and executing each script before moving on.
+  // This is exactly what we want: it preserves the original "everything
+  // available by the time DOMContentLoaded fires" guarantee.
+  files.forEach(function (f) {
+    document.write('<script src="' + base + f + '"><\/script>');
   });
-
-  // Sort
-  sortSelect.addEventListener("change", () => {
-    currentSort = sortSelect.value;
-    currentPage = 1;
-    loadLeads();
-  });
-
-  // Run all
-  runAllBtn.addEventListener("click", runQualification);
-
-  if (manualActionsTrigger && manualActionsDropdown) {
-    manualActionsTrigger.addEventListener("click", (e) => {
-      e.stopPropagation();
-      toggleManualActionsMenu();
-    });
-
-    document.addEventListener("click", (e) => {
-      if (manualActionsMenu && !manualActionsMenu.contains(e.target)) {
-        closeManualActionsMenu();
-      }
-    });
-  }
-
-  manualQualifyAllBtn.addEventListener("click", async () => {
-    closeManualActionsMenu();
-    const confirmed = confirm(
-      "Mark all discovered and AI-failed leads as qualified without using AI?",
-    );
-    if (!confirmed) return;
-
-    await manualQualifyLeads(
-      { all_pending: true },
-      (updated) => `${updated} leads marked as qualified`,
-    );
-  });
-
-  manualQualifySelectedBtn.addEventListener("click", async () => {
-    closeManualActionsMenu();
-    if (selectedIds.size === 0) return;
-    const ids = [...selectedIds];
-
-    await manualQualifyLeads(
-      { leadIds: ids },
-      (updated) => `${updated} selected leads marked as qualified`,
-    );
-  });
-
-  retryFailedBtn.addEventListener("click", async () => {
-    closeManualActionsMenu();
-    await retryFailedLeads();
-  });
-
-  // Select all
-  selectAll.addEventListener("change", () => {
-    const checkboxes = leadsBody.querySelectorAll(".lead-checkbox");
-    checkboxes.forEach((cb) => {
-      cb.checked = selectAll.checked;
-      const id = Number(cb.dataset.id);
-      if (selectAll.checked) selectedIds.add(id);
-      else selectedIds.delete(id);
-    });
-    updateBulkBar();
-  });
-
-  // Row clicks (delegation)
-  leadsBody.addEventListener("click", (e) => {
-    // Checkbox
-    const cb = e.target.closest(".lead-checkbox");
-    if (cb) {
-      const id = Number(cb.dataset.id);
-      if (cb.checked) selectedIds.add(id);
-      else selectedIds.delete(id);
-      updateBulkBar();
-      return;
-    }
-
-    // Row actions
-    const actionBtn = e.target.closest(".row-button");
-    if (actionBtn) {
-      e.stopPropagation();
-      const id = Number(actionBtn.dataset.id);
-      const action = actionBtn.dataset.action;
-      if (action === "approve") updateLeadStatus(id, "qualified");
-      else if (action === "reject") updateLeadStatus(id, "deprioritized");
-      else if (action === "override") {
-        const cell = leadsBody.querySelector(`.score-cell[data-id="${id}"]`);
-        if (cell) startInlineOverride(id, cell);
-      }
-      return;
-    }
-
-    // Reason expand
-    const reason = e.target.closest(".reason-text");
-    if (reason) {
-      if (reason.classList.contains("expanded")) {
-        reason.classList.remove("expanded");
-        reason.textContent = reason.dataset.short;
-      } else {
-        reason.classList.add("expanded");
-        reason.textContent = reason.dataset.full;
-      }
-      return;
-    }
-
-    // Row click → open drawer
-    const row = e.target.closest("tr[data-lead-id]");
-    if (row) {
-      const id = Number(row.dataset.leadId);
-      const lead = cachedLeads.find((l) => l.id === id);
-      if (lead) {
-        openDrawer(lead);
-      } else {
-        // Fallback fetch if not in cache
-        fetchJSON(`/api/qualification/leads?status=all&limit=100&page=1`)
-          .then((data) => {
-            const found = data.leads.find((l) => l.id === id);
-            if (found) openDrawer(found);
-          })
-          .catch(() => {});
-      }
-    }
-  });
-
-  // Bulk actions
-  bulkApprove.addEventListener("click", () => {
-    if (selectedIds.size > 0) bulkStatusUpdate(selectedIds, "qualified");
-  });
-
-  bulkReject.addEventListener("click", () => {
-    if (selectedIds.size > 0) bulkStatusUpdate(selectedIds, "deprioritized");
-  });
-
-  // Pagination
-  prevPage.addEventListener("click", () => {
-    if (currentPage > 1) {
-      currentPage--;
-      loadLeads();
-    }
-  });
-
-  nextPage.addEventListener("click", () => {
-    const totalPages = Math.ceil(totalLeads / pageLimit);
-    if (currentPage < totalPages) {
-      currentPage++;
-      loadLeads();
-    }
-  });
-
-  // Drawer events
-  drawerClose.addEventListener("click", closeDrawer);
-  drawerOverlay.addEventListener("click", closeDrawer);
-
-  drawerSaveScore.addEventListener("click", async () => {
-    if (!openDrawerLead) return;
-    const score = parseInt(drawerScoreInput.value) || 0;
-    const updated = await overrideScore(openDrawerLead.id, score);
-    if (updated) {
-      drawerScoreBadge.textContent = updated.lead_score;
-      drawerScoreBadge.className = `score-badge ${scoreColorClass(updated.lead_score)}`;
-    }
-  });
-
-  drawerApprove.addEventListener("click", () => {
-    if (openDrawerLead) {
-      updateLeadStatus(openDrawerLead.id, "qualified");
-      closeDrawer();
-    }
-  });
-
-  if (drawerManualQualify) {
-    drawerManualQualify.addEventListener("click", () => {
-      if (openDrawerLead) {
-        updateLeadStatus(openDrawerLead.id, "qualified");
-        closeDrawer();
-      }
-    });
-  }
-
-  drawerReject.addEventListener("click", () => {
-    if (openDrawerLead) {
-      updateLeadStatus(openDrawerLead.id, "deprioritized");
-      closeDrawer();
-    }
-  });
-
-  drawerSkip.addEventListener("click", closeDrawer);
-
-  // Notes auto-save
-  drawerNotes.addEventListener("blur", async () => {
-    if (!openDrawerLead) return;
-    try {
-      await fetchJSON(`/api/leads/${openDrawerLead.id}/notes`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notes: drawerNotes.value }),
-      });
-    } catch (err) {
-      showToast("Failed to save notes", "error");
-    }
-  });
-
-  // ----------------------------------------------------------------
-  // Hash-based filter restore
-  // ----------------------------------------------------------------
-
-  function restoreFilterFromHash() {
-    const hash = window.location.hash.replace("#", "");
-    const validFilters = [
-      "all",
-      "pending",
-      "approved",
-      "rejected",
-      "scoring_failed",
-      "overridden",
-    ];
-    if (validFilters.includes(hash)) {
-      currentFilter = hash;
-      filterTabs.querySelectorAll(".filter-tab").forEach((t) => {
-        t.classList.toggle("active", t.dataset.status === currentFilter);
-      });
-    }
-  }
-
-  // ----------------------------------------------------------------
-  // Init
-  // ----------------------------------------------------------------
-
-  restoreFilterFromHash();
-  loadStats();
-  loadLeads();
-  resumeActiveQualification();
 })();

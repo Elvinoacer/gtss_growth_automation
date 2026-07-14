@@ -1,0 +1,67 @@
+    <!-- ============ SETTINGS PANEL ============ -->
+    <aside id="settings-panel" class="settings-panel">
+      <div>
+        <h3>Generation Settings</h3>
+        <p>Global rules for AI message drafting.</p>
+      </div>
+
+      <div class="setting-group">
+        <div class="setting-label">Templates</div>
+        <p style="color: var(--gtss-muted); font-size: 12px; line-height: 1.5">
+          Manage message templates from the Settings page. This panel only
+          controls drafting tone and product pitch.
+        </p>
+      </div>
+
+      <div class="setting-group">
+        <div class="setting-label">Message Source</div>
+        <p style="color: var(--gtss-muted); font-size: 12px; line-height: 1.5; margin: 0 0 8px 0">
+          Choose how outreach DMs are drafted. AI uses Gemini (API key first,
+          Gemini Web fallback) — recommended for full lead-discovery runs.
+          Template uses the canonical templates from Settings (manual control,
+          no AI calls).
+        </p>
+        <div class="radio-group" id="message-source-group">
+          <button class="radio-pill selected" data-value="ai">
+            ⚡ AI (Gemini)
+          </button>
+          <button class="radio-pill" data-value="template">
+            📝 Template
+          </button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <div class="setting-label">Tone</div>
+        <div class="radio-group" id="tone-group">
+          <button class="radio-pill selected" data-value="friendly">
+            Friendly
+          </button>
+          <button class="radio-pill" data-value="professional">
+            Professional
+          </button>
+          <button class="radio-pill" data-value="casual">Casual</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <div class="setting-label">Product Pitch</div>
+        <div class="radio-group" id="product-group">
+          <button class="radio-pill selected" data-value="Restaurant Manager">
+            Restaurant Manager
+          </button>
+          <button class="radio-pill" data-value="JustInTime">JustInTime</button>
+          <button class="radio-pill" data-value="custom">Custom</button>
+        </div>
+      </div>
+
+      <div class="setting-group" id="custom-pitch-group" style="display: none">
+        <div class="setting-label">Custom Pitch</div>
+        <input
+          id="custom-pitch-input"
+          class="setting-input"
+          type="text"
+          placeholder="Describe your product..."
+        />
+      </div>
+    </aside>

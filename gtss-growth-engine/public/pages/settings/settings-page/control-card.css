@@ -1,0 +1,71 @@
+/**
+ * control-card.css — Settings page centralized control card + status pill
+ *
+ * Extracted from the original settings-page.css. .control-card is the 2-col
+ * card used on the Pipeline Reliability and Scheduler Status panels: title
+ * + status pill on the left, action buttons on the right. The .status-pill
+ * variants encode the active vs paused state.
+ */
+
+      /* ─── New: centralized control card ─── */
+      .control-card {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 18px;
+        align-items: center;
+        padding: 16px 18px;
+        border: 1px solid var(--settings-border);
+        border-radius: var(--settings-radius);
+        background:
+          radial-gradient(280px 80px at 100% 0%, rgba(59, 130, 246, 0.06), transparent 70%),
+          rgba(15, 23, 42, 0.55);
+        transition: border-color 150ms, transform 150ms;
+      }
+      .control-card + .control-card { margin-top: 10px; }
+      .control-card:hover {
+        border-color: rgba(96, 165, 250, 0.32);
+        transform: translateY(-1px);
+      }
+      .control-card__text {
+        display: grid;
+        gap: 4px;
+        min-width: 0;
+      }
+      .control-card__title {
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--gtss-text);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .control-card__title .status-pill {
+        font-size: 10px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        border: 1px solid transparent;
+      }
+      .status-pill.is-active {
+        background: rgba(34, 197, 94, 0.16);
+        color: var(--settings-success);
+        border-color: rgba(34, 197, 94, 0.32);
+      }
+      .status-pill.is-paused {
+        background: rgba(245, 158, 11, 0.16);
+        color: var(--settings-warning);
+        border-color: rgba(245, 158, 11, 0.32);
+      }
+      .control-card__desc {
+        font-size: 11.5px;
+        color: var(--gtss-muted);
+        line-height: 1.55;
+      }
+      .control-card__action {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-shrink: 0;
+      }

@@ -1,0 +1,83 @@
+/* --------------------------------------------------------------------------
+   5. Component: Buttons
+   -------------------------------------------------------------------------- */
+.btn,
+.primary-button,
+.secondary-button,
+.danger-button,
+button.primary,
+button.secondary,
+button.danger,
+.card-btn,
+.action-button,
+form button[type="submit"]:not(.gtss-logout),
+.page-content button:not(.gtss-bell):not(.gtss-sidebar-toggle):not(.gtss-avatar-button) {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm) !important;
+  background: var(--surface-2);
+  color: var(--text);
+  font: 600 var(--text-sm) / 1 var(--font-body);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn-primary,
+.primary-button,
+button.primary,
+.action-button.primary,
+form button[type="submit"]:not(.gtss-logout) {
+  background: var(--accent) !important;
+  color: #fff !important;
+}
+
+.btn-primary:hover,
+.primary-button:hover,
+button.primary:hover,
+.action-button.primary:hover,
+form button[type="submit"]:not(.gtss-logout):hover {
+  background: var(--accent-hover) !important;
+  box-shadow: 0 0 0 3px var(--accent-glow) !important;
+}
+
+.btn-ghost,
+.secondary-button,
+button.secondary,
+.action-button.secondary {
+  background: transparent !important;
+  border-color: var(--border-strong) !important;
+  color: var(--text) !important;
+}
+
+.btn-ghost:hover,
+.secondary-button:hover,
+button.secondary:hover,
+.action-button.secondary:hover {
+  background: var(--surface-3) !important;
+}
+
+.btn-danger,
+.danger-button,
+button.danger,
+.card-btn.abandon {
+  background: var(--danger) !important;
+  color: #fff !important;
+}
+
+.btn-sm {
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-xs);
+}
+
+.btn-lg {
+  min-height: 44px;
+  padding: 0 var(--space-6);
+  font-size: var(--text-base);
+}
+

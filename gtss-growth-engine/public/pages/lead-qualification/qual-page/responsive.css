@@ -1,0 +1,20 @@
+/**
+ * responsive.css — Lead Qualification media queries
+ *
+ * Extracted from the original qual-page.css. At <=900px the page padding
+ * shrinks, the stat grid collapses to 2-up, and the lead detail drawer
+ * becomes a full-width sheet.
+ */
+
+      @media (max-width: 900px) {
+        .qual-page {
+          padding: 18px;
+        }
+        .stat-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+        .drawer {
+          width: 100%;
+          right: -100%;
+        }
+      }

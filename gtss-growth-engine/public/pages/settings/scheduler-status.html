@@ -1,0 +1,34 @@
+        <!-- ═══════════════════════════════════════════════════════════ CONTENT SCHEDULER STATUS (NEW centralized) -->
+        <section class="settings-section gtss-card" id="scheduler-status-section" aria-labelledby="scheduler-heading">
+          <div class="section-head">
+            <div class="section-head__title">
+              <span class="section-head__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+              </span>
+              <div class="section-head__heading">
+                <h2 id="scheduler-heading">Content Scheduler Status</h2>
+                <div class="section-head__sub">Global kill-switch for scheduled post publishing. Pause without losing scheduled items.</div>
+              </div>
+            </div>
+            <div class="section-head__actions">
+              <span id="scheduler-status-result" class="inline-result" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+          <div class="control-card">
+            <div class="control-card__text">
+              <div class="control-card__title">
+                Publishing
+                <span class="status-pill is-active" id="scheduler-status-pill" aria-live="polite">Active</span>
+              </div>
+              <div class="control-card__desc">When paused, no scheduled posts will be published. Existing items stay queued and resume automatically when reactivated.</div>
+            </div>
+            <div class="control-card__action">
+              <label class="switch">
+                <input type="checkbox" id="scheduler-paused-toggle" />
+                <span class="switch__track" aria-hidden="true"></span>
+                <span class="switch__label" id="scheduler-toggle-label">Active</span>
+              </label>
+              <a class="secondary-button" href="/scheduler" style="display:inline-flex;align-items:center;text-decoration:none">Open Scheduler</a>
+            </div>
+          </div>
+        </section>

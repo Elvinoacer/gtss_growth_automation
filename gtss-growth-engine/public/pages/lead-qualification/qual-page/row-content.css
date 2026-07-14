@@ -1,0 +1,98 @@
+/**
+ * row-content.css — Lead Qualification table cell widgets + pagination
+ *
+ * Extracted from the original qual-page.css. Holds the per-row interactive
+ * widgets inside the table: .inline-score-input (click-to-edit score),
+ * .reason-text (truncated reasoning tooltip that expands on click),
+ * .row-actions / .row-button (approve / reject / override), the
+ * .empty-state placeholder with .search-icon, and the .pagination footer.
+ */
+
+      /* Inline score edit */
+      .inline-score-input {
+        width: 60px;
+        height: 28px;
+        border: 1px solid var(--gtss-primary);
+        border-radius: var(--gtss-radius);
+        padding: 2px 6px;
+        background: #0b1220;
+        color: var(--gtss-text);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 900;
+        text-align: center;
+      }
+
+      .reason-text {
+        max-width: 220px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--gtss-muted);
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .reason-text.expanded {
+        white-space: normal;
+        overflow: visible;
+      }
+
+      .row-actions {
+        display: flex;
+        gap: 6px;
+      }
+      .row-button {
+        border: 1px solid var(--gtss-card-border);
+        border-radius: 6px;
+        padding: 5px 8px;
+        background: #0b1220;
+        color: var(--gtss-text);
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 700;
+        transition:
+          background 80ms ease,
+          color 80ms ease;
+      }
+      .row-button.approve {
+        color: #86efac;
+      }
+      .row-button.approve:hover {
+        background: rgb(34 197 94 / 18%);
+      }
+      .row-button.reject {
+        color: #fca5a5;
+      }
+      .row-button.reject:hover {
+        background: rgb(239 68 68 / 18%);
+      }
+      .row-button.override {
+        color: var(--gtss-warning);
+      }
+      .row-button.override:hover {
+        background: rgb(245 158 11 / 18%);
+      }
+
+      .empty-state {
+        display: none;
+        padding: 42px 16px;
+        text-align: center;
+        color: var(--gtss-muted);
+      }
+      .empty-state.visible {
+        display: block;
+      }
+      .search-icon {
+        display: block;
+        margin-bottom: 10px;
+        font-size: 32px;
+      }
+
+      .pagination {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 12px;
+        margin-top: 14px;
+        color: var(--gtss-muted);
+      }

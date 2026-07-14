@@ -1,0 +1,20 @@
+/**
+ * responsive.css — Asset Library media queries
+ *
+ * Extracted from the original inline <style> block in asset-library.html.
+ * At <=900px the new-group row collapses to a single column and the all-
+ * assets grid tiles shrink to 160px min. At <=600px the page padding
+ * shrinks, the toolbar goes single-column, and the header stacks
+ * vertically.
+ */
+
+      /* ─── Responsive ────────────────────────────────────────────────── */
+      @media (max-width: 900px) {
+        .new-group-row { grid-template-columns: 1fr; }
+        .asset-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+      }
+      @media (max-width: 600px) {
+        .asset-page { padding: 18px; }
+        .asset-toolbar { grid-template-columns: 1fr; }
+        .asset-header { flex-direction: column; }
+      }

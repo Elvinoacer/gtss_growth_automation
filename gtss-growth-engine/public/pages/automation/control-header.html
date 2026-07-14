@@ -1,0 +1,105 @@
+            <!-- Control Header -->
+            <div class="flex justify-between items-end">
+              <div>
+                <h2 class="font-display-lg text-display-lg text-on-surface">
+                  Automation Control
+                </h2>
+                <p
+                  class="font-body-sm text-body-sm text-on-surface-variant mt-1"
+                >
+                  Manage and monitor active browser routines.
+                </p>
+              </div>
+              <div class="flex gap-3">
+                <button
+                  id="run-all-btn"
+                  class="bg-primary hover:bg-surface-tint text-on-primary font-label-caps text-label-caps px-6 py-3 rounded-lg flex items-center gap-2 shadow-[0_4px_4px_rgba(0,0,0,0.04)] transition-colors"
+                >
+                  <span
+                    class="material-symbols-outlined"
+                    style="font-variation-settings: &quot;FILL&quot; 1"
+                    >play_arrow</span
+                  >
+                  Run Queue
+                </button>
+                <button
+                  id="retry-selected-btn"
+                  style="display: none"
+                  class="bg-primary-container hover:bg-primary/10 text-primary font-label-caps text-label-caps px-4 py-3 rounded-lg flex items-center gap-2 border border-primary/20 transition-colors"
+                >
+                  <span class="material-symbols-outlined text-[18px]"
+                    >checklist</span
+                  >
+                  Retry Selected
+                </button>
+                <button
+                  id="retry-all-btn"
+                  style="display: none"
+                  class="bg-surface-container-high hover:bg-surface-container-highest text-on-surface font-label-caps text-label-caps px-4 py-3 rounded-lg flex items-center gap-2 border border-outline-variant transition-colors"
+                >
+                  <span class="material-symbols-outlined text-[18px]"
+                    >replay</span
+                  >
+                  Retry All
+                </button>
+                <button
+                  id="retry-waiting-btn"
+                  style="display: none"
+                  class="bg-surface-container-high hover:bg-surface-container-highest text-on-surface font-label-caps text-label-caps px-4 py-3 rounded-lg flex items-center gap-2 border border-outline-variant transition-colors"
+                >
+                  <span class="material-symbols-outlined text-[18px]"
+                    >schedule</span
+                  >
+                  Retry Waiting
+                </button>
+                <button
+                  id="retry-blocked-btn"
+                  style="display: none"
+                  class="bg-error-container hover:bg-error/10 text-error font-label-caps text-label-caps px-4 py-3 rounded-lg flex items-center gap-2 border border-error/20 transition-colors"
+                >
+                  <span class="material-symbols-outlined text-[18px]"
+                    >warning</span
+                  >
+                  Retry Blocked
+                </button>
+                <button
+                  id="stop-btn"
+                  style="display: none"
+                  class="bg-error hover:bg-[#a31717] text-on-error font-label-caps text-label-caps px-6 py-3 rounded-lg flex items-center gap-2 shadow-[0_4px_4px_rgba(0,0,0,0.04)] transition-colors"
+                >
+                  <span
+                    class="material-symbols-outlined"
+                    style="font-variation-settings: &quot;FILL&quot; 1"
+                    >stop_circle</span
+                  >
+                  Stop Automation
+                </button>
+              </div>
+            </div>
+            <div
+              id="post-run-banner"
+              hidden
+              class="rounded-lg border border-outline-variant bg-surface-container-lowest p-4 shadow-[0_4px_4px_rgba(0,0,0,0.04)]"
+            >
+              <div class="flex flex-col gap-2">
+                <div class="flex items-start justify-between gap-4">
+                  <div>
+                    <h3
+                      class="font-headline-md text-headline-md text-on-surface text-base"
+                    >
+                      Last Run Summary
+                    </h3>
+                    <p
+                      id="post-run-banner-text"
+                      class="font-body-sm text-body-sm text-on-surface-variant mt-1"
+                    >
+                      No recent automation run.
+                    </p>
+                  </div>
+                </div>
+                <div
+                  id="post-run-banner-meta"
+                  class="flex flex-wrap gap-2"
+                ></div>
+              </div>
+            </div>

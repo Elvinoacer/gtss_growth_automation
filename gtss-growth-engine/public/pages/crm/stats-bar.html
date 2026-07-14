@@ -1,0 +1,57 @@
+<!-- crm/stats-bar.html — CRM page stats bar
+     Extracted from crm.html. The 4-up grid of KPI cards above the
+     toolbar: Active Leads (#stat-total), Avg. Days to Reply
+     (#stat-reply-days), Avg. Days to Convert (#stat-convert-days), and
+     Conversion Rate (#stat-conv-rate). Populated by JS. Rendered
+     server-side via data-include. -->
+
+        <div class="grid grid-cols-4 gap-4">
+          <div
+            class="bg-white border border-outline-variant rounded p-4 flex flex-col"
+          >
+            <span class="text-sm text-on-surface-variant font-medium"
+              >Active Leads</span
+            >
+            <span
+              id="stat-total"
+              class="text-2xl font-bold text-on-surface mt-1"
+              >-</span
+            >
+          </div>
+          <div
+            class="bg-white border border-outline-variant rounded p-4 flex flex-col"
+          >
+            <span class="text-sm text-on-surface-variant font-medium"
+              >Avg. Days to Reply</span
+            >
+            <span
+              id="stat-reply-days"
+              class="text-2xl font-bold text-on-surface mt-1"
+              >-</span
+            >
+          </div>
+          <div
+            class="bg-white border border-outline-variant rounded p-4 flex flex-col"
+          >
+            <span class="text-sm text-on-surface-variant font-medium"
+              >Avg. Days to Convert</span
+            >
+            <span
+              id="stat-convert-days"
+              class="text-2xl font-bold text-on-surface mt-1"
+              >-</span
+            >
+          </div>
+          <div
+            class="bg-white border border-outline-variant rounded p-4 flex flex-col"
+          >
+            <span class="text-sm text-on-surface-variant font-medium"
+              >Conversion Rate</span
+            >
+            <span
+              id="stat-conv-rate"
+              class="text-2xl font-bold text-primary mt-1"
+              >-%</span
+            >
+          </div>
+        </div>

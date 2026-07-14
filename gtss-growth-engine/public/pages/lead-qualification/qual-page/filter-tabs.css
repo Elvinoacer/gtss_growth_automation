@@ -1,0 +1,50 @@
+/**
+ * filter-tabs.css — Lead Qualification status filter tabs
+ *
+ * Extracted from the original qual-page.css. .filter-tabs is the horizontal
+ * row of status tabs above the table (All / Pending / Qualified /
+ * Deprioritized / etc.). Each .filter-tab has a .tab-count badge showing
+ * the number of leads in that status.
+ */
+
+      /* ---------- Filter Tabs ---------- */
+      .filter-tabs {
+        display: flex;
+        gap: 0;
+        border-bottom: 1px solid var(--gtss-card-border);
+      }
+      .filter-tab {
+        padding: 10px 18px;
+        border: 0;
+        background: transparent;
+        color: var(--gtss-muted);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 800;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition:
+          color 120ms ease,
+          border-color 120ms ease;
+      }
+      .filter-tab:hover {
+        color: var(--gtss-text);
+      }
+      .filter-tab.active {
+        color: var(--gtss-primary);
+        border-bottom-color: var(--gtss-primary);
+      }
+      .filter-tab .tab-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 20px;
+        height: 18px;
+        margin-left: 6px;
+        padding: 0 5px;
+        border-radius: 999px;
+        background: rgb(59 130 246 / 18%);
+        color: var(--gtss-primary);
+        font-size: 11px;
+        font-weight: 900;
+      }
