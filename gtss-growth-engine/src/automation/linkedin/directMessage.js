@@ -34,8 +34,15 @@ const {
   dismissLinkedInNavDropdowns,
 } = require("./dismissUI");
 const { findProfileMessageAction } = require("./profileActions");
-const { detectMessagingContext } = require("./messagingFrame");
-const { detectMessagingBlocked } = require("./detection");
+const {
+  detectMessagingContext,
+  messagingUiAppeared,
+  dismissPremiumDialog,
+} = require("./messagingFrame");
+const {
+  detectMessagingBlocked,
+  detectActiveMessagingModal,
+} = require("./detection");
 const { waitForEditorInteractive } = require("./dmEditorInteraction");
 const { waitForDmEditor } = require("./dmEditorDetection");
 const {
@@ -191,6 +198,8 @@ async function sendDirectMessage(
           leadName,
           messageSnippet: messageSnippet(message),
         });
+        // outcome "failed" with identity-guard reason: executor treats this as
+        // a no-send permanent skip (no verify, no 60–180s cooldown, no retries).
         return {
           outcome: "failed",
           reason:
@@ -226,7 +235,8 @@ async function sendDirectMessage(
               outcome: "failed",
               reason:
                 `Pre-navigation mismatch: greeting="${greetingMatch0[1]}" vs leadName="${leadName}". ` +
-                `Send aborted before navigation by pre-flight content guard.`,
+                `Send aborted before navigation by pre-flight content guard. ` +
+                `Identity guard.`,
             };
           }
         }
@@ -423,26 +433,199 @@ async function sendDirectMessage(
       };
     }
 
-    // ── 2. Click Message ──────────────────────────────────────────────────────
+    // ── 2. Open Message composer ──────────────────────────────────────────────
     // Pre-click defense: if a LinkedIn top-nav dropdown ("For Business" /
     // "My Apps" / top-nav "More") opened between the previous step and now,
     // it could intercept the click. Dismiss it first.
     await dismissLinkedInNavDropdowns(page);
 
+    // Capture compose href before click so we can fall back to navigation
+    // when a synthetic click does not mount the overlay (common on the new UI).
+    let composeHref =
+      messageMatch.href ||
+      (await messageMatch.locator.getAttribute("href").catch(() => null));
+    if (composeHref && composeHref.startsWith("/")) {
+      try {
+        composeHref = new URL(composeHref, page.url()).toString();
+      } catch (_) {}
+    }
+
+    // Guard: refuse to click a Message control that names a different person
+    // than the page owner (production: "Message Frida Ochieng" on Hellen).
+    {
+      const label = String(messageMatch.selector || "");
+      const aria =
+        (await messageMatch.locator.getAttribute("aria-label").catch(() => "")) ||
+        "";
+      const pageFirst =
+        messageMatch.pageFirst ||
+        (await page
+          .locator("main h1, h1")
+          .first()
+          .textContent()
+          .catch(() => "")) ||
+        "";
+      const pageFirstNorm = String(pageFirst)
+        .trim()
+        .split(/\s+/)[0]
+        .toLowerCase()
+        .replace(/[^a-z]/g, "");
+      const named = String(aria).match(/^message\s+(.+)$/i);
+      if (named && pageFirstNorm) {
+        const targetFirst = named[1]
+          .trim()
+          .split(/\s+/)[0]
+          .toLowerCase()
+          .replace(/[^a-z]/g, "");
+        if (
+          targetFirst &&
+          targetFirst !== pageFirstNorm &&
+          !String(pageFirst).toLowerCase().includes(targetFirst)
+        ) {
+          emit(
+            "error",
+            `Refusing Message click: control targets "${named[1]}" but page is "${String(pageFirst).trim()}" (${label}).`,
+          );
+          return {
+            outcome: "failed",
+            reason:
+              `Wrong Message control: "${aria}" does not match profile "${String(pageFirst).trim()}". ` +
+              `Send aborted by identity guard.`,
+          };
+        }
+      }
+    }
+
     emit("info", `Clicking Message (${messageMatch.selector})...`);
-    // DOM-level click: avoids sticky-header interception when element is near viewport top.
-    await messageMatch.locator.evaluate((el) => el.click()).catch(() => {});
-    // Performance: LinkedIn's modal CSS animation completes in ~200-300ms.
-    // 600-900ms was excessive; 250-400ms is enough for React to mount the
-    // composer and for the editor to become interactive.
-    await humanDelay(250, 400);
+
+    // Prefer a real Playwright click (trusted events). DOM evaluate alone
+    // often fails to open the interop messaging overlay on modern LinkedIn.
+    // NEVER use force:true / mouse coordinates near the sticky header —
+    // that hits For Business / Hire with AI.
+    await messageMatch.locator
+      .click({ timeout: 2500 })
+      .catch(async () => {
+        await messageMatch.locator.evaluate((el) => el.click()).catch(() => {});
+      });
+    await humanDelay(450, 750);
     await closeStrayTabs(page.context(), "linkedin").catch(() => {});
+    // Do NOT press Escape / dismiss UI here — that can close the Premium wall
+    // before we classify it. Probe the active modal first.
     await diag.capture(page, "after-message-click");
 
-    // Post-click defense: dismiss any top-nav dropdown that may have popped
-    // open as a side-effect of the Message click (LinkedIn's React tree
-    // sometimes re-flows and re-opens sticky nav menus).
-    await dismissLinkedInNavDropdowns(page);
+    // ── 3. ACTIVE MODAL PROBE (premium wall vs free composer) ─────────────────
+    // After Message click LinkedIn either:
+    //   A) mounts a free composer, or
+    //   B) shows a Premium / InMail wall modal, or
+    //   C) shows nothing useful.
+    // We MUST classify A/B before any compose-URL navigation. Navigating away
+    // while a Premium modal is open is what produced the embarrassing
+    // "opening compose URL" → "DM editor not found" loop.
+    let activeModal = null;
+    {
+      const modalDeadline = Date.now() + 2800;
+      while (Date.now() < modalDeadline) {
+        activeModal = await detectActiveMessagingModal(page);
+        if (activeModal) break;
+        await humanDelay(150, 250);
+      }
+    }
+
+    if (activeModal?.kind === "premium") {
+      emit(
+        "warn",
+        `Premium wall detected after Message click${activeModal.snippet ? `: "${String(activeModal.snippet).slice(0, 80)}…"` : ""}`,
+      );
+      const blocked = await detectMessagingBlocked(page, 600);
+      if (blocked) {
+        emit("warn", blocked.reason);
+        await dismissLinkedInNavDropdowns(page);
+        return blocked;
+      }
+      // detectActiveMessagingModal saw premium even if detectMessagingBlocked
+      // failed to re-find it — still treat as premium_required.
+      await dismissPremiumDialog(page, 1500).catch(() => {});
+      await dismissLinkedInNavDropdowns(page);
+      return {
+        outcome: "premium_required",
+        reason: "LinkedIn Premium required to message this profile",
+      };
+    }
+
+    // Wait briefly for free composer UI.
+    let earlyUi =
+      activeModal?.kind === "composer"
+        ? { mode: "shadow", frame: null, reason: "active modal has free composer" }
+        : await messagingUiAppeared(page, 1000);
+
+    // Fallback: ONLY if no modal and no UI mounted. Never navigate when a
+    // premium/other modal is covering the page.
+    if (
+      !earlyUi &&
+      !activeModal &&
+      composeHref &&
+      /messaging\/(compose|thread)/i.test(composeHref)
+    ) {
+      // Re-check premium once more right before navigating.
+      const preNavPremium = await detectMessagingBlocked(page, 400);
+      if (preNavPremium) {
+        emit("warn", preNavPremium.reason);
+        await dismissLinkedInNavDropdowns(page);
+        return preNavPremium;
+      }
+
+      emit(
+        "info",
+        "Message click did not mount composer — opening compose URL directly...",
+      );
+      let target = composeHref;
+      try {
+        const u = new URL(composeHref);
+        if (!u.searchParams.has("interop")) {
+          u.searchParams.set("interop", "msgOverlay");
+        }
+        target = u.toString();
+      } catch (_) {}
+      await page
+        .goto(target, { waitUntil: "domcontentloaded", timeout: 25000 })
+        .catch(() => {});
+      await humanDelay(400, 700);
+      await closeStrayTabs(page.context(), "linkedin").catch(() => {});
+      await dismissLinkedInNavDropdowns(page);
+
+      // Compose URL often lands on a Premium wall for non-1st / gated leads.
+      activeModal = await detectActiveMessagingModal(page);
+      if (activeModal?.kind === "premium") {
+        emit("warn", "Premium wall on compose URL — skipping profile.");
+        const blocked = await detectMessagingBlocked(page, 600);
+        await dismissLinkedInNavDropdowns(page);
+        return (
+          blocked || {
+            outcome: "premium_required",
+            reason: "LinkedIn Premium required to message this profile",
+          }
+        );
+      }
+
+      earlyUi = await messagingUiAppeared(page, 1500);
+      await diag.capture(page, "after-compose-url-fallback");
+    }
+
+    // ── 3b. Premium / blocked popup (belt-and-suspenders) ─────────────────────
+    if (earlyUi?.premiumLikely || activeModal?.kind === "premium") {
+      const blockedEarly = await detectMessagingBlocked(page, 900);
+      if (blockedEarly) {
+        emit("warn", blockedEarly.reason);
+        await dismissLinkedInNavDropdowns(page);
+        return blockedEarly;
+      }
+    }
+    const blockedImmediately = await detectMessagingBlocked(page, 700);
+    if (blockedImmediately) {
+      emit("warn", blockedImmediately.reason);
+      await dismissLinkedInNavDropdowns(page);
+      return blockedImmediately;
+    }
 
     // ── 2a. Detect execution context: full-page / iframe / shadow DOM ────────
     //
@@ -455,7 +638,10 @@ async function sendDirectMessage(
     // #interop-outlet visibility check was broken (it always returned true and
     // the iframe branch was never taken, causing all keyboard input to be
     // silently dropped when LinkedIn used the interop iframe).
-    const ctxInfo = await detectMessagingContext(page, 5000);
+    const ctxInfo =
+      earlyUi && !String(earlyUi.reason || "").includes("detection timeout")
+        ? earlyUi
+        : await detectMessagingContext(page, 4000);
     emit(
       "info",
       `Messaging context: mode=${ctxInfo.mode} (${ctxInfo.reason})`,
@@ -469,9 +655,7 @@ async function sendDirectMessage(
 
     if (ctxInfo.mode === "page") {
       msgCtx = page;
-      // Performance: 400-700ms was excessive; the page-mode editor is
-      // already mounted by the time detectMessagingContext returns.
-      await humanDelay(150, 280);
+      await humanDelay(120, 220);
     } else if (ctxInfo.mode === "iframe" && ctxInfo.frame) {
       messagingFrame = ctxInfo.frame;
       msgCtx = messagingFrame;
@@ -501,22 +685,36 @@ async function sendDirectMessage(
       }
     }
 
-    // ── 3. Premium / blocked popup ────────────────────────────────────────────
-    const blockedImmediately = await detectMessagingBlocked(page, 900);
-    if (blockedImmediately) {
-      emit("warn", blockedImmediately.reason);
-      return blockedImmediately;
+    // Re-check premium after context detection — LinkedIn sometimes mounts
+    // the interop Premium wall a beat after the initial Message click.
+    if (ctxInfo.premiumLikely) {
+      const blockedPremiumCtx = await detectMessagingBlocked(page, 900);
+      if (blockedPremiumCtx) {
+        emit("warn", blockedPremiumCtx.reason);
+        await dismissLinkedInNavDropdowns(page);
+        return blockedPremiumCtx;
+      }
+    }
+    const blockedAfterContext = await detectMessagingBlocked(page, 600);
+    if (blockedAfterContext) {
+      emit("warn", blockedAfterContext.reason);
+      await dismissLinkedInNavDropdowns(page);
+      return blockedAfterContext;
     }
 
     // ── 4. Wait for editor to be interactive ──────────────────────────────────
     const editorInteractive = await waitForEditorInteractive(msgCtx, 3000, messagingFrame);
     if (!editorInteractive) {
       emit("warn", "Editor not yet interactive — checking for premium block...");
-      const blockedAfterWait = await detectMessagingBlocked(page, 500);
+      const blockedAfterWait = await detectMessagingBlocked(page, 700);
       if (blockedAfterWait) {
         emit("warn", blockedAfterWait.reason);
+        await dismissLinkedInNavDropdowns(page);
         return blockedAfterWait;
       }
+      // No premium wall and no interactive editor — still clear nav flyouts
+      // so we don't leave For Business open while we try waitForDmEditor.
+      await dismissLinkedInNavDropdowns(page);
     }
 
     // ── 5. Locate DM editor ───────────────────────────────────────────────────
@@ -529,13 +727,56 @@ async function sendDirectMessage(
     const blockedBeforeEditorUse = await detectMessagingBlocked(page, 900);
     if (blockedBeforeEditorUse) {
       emit("warn", blockedBeforeEditorUse.reason);
+      await dismissLinkedInNavDropdowns(page);
       return blockedBeforeEditorUse;
     }
 
     if (!editorMatch) {
+      // Last chance: active modal / premium wall classification.
+      await dismissLinkedInNavDropdowns(page);
+      const modalNow = await detectActiveMessagingModal(page);
+      if (modalNow?.kind === "premium") {
+        emit("warn", "Premium wall present when editor missing — classifying as premium_required.");
+        const blocked = await detectMessagingBlocked(page, 600);
+        await dismissLinkedInNavDropdowns(page);
+        return (
+          blocked || {
+            outcome: "premium_required",
+            reason: "LinkedIn Premium required to message this profile",
+          }
+        );
+      }
+      const blockedEditorMissing = await detectMessagingBlocked(page, 800);
+      if (blockedEditorMissing) {
+        emit("warn", blockedEditorMissing.reason);
+        return blockedEditorMissing;
+      }
+
+      // On /messaging/compose without a free editor, LinkedIn almost always
+      // means Premium / InMail is required for this recipient.
+      const urlNow = page.url();
+      if (/\/messaging\/(compose|thread)/i.test(urlNow)) {
+        emit(
+          "warn",
+          "On compose URL without free editor — treating as premium_required.",
+        );
+        await dismissLinkedInNavDropdowns(page);
+        return {
+          outcome: "premium_required",
+          reason:
+            "LinkedIn Premium required to message this profile " +
+            "(compose page mounted without a free DM editor)",
+        };
+      }
+
       emit("warn", "DM editor not found — skipping profile.");
       await diag.capture(page, "dm-editor-not-found");
-      return { outcome: "failed", reason: "DM editor not found" };
+      return {
+        outcome: "not_connected",
+        reason:
+          "DM editor not found — Message composer did not mount after click " +
+          "(not a free 1st-degree conversation, or LinkedIn UI blocked open)",
+      };
     }
 
     let activeEditorLocator = editorMatch.locator;

@@ -703,6 +703,21 @@ async function processDmQueue(page, options = {}) {
         "skipped",
         "blocked",
       ]);
+      // Permanent failure reasons — do not burn 3× navigations on these.
+      const NON_RETRYABLE_FAILURE_REASONS = [
+        /relationship metadata/i,
+        /is metadata, not a person/i,
+        /pre-navigation identity guard/i,
+        /identity guard/i,
+        /lead data is corrupt/i,
+        /dm editor not found/i,
+        /composer did not mount/i,
+        /linkedin premium required/i,
+        /wrong-recipient/i,
+        /recipient-verification guard/i,
+        /profile name mismatch/i,
+        /message content mismatch/i,
+      ];
       let res;
       for (let attempt = 1; attempt <= MAX_INLOOP_RETRIES + 1; attempt++) {
         if (isDmQueueStopped()) {
@@ -730,11 +745,14 @@ async function processDmQueue(page, options = {}) {
           };
         }
         // Success or non-retryable → done.
+        const reasonText = String(res?.error || res?.reason || "");
         if (
           !res ||
           res.outcome === "sent" ||
           res.outcome === "stopped" ||
-          NON_RETRYABLE_OUTCOMES.has(res.outcome)
+          NON_RETRYABLE_OUTCOMES.has(res.outcome) ||
+          res.retryable === false ||
+          NON_RETRYABLE_FAILURE_REASONS.some((re) => re.test(reasonText))
         ) {
           break;
         }
@@ -822,16 +840,10 @@ async function processDmQueue(page, options = {}) {
             `,
             ).run(job.id);
 
-            // Successful LinkedIn DM implies 1st-degree — promote connection job.
-            if (normPlatform === "linkedin") {
-              db.prepare(
-                `
-                UPDATE connection_jobs
-                SET status = 'accepted', updated_at = CURRENT_TIMESTAMP
-                WHERE campaign_id = ? AND lead_id = ? AND status IN ('sent', 'pending', 'running')
-              `,
-              ).run(job.campaign_id, job.lead_id);
-            }
+            // Do not promote connection_jobs to "accepted" here.
+            // Recipient acceptance is not something we monitor — operators
+            // confirm accepts manually. Connection status stays at "sent"
+            // (invite/follow initiated) or the prior skip state.
 
             // Update Lead Outreach Stage Status
             db.prepare(

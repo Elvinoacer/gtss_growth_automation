@@ -50,7 +50,7 @@ function register({ router, requireDeps }) {
       const campaigns = db.prepare(selectQuery).all(selectParams);
 
       // Attach per-campaign aggregate stats so the listing cards can show
-      // real progress (connections accepted, DMs sent, etc.) without making
+      // real progress (connections initiated, DMs sent, etc.) without making
       // the user click into each campaign. This mirrors the per-detail
       // metrics returned by GET /:id, but is computed in bulk for the page.
       if (campaigns.length > 0) {

@@ -66,8 +66,8 @@ var dmsRatioText = document.getElementById("dms-ratio-text");
 
 // ── DOM Refs: stat counters ─────────────────────────────────────────────────
 var statConnTotal = document.getElementById("stat-conn-total");
-var statConnAccepted = document.getElementById("stat-conn-accepted");
 var statConnSent = document.getElementById("stat-conn-sent");
+var statConnSkipped = document.getElementById("stat-conn-skipped");
 var statConnFailed = document.getElementById("stat-conn-failed");
 var statConnPending = document.getElementById("stat-conn-pending");
 

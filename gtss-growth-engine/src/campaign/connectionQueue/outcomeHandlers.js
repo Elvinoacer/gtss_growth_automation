@@ -8,7 +8,8 @@
  *
  *   - "sent"             → mark connection_jobs 'sent', insert daily_actions row,
  *                          record connection_sent event, promote related DM job
- *   - "skipped"          → mark connection_jobs 'accepted' (already connected),
+ *   - "skipped"          → mark connection_jobs 'accepted' (already connected
+ *                          at send time — NOT "they accepted our invite"),
  *                          record connection_skipped event, force-promote DM
  *   - "session_required" → postpone job to next business-hour window, add platform
  *                          to expiredPlatforms Set (skip rest of batch for this

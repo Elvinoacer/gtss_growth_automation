@@ -115,7 +115,7 @@ router.get(
     const db = getDb();
     const rows = db
       .prepare(
-        `SELECT platform, action_type, COUNT(*) AS used FROM daily_actions WHERE DATE(performed_at) = DATE('now', 'localtime') GROUP BY platform, action_type`,
+        `SELECT platform, action_type, COUNT(*) AS used FROM daily_actions WHERE DATE(performed_at) = DATE('now', 'localtime') AND lower(coalesce(outcome, '')) = 'sent' GROUP BY platform, action_type`,
       )
       .all();
     const limitsByPlatform = getDailyLimits();

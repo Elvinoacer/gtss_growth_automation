@@ -21,8 +21,16 @@ const { forceClearDmDraft } = require("./editorVerification");
 const { waitForEditorText } = require("./editorText");
 const { findSendButtonForEditor, clickSendButtonRobust } = require("./sendActions");
 const { waitForEditorInteractive } = require("./dmEditorInteraction");
-const { detectMessagingBlocked, detectPremiumRequired } = require("./detection");
-const { detectMessagingContext, dismissPremiumDialog } = require("./messagingFrame");
+const {
+  detectMessagingBlocked,
+  detectPremiumRequired,
+  detectActiveMessagingModal,
+} = require("./detection");
+const {
+  detectMessagingContext,
+  messagingUiAppeared,
+  dismissPremiumDialog,
+} = require("./messagingFrame");
 const { verifyModalRecipient } = require("./editorLocator");
 
 module.exports = {
@@ -47,7 +55,9 @@ module.exports = {
     waitForDmEditor,
     detectMessagingBlocked,
     detectPremiumRequired,
+    detectActiveMessagingModal,
     detectMessagingContext,
+    messagingUiAppeared,
     dismissPremiumDialog,
     verifyModalRecipient,
   },

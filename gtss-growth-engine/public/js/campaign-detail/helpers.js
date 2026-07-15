@@ -64,11 +64,13 @@ function getStatusBadgeStyle(status) {
   }
 }
 
-// Tailwind badge classes for each job status (accepted / sent / failed / etc.).
+// Tailwind badge classes for each job status.
+// "accepted" is legacy: already-connected at send time (not recipient accept).
 function getJobStatusBadgeClass(status) {
   const norm = String(status).toLowerCase();
   switch (norm) {
     case "accepted":
+      return "bg-slate-500/10 text-slate-300 border border-slate-500/20";
     case "sent":
       return "bg-green-500/10 text-green-400 border border-green-500/20";
     case "failed":

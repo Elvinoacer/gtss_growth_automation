@@ -92,7 +92,8 @@ async function loadDmJobs(page = 1, silent = false) {
     dmTotalPages = pag.pages;
 
     renderDmJobs(jobs);
-    renderTablePagination(pag, "dm");
+    // HTML element ids use the "dms-" prefix (dms-pag-info, dms-prev-btn, …).
+    renderTablePagination(pag, "dms");
   } catch (err) {
     console.error("Failed to load DM jobs", err);
     showToast("Error loading DM jobs: " + err.message, "error");

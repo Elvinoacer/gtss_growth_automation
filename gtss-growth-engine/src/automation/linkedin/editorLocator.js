@@ -196,19 +196,58 @@ async function verifyModalRecipient(pageOrFrame, editorLocator, expectedName) {
         '.msg-form__recipient-chip',
       ];
 
+      // LinkedIn injects presence/status chrome next to the recipient header
+      // ("Status is reachable", "Active now", etc.). Those are NOT names.
+      const isNotPersonName = (raw) => {
+        const t = String(raw || "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (!t || t.length < 2 || t.length > 80) return true;
+        if (/^view\s+.+['’]s\s+profile$/i.test(t)) return true;
+        if (
+          /status is reachable|active now|available on mobile|available now|presence|last seen|open to work/i.test(
+            t,
+          )
+        ) {
+          return true;
+        }
+        if (
+          /^(status|reachable|available|online|offline|away|premium|message|messaging|new message|compose)$/i.test(
+            t,
+          )
+        ) {
+          return true;
+        }
+        // Pure emoji / punctuation
+        if (!/[a-zA-Z]{2,}/.test(t)) return true;
+        return false;
+      };
+
       for (const sel of recipientSelectors) {
         const node = overlay.querySelector(sel);
         if (node) {
           const text = (node.textContent || node.getAttribute("title") || "")
             .trim();
-        // This is LinkedIn's own account-menu label, not the person in the
-        // composer. It was causing false wrong-recipient blocks on Premium
-        // modals where no actual editor/recipient exists.
-        if (/^view\s+.+['’]s\s+profile$/i.test(text)) continue;
-        if (text && text.length > 0 && text.length < 100) {
+          if (isNotPersonName(text)) continue;
+          if (text && text.length > 0 && text.length < 100) {
             return { found: true, name: text, selector: sel };
           }
         }
+      }
+
+      // Fallback: any /in/ profile link in the overlay header region that
+      // looks like a real person name.
+      const profileLinks = overlay.querySelectorAll('a[href*="/in/"]');
+      for (const link of profileLinks) {
+        const text = (link.textContent || link.getAttribute("title") || "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (isNotPersonName(text)) continue;
+        // Prefer links near the top of the overlay (header).
+        const rect = link.getBoundingClientRect();
+        const oRect = overlay.getBoundingClientRect();
+        if (rect.top - oRect.top > 120) continue;
+        return { found: true, name: text, selector: "a[href*=\"/in/\"]" };
       }
 
       return { found: false };
@@ -227,9 +266,36 @@ async function verifyModalRecipient(pageOrFrame, editorLocator, expectedName) {
     };
   }
 
+  // Double-check: if the extracted "name" is still chrome text, treat as
+  // not found rather than a hard mismatch (production log: "Status is reachable").
+  const actualRaw = String(overlayInfo.name || "").trim();
+  if (
+    /status is reachable|active now|available on mobile|^status\b/i.test(
+      actualRaw,
+    )
+  ) {
+    return {
+      ok: true,
+      warning: `ignored_non_name_header: ${actualRaw}`,
+      actual: null,
+    };
+  }
+
   const actualFirst = normalise(overlayInfo.name);
 
-  if (actualFirst && actualFirst !== expectedFirst) {
+  // Also extract first name from actual with same denylist so
+  // "Angela onsarigo · 1st" still yields "angela".
+  const actualClean = extractCleanFirst(overlayInfo.name) || actualFirst;
+
+  if (actualClean && actualClean !== expectedFirst) {
+    // Soft-match: if expected is a prefix of actual or vice versa (nicknames /
+    // middle names), allow.
+    if (
+      actualClean.startsWith(expectedFirst) ||
+      expectedFirst.startsWith(actualClean)
+    ) {
+      return { ok: true, actual: overlayInfo.name };
+    }
     return {
       ok: false,
       reason:

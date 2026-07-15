@@ -120,11 +120,14 @@
         dm_jobs: { total: 0, by_status: {} },
       };
 
-      // Extract details
+      // Extract details — progress is "initiated" (invite/follow sent), not
+      // recipient acceptance (we do not monitor acceptances).
       const connByStatus = stats.connection_jobs.by_status || {};
       const totalConn = stats.connection_jobs.total || 0;
-      const acceptedConn = connByStatus.accepted || 0;
-      const connPct = totalConn > 0 ? Math.round((acceptedConn / totalConn) * 100) : 0;
+      const initiatedConn =
+        (connByStatus.sent || 0) + (connByStatus.accepted || 0);
+      const connPct =
+        totalConn > 0 ? Math.round((initiatedConn / totalConn) * 100) : 0;
 
       const dmByStatus = stats.dm_jobs.by_status || {};
       const totalDms = stats.dm_jobs.total || 0;
@@ -165,8 +168,8 @@
             <!-- Connection Progress -->
             <div>
               <div class="flex justify-between text-body-xs font-semibold text-on-surface-variant mb-1">
-                <span>Connections accepted</span>
-                <span>${acceptedConn} / ${totalConn} (${connPct}%)</span>
+                <span>Connections initiated</span>
+                <span>${initiatedConn} / ${totalConn} (${connPct}%)</span>
               </div>
               <div class="w-full h-1.5 bg-surface-container-high rounded-full overflow-hidden">
                 <div class="h-full bg-primary rounded-full transition-all" style="width: ${connPct}%"></div>

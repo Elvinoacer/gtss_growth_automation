@@ -23,6 +23,11 @@ function renderConnectionJobs(jobs) {
     const leadName = escapeHtml(job.lead_name || "Unknown");
     const platformHandle = escapeHtml(job.profile_url || job.x_handle || "-");
     const statusClass = getJobStatusBadgeClass(job.status);
+    // "accepted" is legacy: already connected when we tried — not "they accepted".
+    const statusLabel =
+      String(job.status || "").toLowerCase() === "accepted"
+        ? "already connected"
+        : job.status;
     const updatedStr = new Date(job.updated_at).toLocaleString([], {
       month: "short",
       day: "numeric",
@@ -40,7 +45,7 @@ function renderConnectionJobs(jobs) {
         <td class="py-3 px-3 text-on-surface-variant font-mono-code text-xs max-w-[200px] truncate align-middle" title="${platformHandle}">${platformHandle}</td>
         <td class="py-3 px-3 align-middle">
           <span class="rounded-full px-2 py-0.5 text-[11px] font-bold inline-block capitalize ${statusClass}">
-            ${escapeHtml(job.status)}
+            ${escapeHtml(statusLabel)}
           </span>
           ${errorText}
         </td>
@@ -103,10 +108,16 @@ function renderDmJobs(jobs) {
 }
 
 // Tab Table Pagination controllers Renderer
+// `type` must match the HTML id prefix: "conn" or "dms".
 function renderTablePagination(pag, type) {
   const info = document.getElementById(`${type}-pag-info`);
   const prev = document.getElementById(`${type}-prev-btn`);
   const next = document.getElementById(`${type}-next-btn`);
+
+  if (!info || !prev || !next) {
+    console.warn(`Pagination elements missing for type="${type}"`);
+    return;
+  }
 
   info.textContent = `Page ${pag.page} of ${pag.pages || 1} (Total ${pag.total} jobs)`;
   prev.disabled = pag.page <= 1;

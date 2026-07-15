@@ -37,8 +37,23 @@ const SELECTORS = {
     '.artdeco-button:has-text("Message")',
     '[data-control-name="message"]',
   ],
-  follow: ['button:has-text("Follow")', 'button[aria-label*="Follow"]'],
-  pending: ['button:has-text("Pending")', 'button[aria-label*="Pending"]'],
+  // NOTE: Playwright :has-text("Follow") also matches "Following".
+  // Prefer exact text / word-boundary aria labels. connectionActions also
+  // uses exact-word scanning and rejects "Following".
+  follow: [
+    'button:text-is("Follow")',
+    '[role="button"]:text-is("Follow")',
+    '.artdeco-button:text-is("Follow")',
+    'button[aria-label="Follow"]',
+    'button[aria-label^="Follow "]',
+    // Invite-style labels that include Follow as a whole word but not Following
+    'button[aria-label*="Follow" i]:not([aria-label*="Following" i])',
+  ],
+  pending: [
+    'button:text-is("Pending")',
+    'button[aria-label*="Pending" i]',
+    '[role="button"]:text-is("Pending")',
+  ],
   more: [
     // Profile-area "More actions" button — strict selectors only.
     // NEVER use a bare `button[aria-label*="More"]` here: it matches
@@ -60,11 +75,15 @@ const SELECTORS = {
   premiumDialog: [
     '[role="dialog"]:has-text("Grow Your Business with Premium")',
     '[role="dialog"]:has-text("With Premium, you can message anyone")',
+    '[role="dialog"]:has-text("Build your dream team")',
+    '[role="dialog"]:has-text("Try Premium for free")',
+    '[role="dialog"]:has-text("Try Premium")',
     '[role="dialog"]:has-text("Get Premium")',
-    '[role="dialog"]:has-text("Premium")',
     '[role="dialog"]:has-text("InMail")',
+    '[role="dialog"]:has-text("Premium")',
     '.artdeco-modal:has-text("Premium")',
     '.artdeco-modal:has-text("InMail")',
+    '.artdeco-modal:has-text("Build your dream team")',
   ],
   modalClose: [
     'button[aria-label="Dismiss"]',

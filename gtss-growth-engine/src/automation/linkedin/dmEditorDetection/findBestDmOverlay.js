@@ -62,14 +62,44 @@ async function findBestDmOverlay(page, timeout = 1500) {
           // Editor presence — an overlay is only a candidate if it actually
           // contains a text editor. This rules out header-only minimized
           // bubbles that happen to meet the width/height threshold.
+          //
+          // IMPORTANT: do NOT treat bare [role="textbox"] alone as enough —
+          // LinkedIn's For Business / My Apps flyout often contains a search
+          // textbox. Requiring a real message composer class/placeholder keeps
+          // that flyout from being force-clicked as a "DM overlay".
           const hasEditor = (el) =>
             Boolean(
               el.querySelector(
                 '.msg-form__contenteditable[contenteditable="true"], ' +
                   '.msg-form [contenteditable="true"], ' +
-                  "textarea, [role=\"textbox\"]",
+                  'textarea[name*="message" i], ' +
+                  'textarea[placeholder*="message" i], ' +
+                  'textarea[aria-label*="message" i], ' +
+                  '[contenteditable="true"][aria-label*="message" i], ' +
+                  '[contenteditable="true"][aria-label*="write" i], ' +
+                  '[role="textbox"][aria-label*="message" i], ' +
+                  '[role="textbox"][aria-label*="write" i], ' +
+                  'textarea:not([type="search"]):not([aria-label*="search" i])',
               ),
             );
+
+          // Reject non-messaging surfaces that match [role="dialog"] size-wise.
+          const isNonMessagingSurface = (el, text) => {
+            if (/explore more for business/.test(text)) return true;
+            if (/\bmy apps\b/.test(text) && /hire on linkedin|sell with linkedin/.test(text)) {
+              return true;
+            }
+            // Premium / InMail walls have no free-message composer.
+            if (
+              /with premium,?\s*you can message anyone|build your dream team|grow your business with premium|try premium (for )?free|inmail credits?|get premium/.test(
+                text,
+              ) &&
+              !hasEditor(el)
+            ) {
+              return true;
+            }
+            return false;
+          };
 
           // Subject / Title input detection — the alternate compose modal
           // (the bug scenario) is the only LinkedIn messaging surface that
@@ -146,10 +176,11 @@ async function findBestDmOverlay(page, timeout = 1500) {
             .filter(visible)
             .filter((el) => !isMinimized(el))
             .map((el, idx) => {
+              const text = normalize(el.textContent);
+              if (isNonMessagingSurface(el, text)) return null;
               if (!hasEditor(el)) return null;
 
               const rect = el.getBoundingClientRect();
-              const text = normalize(el.textContent);
               const subjectPresent = hasSubjectInput(el);
               const zIndex = getZIndex(el);
               const ariaModal = el.getAttribute("aria-modal") === "true";

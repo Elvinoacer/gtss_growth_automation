@@ -9,10 +9,11 @@
  *
  *   recordOutcome(action, actionType, outcomeObj)
  *     Persist the outcome of a single action: writes a touchpoint row,
- *     increments daily action counts, and transitions the `messages` row
- *     to the correct next status (sent / skipped / blocked / snoozed for
- *     retry / blocked with max_retries_exceeded). Also queues the DM body
- *     as a follow-up for LinkedIn-connect / X-follow outcomes.
+ *     increments daily action counts ONLY for successful sends (premium
+ *     walls / failures do not burn the daily budget), and transitions the
+ *     `messages` row to the correct next status (sent / skipped / blocked /
+ *     snoozed for retry / blocked with max_retries_exceeded). Also queues
+ *     the DM body as a follow-up for LinkedIn-connect / X-follow outcomes.
  *
  *   retryDelayMinutes(retryCount)
  *     Exponential-ish retry delay in minutes, capped at 1440 (24h).
@@ -35,7 +36,18 @@ function classifyOutcome(outcome, reason) {
   if (outcome === 'session_required') return 'session_expired';
   if (outcome === 'limit_reached') return 'rate_limited';
   if (outcome === 'failed') {
-    return /captcha/i.test(String(reason || '')) ? 'captcha' : 'send_failed';
+    const r = String(reason || '');
+    if (/captcha/i.test(r)) return 'captcha';
+    // Permanent data / identity gates — not "we tried to send and failed".
+    // Block the message so the queue does not re-snooze and retry forever.
+    if (
+      /relationship metadata|is metadata, not a person|identity guard|lead data is corrupt|pre-navigation identity|pre-flight content guard/i.test(
+        r,
+      )
+    ) {
+      return 'invalid_lead';
+    }
+    return 'send_failed';
   }
   if (
     outcome === 'already_connected' ||
@@ -198,8 +210,11 @@ function recordOutcome(action, actionType, outcomeObj) {
     ).run(reason || 'Skipped', action.message_id);
   } else if (
     failCategory === 'premium_required' ||
-    failCategory === 'captcha'
+    failCategory === 'captcha' ||
+    failCategory === 'invalid_lead'
   ) {
+    // Permanent block: premium walls, captcha, or corrupt lead data
+    // (metadata names, identity mismatches). Do not re-queue.
     db.prepare(
       `
       UPDATE messages

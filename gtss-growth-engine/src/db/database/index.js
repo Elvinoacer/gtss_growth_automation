@@ -14,6 +14,8 @@
  *   isWithinLimit(platform, actionType)
  *   normalizeActionType(actionType)
  *   increment_action_count(platform, actionType, leadId, outcome, reason)
+ *   outcomeCountsTowardLimit(outcome)
+ *   LIMIT_COUNTING_OUTCOMES
  */
 "use strict";
 
@@ -25,6 +27,8 @@ const {
   isWithinLimit,
   normalizeActionType,
   increment_action_count,
+  outcomeCountsTowardLimit,
+  LIMIT_COUNTING_OUTCOMES,
 } = require("./queries");
 
 module.exports = {
@@ -36,4 +40,6 @@ module.exports = {
   isWithinLimit,
   normalizeActionType,
   increment_action_count,
+  outcomeCountsTowardLimit,
+  LIMIT_COUNTING_OUTCOMES,
 };

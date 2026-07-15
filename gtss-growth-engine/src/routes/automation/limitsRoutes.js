@@ -26,12 +26,15 @@ function registerLimitsRoutes(router) {
   // Get limits and current usage
   router.get("/api/automation/limits", (req, res) => {
     const db = getDb();
+    // Only count successful actions toward "used" — same filter as
+    // getDailyActionCount / isWithinLimit (premium_required etc. do not burn budget).
     const rows = db
       .prepare(
         `
       SELECT platform, action_type, COUNT(*) AS used
       FROM daily_actions
       WHERE DATE(performed_at) = DATE('now', 'localtime')
+        AND lower(coalesce(outcome, '')) = 'sent'
       GROUP BY platform, action_type
     `,
       )

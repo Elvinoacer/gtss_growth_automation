@@ -73,10 +73,13 @@ async function activateDmEditor(page, locator) {
         continue;
       }
 
-      // Step 3: Single click to activate — Playwright's click() dispatches
-      // trusted pointer/mouse/focus events through the browser's event system,
-      // which React handles correctly. No synthetic event dispatch needed.
-      await locator.click({ force: true }).catch(() => {});
+      // Step 3: Activate the editor. Prefer a real click; if that is
+      // intercepted by sticky chrome, fall back to a DOM-level click.
+      // Avoid force:true coordinate clicks — near the top of the viewport
+      // they hit LinkedIn's "For Business" / "Hire with AI" nav controls.
+      await locator.click({ timeout: 1200 }).catch(async () => {
+        await locator.evaluate((el) => el.click()).catch(() => {});
+      });
       await humanDelay(80, 150);
 
       // Step 3.5: Shadow DOM explicit focus — the Shadow DOM compositor may
@@ -100,18 +103,18 @@ async function activateDmEditor(page, locator) {
         return true;
       }
 
-      // Step 5: Coordinate-based click fallback (for overlapping elements)
-      const box = await locator.boundingBox().catch(() => null);
-      if (box) {
-        const cx = box.x + box.width / 2;
-        const cy = box.y + box.height * 0.4;
-
-        await page.mouse.click(cx, cy).catch(() => {});
-        await humanDelay(80, 150);
-
-        if (await ensureSelectionInEditor(locator)) {
-          return true;
-        }
+      // Step 5: DOM focus + click fallback (no mouse coordinates — those
+      // can land on sticky For Business / Hire with AI when the box is
+      // near the top of the viewport).
+      await locator
+        .evaluate((el) => {
+          el.focus();
+          el.click();
+        })
+        .catch(() => {});
+      await humanDelay(80, 150);
+      if (await ensureSelectionInEditor(locator)) {
+        return true;
       }
 
       if (attempt < MAX_FOCUS_ATTEMPTS) {
@@ -137,7 +140,11 @@ async function activateDmEditor(page, locator) {
     for (const selector of fallbackSelectors) {
       const fallbackEditor = page.locator(selector).first();
       if (await fallbackEditor.isVisible({ timeout: 300 }).catch(() => false)) {
-        await fallbackEditor.click({ force: true }).catch(() => {});
+        await fallbackEditor
+          .click({ timeout: 800 })
+          .catch(async () => {
+            await fallbackEditor.evaluate((el) => el.click()).catch(() => {});
+          });
         await humanDelay(80, 150);
         if (await ensureSelectionInEditor(fallbackEditor)) {
           return true;

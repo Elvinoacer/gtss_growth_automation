@@ -440,7 +440,41 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           /wrong-recipient/i,
           /recipient-verification guard/i,
           /modal recipient .* does not match/i,
+          // Permanent data / product gates — retrying wastes 3× navigation time.
+          /relationship metadata/i,
+          /is metadata, not a person/i,
+          /pre-navigation identity guard/i,
+          /identity guard/i,
+          /lead data is corrupt/i,
+          /dm editor not found/i,
+          /composer did not mount/i,
+          /linkedin premium required/i,
         ];
+
+        // Outcomes where we never sent a DM (and often never even opened a
+        // composer). For these we must NOT:
+        //   - run "Verifying linkedin dm" session checks
+        //   - sit in a 60–180s inter-action cooldown
+        //   - treat them as automation failures toward the circuit breaker
+        const NO_SEND_OUTCOMES = new Set([
+          'premium_required',
+          'not_connected',
+          'already_connected',
+          'no_posts',
+          'skipped',
+          'session_required',
+        ]);
+        const isNoSendOutcome = (obj) => {
+          if (!obj) return false;
+          if (NO_SEND_OUTCOMES.has(obj.outcome)) return true;
+          // Permanent data / product gates recorded as outcome:failed
+          if (obj.outcome === 'failed') {
+            return NON_RETRYABLE_FAILURE_REASONS.some((pattern) =>
+              pattern.test(String(obj.reason || '')),
+            );
+          }
+          return false;
+        };
 
         // outcomeObj is declared in the outer (for-loop body) scope above the
         // try block, so the post-catch circuit-breaker / cooldown / cleanup
@@ -475,19 +509,33 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           }
         }
 
-        // Post-action session check
-        emitState(
-          emit,
-          jobId,
-          'VERIFYING',
-          `Verifying ${platform} ${actionType}.`,
-          { ...eventBase, fingerprint: reservation.fingerprint },
-        );
-        await checkSessionState(browserState.page, platform, emit, {
-          label: `post-action-session-${actionType}-${action.message_id}`,
-        });
+        // Post-action session check ONLY when we actually attempted a send
+        // (or a transient failure that might be session-related).
+        // Premium / not-connected / metadata skips never sent a DM — running
+        // "Verifying linkedin dm" here was confusing and wasted time.
+        if (outcomeObj?.outcome === 'sent' || !isNoSendOutcome(outcomeObj)) {
+          emitState(
+            emit,
+            jobId,
+            'VERIFYING',
+            `Verifying ${platform} ${actionType}.`,
+            { ...eventBase, fingerprint: reservation.fingerprint },
+          );
+          await checkSessionState(browserState.page, platform, emit, {
+            label: `post-action-session-${actionType}-${action.message_id}`,
+          });
+        } else {
+          emit(
+            'info',
+            `Skipping post-action verify for ${outcomeObj.outcome}` +
+              (outcomeObj.reason ? ` (${String(outcomeObj.reason).slice(0, 80)})` : '') +
+              ' — no DM was sent.',
+          );
+        }
 
-        if (outcomeObj.outcome === 'failed') {
+        // Screenshots only for unexpected send failures — not for premium
+        // walls or bad lead data we already classified.
+        if (outcomeObj.outcome === 'failed' && !isNoSendOutcome(outcomeObj)) {
           // Hardened: captureFailureArtifact must not throw even if the
           // artifacts dir is unwritable. Wrap in try/catch as belt-and-
           // suspenders so the original failure reason isn't masked.
@@ -532,21 +580,11 @@ async function processActionQueue(jobId, sseRes, options = {}) {
           if (actionType === 'connect' || actionType === 'connection') {
             connectionsSentThisRun++;
           }
-        } else if (
-          [
-            'skipped',
-            'already_connected',
-            'no_posts',
-            'not_connected',
-            'premium_required',
-            'session_required',
-          ].includes(outcomeObj.outcome)
-        ) {
+        } else if (isNoSendOutcome(outcomeObj)) {
           releaseActionFingerprint(reservation.fingerprint);
           skipped++;
-          // premium_required / not_connected / already_connected are NOT
-          // failures of our automation — they're LinkedIn saying "this lead
-          // can't be DM'd". Don't let them count toward the circuit breaker.
+          // premium_required / not_connected / metadata / identity gates are
+          // NOT automation failures — don't trip the circuit breaker.
           consecutiveFailures = 0;
         } else {
           releaseActionFingerprint(reservation.fingerprint);
@@ -627,20 +665,42 @@ async function processActionQueue(jobId, sseRes, options = {}) {
         }
 
         // ── Cooldown between profiles ────────────────────────────────────────
-        // SKIP the cooldown entirely for premium_required / not_connected /
-        // already_connected / no_posts — these are not "actions we just took"
-        // (no DM was sent, no connection request was submitted), so there's
-        // nothing to cool down from. The user explicitly asked for this so we
-        // don't waste 60-180s on every premium-required profile.
+        // SKIP the full 60–180s cooldown whenever we did not actually send
+        // (premium wall, not connected, metadata lead names, identity guards,
+        // composer never mounted, etc.). Only real sends / transient failures
+        // need the anti-rate-limit pause.
         const SKIP_COOLDOWN_OUTCOMES = new Set([
           'premium_required',
           'not_connected',
           'already_connected',
           'no_posts',
           'skipped',
+          'session_required',
         ]);
+        const PERMANENT_FAIL_SKIP_COOLDOWN = [
+          /relationship metadata/i,
+          /is metadata, not a person/i,
+          /pre-navigation identity guard/i,
+          /identity guard/i,
+          /lead data is corrupt/i,
+          /dm editor not found/i,
+          /composer did not mount/i,
+          /linkedin premium required/i,
+          /profile name mismatch/i,
+          /message content mismatch/i,
+          /wrong-recipient/i,
+          /recipient-verification guard/i,
+          // Infra / lock failures — waiting 60–180s does not free the browser.
+          /browser profile is already in use/i,
+          /stale lock/i,
+          /already in use for linkedin/i,
+        ];
         const shouldSkipCooldown = outcomeObj
-          ? SKIP_COOLDOWN_OUTCOMES.has(outcomeObj.outcome)
+          ? SKIP_COOLDOWN_OUTCOMES.has(outcomeObj.outcome) ||
+            (outcomeObj.outcome === 'failed' &&
+              PERMANENT_FAIL_SKIP_COOLDOWN.some((re) =>
+                re.test(String(outcomeObj.reason || '')),
+              ))
           : false;
 
         if (
@@ -666,7 +726,7 @@ async function processActionQueue(jobId, sseRes, options = {}) {
             'info',
             `Skipping cooldown for ${outcomeObj?.outcome || 'skipped'} — moving to next profile.`,
           );
-          await interruptibleDelay(800, 1500, jobId);
+          await interruptibleDelay(400, 900, jobId);
         }
       } catch (bookkeepingErr) {
         // Never let a bug in cooldown / circuit-breaker accounting abort the

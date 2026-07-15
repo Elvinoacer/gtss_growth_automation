@@ -49,6 +49,17 @@ function acquireBrowserLock(platform, mode, target) {
     if (error.code !== "EEXIST") throw error;
 
     const existing = readLock(filePath);
+
+    // Same process already holds the lock (re-entrant run / recovery path).
+    if (existing && Number(existing.pid) === process.pid) {
+      logger.info("BROWSER", "Reusing browser lock held by this process", {
+        platform,
+        mode,
+        filePath,
+      });
+      return { filePath, reentrant: true };
+    }
+
     if (existing && !isPidRunning(existing.pid)) {
       logger.warn("BROWSER", "Removing stale browser lock", {
         platform,

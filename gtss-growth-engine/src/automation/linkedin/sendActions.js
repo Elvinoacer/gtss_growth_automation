@@ -119,8 +119,9 @@ async function clickSendButtonRobust(page, sendButton, editorLocator) {
   const clickAttempts = [
     async () => {
       await sendButton.scrollIntoViewIfNeeded().catch(() => {});
-      await sendButton.hover().catch(() => {});
-      await sendButton.click({ force: true, timeout: 1500 });
+      // Prefer a real click. Do not use force:true — near sticky headers that
+      // can land on For Business / Hire with AI instead of Send.
+      await sendButton.click({ timeout: 1500 });
       return true;
     },
     async () =>

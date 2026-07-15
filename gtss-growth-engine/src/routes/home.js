@@ -111,28 +111,28 @@ router.get("/api/dashboard/stats", (req, res) => {
       };
     }
 
-    // ── Daily actions ──
+    // ── Daily actions (only successful sends count as "used") ──
     const todayStr = now.toISOString().split("T")[0];
     const dailyActions = {};
     for (const p of platforms) {
       const used = db
         .prepare(
-          "SELECT COUNT(*) as c FROM daily_actions WHERE platform = ? AND date(performed_at) = ?",
+          "SELECT COUNT(*) as c FROM daily_actions WHERE platform = ? AND date(performed_at) = ? AND lower(coalesce(outcome, '')) = 'sent'",
         )
         .get(p, todayStr).c;
       const connections = db
         .prepare(
-          "SELECT COUNT(*) as c FROM daily_actions WHERE platform = ? AND date(performed_at) = ? AND action_type = 'connections'",
+          "SELECT COUNT(*) as c FROM daily_actions WHERE platform = ? AND date(performed_at) = ? AND action_type = 'connections' AND lower(coalesce(outcome, '')) = 'sent'",
         )
         .get(p, todayStr).c;
       const dms = db
         .prepare(
-          "SELECT COUNT(*) as c FROM daily_actions WHERE platform = ? AND date(performed_at) = ? AND action_type = 'dms'",
+          "SELECT COUNT(*) as c FROM daily_actions WHERE platform = ? AND date(performed_at) = ? AND action_type = 'dms' AND lower(coalesce(outcome, '')) = 'sent'",
         )
         .get(p, todayStr).c;
       const likes = db
         .prepare(
-          "SELECT COUNT(*) as c FROM daily_actions WHERE platform = ? AND date(performed_at) = ? AND action_type = 'likes'",
+          "SELECT COUNT(*) as c FROM daily_actions WHERE platform = ? AND date(performed_at) = ? AND action_type = 'likes' AND lower(coalesce(outcome, '')) = 'sent'",
         )
         .get(p, todayStr).c;
       const limit = Object.values(dailyLimits[p] || {}).reduce(

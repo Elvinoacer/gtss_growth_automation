@@ -16,6 +16,31 @@ const { firstVisible } = require("../profileActions");
 const { findBestDmEditor } = require("./findBestDmEditor");
 const { findBestDmOverlay } = require("./findBestDmOverlay");
 
+/**
+ * Soft-activate an overlay by focusing its message editor (DOM click), never
+ * a coordinate force-click. Force-clicks near the sticky header hit
+ * "For Business" / "Hire with AI" and open the wrong panel.
+ */
+async function softActivateOverlay(overlayMatch) {
+  if (!overlayMatch?.locator) return;
+  // Prefer clicking the actual message editor inside the overlay.
+  const editor = overlayMatch.locator
+    .locator(
+      '.msg-form__contenteditable[contenteditable="true"],' +
+        ' [contenteditable="true"][aria-label*="message" i],' +
+        ' [contenteditable="true"][aria-label*="write" i],' +
+        ' [role="textbox"][aria-label*="message" i],' +
+        ' textarea[aria-label*="message" i]',
+    )
+    .first();
+  if (await editor.isVisible({ timeout: 120 }).catch(() => false)) {
+    await editor.evaluate((el) => el.click()).catch(() => {});
+    return;
+  }
+  // Fall back to a DOM click on the overlay container itself (not force/coords).
+  await overlayMatch.locator.evaluate((el) => el.click()).catch(() => {});
+}
+
 async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 1) {
   const PER_ATTEMPT_TIMEOUT = 1500;
 
@@ -23,8 +48,8 @@ async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 1) {
     const best = await findBestDmEditor(page, PER_ATTEMPT_TIMEOUT);
     if (best) return best;
 
-    if (dmOverlayMatch) {
-      await dmOverlayMatch.locator.click({ force: true }).catch(() => {});
+    if (dmOverlayMatch && !dmOverlayMatch.ambiguous) {
+      await softActivateOverlay(dmOverlayMatch);
       // Performance: React remounts the editor within ~150ms of the overlay
       // click. 350-550ms was excessive; 150-250ms is enough to avoid the
       // race condition noted below.
@@ -35,8 +60,9 @@ async function waitForDmEditor(page, dmOverlayMatch, maxAttempts = 1) {
     }
 
     const freshOverlay = await findBestDmOverlay(page, 500);
-    if (freshOverlay) {
-      await freshOverlay.locator.click({ force: true }).catch(() => {});
+    // Never force-click ambiguous overlays or non-messaging surfaces.
+    if (freshOverlay && !freshOverlay.ambiguous) {
+      await softActivateOverlay(freshOverlay);
       // FIX: same settle delay after fresh overlay click
       await humanDelay(150, 250);
       const freshBest = await findBestDmEditor(page, 900);
