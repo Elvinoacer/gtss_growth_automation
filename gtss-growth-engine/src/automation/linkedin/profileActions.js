@@ -479,7 +479,7 @@ async function findBestProfileComposeLink(page, timeout = 1800) {
           const links = Array.from(
             document.querySelectorAll(
               'a[href*="/messaging/compose"], a[href*="/messaging/thread"],' +
-                ' button[aria-label^="Message" i]',
+                ' button[aria-label^="Message" i], button',
             ),
           );
           const candidates = [];
@@ -544,16 +544,23 @@ async function findBestProfileComposeLink(page, timeout = 1800) {
             }
 
             // Must sit near the profile h1 / identity block when possible.
+            let primaryProfileAction = false;
             if (h1Rect) {
               const nearH1 =
                 Math.abs(rect.top - h1Rect.bottom) < 220 &&
                 rect.left < h1Rect.right + 80 &&
                 rect.top >= h1Rect.top - 40;
-              if (nearH1) score += 200;
+              if (nearH1) {
+                score += 200;
+                primaryProfileAction = true;
+              }
               // Far below the identity block → almost certainly related people.
               if (rect.top > h1Rect.bottom + 400) score -= 250;
             } else {
-              if (rect.y >= 50 && rect.y < 360) score += 60;
+              if (rect.y >= 50 && rect.y < 360) {
+                score += 60;
+                primaryProfileAction = true;
+              }
             }
 
             // Prefer interop overlay compose (stays on profile).
@@ -570,7 +577,14 @@ async function findBestProfileComposeLink(page, timeout = 1800) {
               )
             ) {
               score += 100;
+              primaryProfileAction = true;
             }
+
+            // Do not use a merely visible Message control. A related-person
+            // card can look identical and sometimes sits high in the viewport.
+            // Without a positive relationship to this profile's identity card,
+            // this candidate is unsafe even if it scores well.
+            if (!primaryProfileAction) continue;
 
             // Penalize deep-page links hard.
             if (rect.y > 520) score -= 120;
@@ -628,18 +642,7 @@ async function findProfileMessageAction(page, timeout = 2200) {
   );
   if (compose) return compose;
 
-  // Path 2: quick action scan (buttons labelled Message in top card / rail).
-  const quick = await quickVisibleProfileAction(
-    page,
-    "Message",
-    Math.min(timeout, 900),
-  );
-  if (quick) {
-    const href = await quick.locator.getAttribute("href").catch(() => null);
-    return { ...quick, href };
-  }
-
-  // Path 3: header-scoped selectors only — do NOT fall through to
+  // Path 2: header-scoped selectors only — do NOT fall through to
   // firstVisibleInMainProfileArea which picks unrelated "Message" links.
   const headerMatch = await getProfileHeader(page);
   if (headerMatch) {
@@ -658,30 +661,10 @@ async function findProfileMessageAction(page, timeout = 2200) {
     }
   }
 
-  // Path 4: More menu → Message.
-  const moreMatch = await findProfileAction(page, SELECTORS.more, "More", 700);
-  if (!moreMatch) return null;
-
-  await moreMatch.locator.evaluate((el) => el.click()).catch(() => {});
-  await humanDelay(180, 320);
-
-  const { firstVisibleOverlay } = require("./dmEditorDetection");
-  const fromMenu = await firstVisibleOverlay(
-    page,
-    SELECTORS.actionDropdown,
-    SELECTORS.message,
-    Math.max(700, timeout - 700),
-  );
-
-  if (fromMenu) {
-    const href = await fromMenu.locator.getAttribute("href").catch(() => null);
-    return {
-      ...fromMenu,
-      href,
-      selector: `More menu >> ${fromMenu.selector}`,
-    };
-  }
-
+  // Intentionally do not open More as a fallback. Its menu is detached from
+  // the profile card and LinkedIn can leave a related-person menu mounted;
+  // without a recipient binding it is unsafe to click. A missing visible
+  // primary Message action is reported as a safe skip instead.
   return null;
 }
 

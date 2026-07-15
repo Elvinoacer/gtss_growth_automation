@@ -251,6 +251,34 @@ async function sendDirectMessage(
     await humanDelay(200, 350);
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
 
+    // LinkedIn can redirect a stale, deleted, or malformed profile URL to a
+    // different member. A name-only check is not enough (first names collide),
+    // so bind the loaded page to the requested /in/ vanity before considering
+    // any action controls.
+    {
+      const requested = String(profileUrl || "").match(/\/in\/([^/?#]+)/i)?.[1];
+      const loaded = String(page.url() || "").match(/\/in\/([^/?#]+)/i)?.[1];
+      const canonical = (value) => {
+        try {
+          return decodeURIComponent(String(value || ""))
+            .replace(/\/+$/, "")
+            .toLowerCase();
+        } catch (_) {
+          return String(value || "").replace(/\/+$/, "").toLowerCase();
+        }
+      };
+      if (!requested || !loaded || canonical(requested) !== canonical(loaded)) {
+        emit(
+          "error",
+          `Profile URL binding failed: requested "${profileUrl}" but LinkedIn loaded "${page.url()}". Aborting before Message click.`,
+        );
+        return {
+          outcome: "failed",
+          reason: "Profile URL changed or did not resolve to the requested LinkedIn member. Send aborted by URL identity guard.",
+        };
+      }
+    }
+
     // ── 0-post-nav. Dismiss any LinkedIn top-nav dropdown that may have      ─
     // auto-opened on navigation (e.g. "For Business" / "My Apps"). This is a
     // defensive measure — regardless of what opened it, we close it before
@@ -798,7 +826,10 @@ async function sendDirectMessage(
         msgCtx,
         activeEditorLocator,
         leadName,
-      ).catch((err) => ({ ok: true, warning: `verify_error: ${err.message}` }));
+      ).catch((err) => ({
+        ok: false,
+        reason: `Recipient verification could not run: ${err.message}. Send aborted by recipient-verification guard.`,
+      }));
 
       if (recipientCheck && !recipientCheck.ok) {
         emit(
@@ -830,11 +861,6 @@ async function sendDirectMessage(
         emit(
           "info",
           `Modal recipient verified: "${recipientCheck.actual}" matches lead "${leadName}".`,
-        );
-      } else if (recipientCheck?.warning) {
-        emit(
-          "info",
-          `Modal recipient name not extractable (${recipientCheck.warning}) — relying on modal-scoped editor selection.`,
         );
       }
     }
@@ -868,6 +894,21 @@ async function sendDirectMessage(
           retryLocator = await getActiveEditorLocator(retryMsgCtx, editorRetry);
         } catch (_) {}
         activeEditorLocator = retryLocator;
+        // The React re-render that replaced the editor may also have switched
+        // conversations. Re-bind the replacement composer before typing.
+        const retryRecipientCheck = await verifyModalRecipient(
+          retryMsgCtx,
+          activeEditorLocator,
+          leadName,
+        ).catch((err) => ({
+          ok: false,
+          reason: `Recipient verification after editor retry could not run: ${err.message}.`,
+        }));
+        if (leadName && !retryRecipientCheck.ok) {
+          emit("error", `WRONG-RECIPIENT BLOCK after editor retry: ${retryRecipientCheck.reason}`);
+          await forceClearDmDraft(page, activeEditorLocator).catch(() => {});
+          return { outcome: "failed", reason: retryRecipientCheck.reason };
+        }
         // Re-bring to front in case focus was lost.
         await bringLinkedInPageToFront(
           page,

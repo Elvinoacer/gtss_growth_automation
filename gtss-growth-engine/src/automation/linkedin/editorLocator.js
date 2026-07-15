@@ -87,11 +87,11 @@ async function getActiveEditorLocator(page, editorMatch) {
  * Returns:
  *   { ok: true, actual?: string }            — recipient matches (or no
  *                                              expectedName was provided)
- *   { ok: true, warning: string, actual: null } — could not extract a
- *                                              recipient name from the modal;
- *                                              proceed (scoping already
- *                                              ensures we're in the right
- *                                              modal) but log the warning
+ *   { ok: false, reason, actual: null }         — recipient cannot be
+ *                                              extracted. Sending without a
+ *                                              positive recipient binding is
+ *                                              unsafe, so the caller must
+ *                                              abort rather than guessing.
  *   { ok: false, reason: string, actual: string, expected: string } — mismatch
  *
  * @param {object} pageOrFrame    - Playwright Page or Frame (msgCtx)
@@ -255,14 +255,17 @@ async function verifyModalRecipient(pageOrFrame, editorLocator, expectedName) {
     .catch(() => ({ found: false }));
 
   if (!overlayInfo.found) {
-    // Cannot confidently extract a recipient name. Don't fail — the
-    // modal-aware editor selection already ensures we're in the correct
-    // modal. Log a warning so it's visible if a wrong-recipient bug is
-    // later reported.
+    // A modal-scoped editor is necessary, but it is not sufficient: LinkedIn
+    // can retain an older conversation bubble while mounting a new composer.
+    // The production "Status is offline" case took this fail-open branch and
+    // sent despite having no evidence of who owned the editor. Never guess.
     return {
-      ok: true,
-      warning: "recipient_name_not_found_in_modal",
+      ok: false,
+      reason:
+        `Cannot extract a recipient name from the active message composer for expected lead "${expectedName}". ` +
+        "Send aborted by recipient-verification guard (fail-closed).",
       actual: null,
+      expected: expectedName,
     };
   }
 
@@ -275,9 +278,12 @@ async function verifyModalRecipient(pageOrFrame, editorLocator, expectedName) {
     )
   ) {
     return {
-      ok: true,
-      warning: `ignored_non_name_header: ${actualRaw}`,
+      ok: false,
+      reason:
+        `Active message composer header is not a person name ("${actualRaw}") for expected lead "${expectedName}". ` +
+        "Send aborted by recipient-verification guard (fail-closed).",
       actual: null,
+      expected: expectedName,
     };
   }
 

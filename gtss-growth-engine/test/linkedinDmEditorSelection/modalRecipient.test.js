@@ -4,9 +4,8 @@
  * Verifies:
  *  - verifyModalRecipient blocks send when the modal's recipient name does not
  *    match the expected lead (with both mismatch and match cases)
- *  - verifyModalRecipient returns ok=true (with warning) when the modal has no
- *    extractable recipient name (defensive — modal-aware editor selection
- *    already ensures correct modal)
+ *  - verifyModalRecipient fails closed when the modal has no extractable
+ *    recipient name; an editor scope is not proof of who will receive a DM.
  */
 
 const assert = require("node:assert/strict");
@@ -76,10 +75,10 @@ test(
   },
 );
 
-// ─── test 20: no extractable recipient name → ok=true with warning ───────────
+// ─── test 20: no extractable recipient name → fail closed ────────────────────
 
 test(
-  "verifyModalRecipient returns ok=true (with warning) when the modal has no extractable recipient name",
+  "verifyModalRecipient blocks send when the modal has no extractable recipient name",
   { skip: SKIP },
   async () => {
     const browser = await chromium.launch({ headless: true });
@@ -89,9 +88,8 @@ test(
 
     try {
       // Modal with NO recognizable recipient-name header element. The
-      // helper must NOT fail — the modal-aware editor selection already
-      // ensures we're in the correct modal. It should return ok=true with
-      // a warning so the operator knows the verification was inconclusive.
+      // A modal-scoped editor is not proof that this is Mike's composer.
+      // Recipient identity must be positively established before any DM send.
       await page.setContent(`
         <main></main>
         <section
@@ -117,8 +115,8 @@ test(
 
       const editor = page.locator("#the-editor");
       const result = await __private.verifyModalRecipient(page, editor, "Mike Peterson");
-      assert.equal(result.ok, true, "must NOT block send when recipient name cannot be extracted (modal-aware editor selection already ensures correct modal)");
-      assert.ok(result.warning, "must include a warning explaining the verification was inconclusive");
+      assert.equal(result.ok, false, "must block send when recipient name cannot be extracted");
+      assert.match(result.reason, /cannot extract a recipient/i);
     } finally {
       delete process.env.TEST_SPEEDUP;
       await browser.close();
