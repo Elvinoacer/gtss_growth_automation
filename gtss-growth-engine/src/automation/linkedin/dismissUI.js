@@ -270,6 +270,59 @@ async function dismissAllMessagingUI(page) {
     // intercept subsequent clicks. Dismiss it before doing anything else.
     await dismissLinkedInNavDropdowns(page);
 
+    // Strategy 0.5: close every existing conversation bubble *before* trying
+    // Escape. A normal inbox bubble is not a modal and often ignores Escape;
+    // leaving it open is dangerous because its editor/send button can be
+    // mistaken for the next profile's composer. LinkedIn's current header
+    // close icon is frequently an unlabeled SVG button, so aria-label-only
+    // selectors miss exactly the UI shown in the production screenshot.
+    await page
+      .evaluate(() => {
+        const visible = (el) => {
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          return (
+            rect.width > 120 &&
+            rect.height > 100 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            Number(style.opacity || "1") > 0.05
+          );
+        };
+        const bubbles = Array.from(
+          document.querySelectorAll(
+            ".msg-overlay-conversation-bubble, .msg-convo-wrapper",
+          ),
+        ).filter(visible);
+        for (const bubble of bubbles) {
+          const header = bubble.querySelector(
+            ".msg-overlay-bubble-header, .msg-overlay-conversation-bubble__header, header",
+          );
+          if (!header) continue;
+          const buttons = Array.from(header.querySelectorAll("button")).filter(
+            (button) => {
+              const rect = button.getBoundingClientRect();
+              return rect.width >= 12 && rect.height >= 12;
+            },
+          );
+          if (!buttons.length) continue;
+          // Prefer an explicitly labelled close. Otherwise LinkedIn renders
+          // the close X as the final button in the bubble header (after More
+          // and expand/minimize), which is safe only inside this bubble.
+          const close =
+            buttons.find((button) =>
+              /close|dismiss|end conversation/i.test(
+                `${button.getAttribute("aria-label") || ""} ${button.getAttribute("title") || ""}`,
+              ),
+            ) || buttons[buttons.length - 1];
+          try {
+            close.click();
+          } catch (_) {}
+        }
+      })
+      .catch(() => {});
+    await humanDelay(180, 300);
+
     // Strategy 1: Press Escape up to 3 times to dismiss modals/overlays
     for (let i = 0; i < 3; i++) {
       const hasVisibleOverlay = await page
@@ -313,6 +366,8 @@ async function dismissAllMessagingUI(page) {
       // Messaging / modal scoped
       '.msg-overlay-conversation-bubble button[aria-label="Close"]',
       '.msg-overlay-conversation-bubble button[aria-label="Dismiss"]',
+      '.msg-overlay-conversation-bubble button[aria-label*="close" i]',
+      '.msg-convo-wrapper button[aria-label*="close" i]',
       '[role="dialog"] button[aria-label="Dismiss"]',
       '[role="dialog"] button[aria-label="Close"]',
       ".artdeco-modal__dismiss",

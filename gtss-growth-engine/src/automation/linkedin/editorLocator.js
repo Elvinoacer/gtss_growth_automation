@@ -97,8 +97,16 @@ async function getActiveEditorLocator(page, editorMatch) {
  * @param {object} pageOrFrame    - Playwright Page or Frame (msgCtx)
  * @param {object} editorLocator  - Locator for the chosen DM editor
  * @param {string} expectedName   - Lead name from the queue
+ * @param {object} options
+ * @param {string|null} options.composeUrl - The Message href read from the
+ *   verified profile CTA before navigating to the full-page composer.
  */
-async function verifyModalRecipient(pageOrFrame, editorLocator, expectedName) {
+async function verifyModalRecipient(
+  pageOrFrame,
+  editorLocator,
+  expectedName,
+  { composeUrl = null } = {},
+) {
   if (!expectedName) return { ok: true };
 
   const normalise = (s) =>
@@ -255,6 +263,33 @@ async function verifyModalRecipient(pageOrFrame, editorLocator, expectedName) {
     .catch(() => ({ found: false }));
 
   if (!overlayInfo.found) {
+    // Full-page /messaging/compose does not have the overlay header used
+    // above. It is still safe to proceed when the committed route has the
+    // same recipient/profile URN as the Message href we extracted from the
+    // identity-verified profile. This is a stronger binding than guessing a
+    // name from page chrome, and lets valid full-page composers reach typing.
+    try {
+      const source = new URL(composeUrl);
+      const current = new URL(pageOrFrame.url());
+      const sourceRecipient =
+        source.searchParams.get("recipient") || source.searchParams.get("profileUrn");
+      const currentRecipient =
+        current.searchParams.get("recipient") || current.searchParams.get("profileUrn");
+      if (
+        sourceRecipient &&
+        currentRecipient &&
+        sourceRecipient === currentRecipient &&
+        /\/messaging\/(compose|thread)/i.test(current.pathname)
+      ) {
+        return {
+          ok: true,
+          actual: `compose recipient ${currentRecipient} verified from the profile Message link`,
+        };
+      }
+    } catch (_) {
+      // No route proof available — retain the fail-closed behaviour below.
+    }
+
     // A modal-scoped editor is necessary, but it is not sufficient: LinkedIn
     // can retain an older conversation bubble while mounting a new composer.
     // The production "Status is offline" case took this fail-open branch and

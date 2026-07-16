@@ -30,14 +30,14 @@ const logger = require("../../utils/logger");
  *   - /talent/job-posting-redirect
  *   - /jobs/view/
  *   - /jobs/ (job search page, often spawns popups)
- *   - /messaging/compose (leftover DM composer tab from a previous run)
- *   - /messaging/thread (leftover thread tab)
  *
  * @param {object} context - Playwright browser context
  * @param {string} _platform - Platform name (unused, reserved for future per-platform rules)
+ * @param {object|null} keepPage - Active automation page to preserve even if
+ *   it is currently on a messaging compose route.
  * @returns {Promise<number>} Number of tabs closed
  */
-async function closeStrayTabs(context, _platform) {
+async function closeStrayTabs(context, _platform, keepPage = null) {
   let closedCount = 0;
   let pages;
   try {
@@ -52,14 +52,15 @@ async function closeStrayTabs(context, _platform) {
     "/talent/job-posting-redirect",
     "/jobs/view/",
     "/jobs/",
-    "/messaging/compose",
-    "/messaging/thread",
   ];
 
   // Never close the first tab — it's typically the user's manually-opened tab.
   for (let i = 1; i < pages.length; i++) {
     const page = pages[i];
     if (!page || page.isClosed()) continue;
+    // Direct Message-link navigation intentionally moves the active tab to
+    // /messaging/compose. It is not a stale popup and must remain open.
+    if (page === keepPage) continue;
     let url = "";
     try {
       url = String(page.url() || "");
@@ -102,8 +103,6 @@ function isStrayTabUrl(url) {
     "/talent/job-posting-redirect",
     "/jobs/view/",
     "/jobs/",
-    "/messaging/compose",
-    "/messaging/thread",
   ];
   return strayPatterns.some((p) => u.includes(p));
 }

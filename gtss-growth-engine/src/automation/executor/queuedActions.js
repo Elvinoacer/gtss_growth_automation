@@ -49,6 +49,9 @@ function getQueuedActions(options = {}) {
       (m.status = 'approved' ${includeWaiting ? "" : "AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now'))"})
       ${includeBlocked ? "OR m.status = 'blocked'" : ""}
     )
+    -- Relationship metadata is never an outreach recipient. This also
+    -- protects active queues before the server-start data cleanup runs.
+    AND LOWER(COALESCE(l.name, '')) NOT LIKE '%mutual%'
     ${platformClause}
     ORDER BY
       CASE

@@ -544,12 +544,25 @@ async function findBestProfileComposeLink(page, timeout = 1800) {
             }
 
             // Must sit near the profile h1 / identity block when possible.
+            // LinkedIn currently renders the profile CTA rail outside <main>
+            // on some pages, so DOM ancestry alone is not reliable. Geometry
+            // is deliberately based on the full identity-card envelope, not a
+            // tiny x-range beside the text; the real Message CTA can sit below
+            // the avatar while the name is farther right.
             let primaryProfileAction = false;
             if (h1Rect) {
+              const horizontalGap = Math.max(
+                h1Rect.left - rect.right,
+                rect.left - h1Rect.right,
+                0,
+              );
+              const verticalGap = Math.max(
+                h1Rect.top - rect.bottom,
+                rect.top - h1Rect.bottom,
+                0,
+              );
               const nearH1 =
-                Math.abs(rect.top - h1Rect.bottom) < 220 &&
-                rect.left < h1Rect.right + 80 &&
-                rect.top >= h1Rect.top - 40;
+                verticalGap < 260 && horizontalGap < 420 && rect.top >= h1Rect.top - 80;
               if (nearH1) {
                 score += 200;
                 primaryProfileAction = true;
@@ -634,15 +647,168 @@ async function findBestProfileComposeLink(page, timeout = 1800) {
   return null;
 }
 
+/**
+ * Locator-based fallback for LinkedIn's component/shadow-DOM profile UI.
+ *
+ * `findBestProfileComposeLink` uses page.evaluate for rich DOM scoring. That
+ * cannot cross an open shadow root, while Playwright locators can. Current
+ * LinkedIn profile pages sometimes render the visible primary CTA in that
+ * surface, producing the misleading "No Message button" log even though the
+ * button is visibly on screen. This fallback only accepts an exact Message
+ * control physically adjacent to the viewed profile's h1.
+ */
+async function findLocatorPrimaryMessageAction(page, timeout = 1600) {
+  const deadline = Date.now() + timeout;
+  const token = `gtss-locator-message-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  while (Date.now() < deadline) {
+    const h1s = page.locator("main h1, h1.text-heading-xlarge, h1");
+    const h1Count = await h1s.count().catch(() => 0);
+    let h1Box = null;
+    for (let i = 0; i < h1Count; i++) {
+      const h1 = h1s.nth(i);
+      if (!(await h1.isVisible({ timeout: 80 }).catch(() => false))) continue;
+      h1Box = await h1.boundingBox().catch(() => null);
+      if (h1Box) break;
+    }
+
+    // The generic controls are intentional: a real profile CTA can be an
+    // anchor, button, or role=button depending on LinkedIn's experiment.
+    const controls = page.locator(
+      'a[href*="/messaging/compose"], a[href*="/messaging/thread"], button, [role="button"]',
+    );
+    const count = Math.min(await controls.count().catch(() => 0), 160);
+    const candidates = [];
+
+    for (let i = 0; i < count; i++) {
+      const control = controls.nth(i);
+      if (!(await control.isVisible({ timeout: 50 }).catch(() => false))) continue;
+      const info = await control
+        .evaluate((el) => {
+          const text = String(el.textContent || "").replace(/\s+/g, " ").trim();
+          const aria = String(el.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
+          const href = String(el.getAttribute("href") || "");
+          const label = aria || text;
+          const exactMessage = /^message$/i.test(text) || /^message(?:\s+.+)?$/i.test(aria);
+          const inNav = Boolean(el.closest("header, nav, .global-nav, [role='navigation']"));
+          const related = Boolean(
+            el.closest(
+              "[data-view-name*='browsemap'], [data-view-name*='similar'], [data-view-name*='pymk'], [data-view-name*='related'], aside[aria-label*='People' i]",
+            ),
+          );
+          return { label, href, exactMessage, inNav, related };
+        })
+        .catch(() => null);
+      if (!info?.exactMessage || info.inNav || info.related) continue;
+      const box = await control.boundingBox().catch(() => null);
+      if (!box) continue;
+
+      // No h1 means we cannot prove this is the profile's CTA. With an h1,
+      // permit the complete identity-card action zone, including controls
+      // below the avatar rather than only immediately beside the name.
+      if (!h1Box) continue;
+      const horizontalGap = Math.max(h1Box.x - (box.x + box.width), box.x - (h1Box.x + h1Box.width), 0);
+      const verticalGap = Math.max(h1Box.y - (box.y + box.height), box.y - (h1Box.y + h1Box.height), 0);
+      if (horizontalGap > 520 || verticalGap > 300 || box.y < h1Box.y - 100) continue;
+
+      const score = 1000 - horizontalGap - verticalGap * 1.5 + (info.href.includes("profileUrn") ? 100 : 0);
+      candidates.push({ control, info, score });
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+    const best = candidates[0];
+    if (best) {
+      await best.control
+        .evaluate((el, marker) => el.setAttribute("data-gtss-profile-action", marker), token)
+        .catch(() => {});
+      const locator = page.locator(`[data-gtss-profile-action="${token}"]`).first();
+      if (await locator.isVisible({ timeout: 100 }).catch(() => false)) {
+        return {
+          locator,
+          href: best.info.href || null,
+          selector: `locator-primary:Message:${best.info.label || "Message"}`,
+        };
+      }
+    }
+    await humanDelay(80, 140);
+  }
+  return null;
+}
+
+/**
+ * The stable, direct LinkedIn profile CTA selector.
+ *
+ * LinkedIn obfuscates classes, but its profile Message anchor consistently
+ * carries a /messaging/compose href and a descendant span whose exact visible
+ * text is "Message". Keep this deliberately simple and try it before any
+ * geometry/scoring logic. The primary action rail precedes related-person
+ * cards in LinkedIn's DOM, so the first visible match is the profile CTA.
+ */
+async function findDirectProfileMessageAnchor(page, timeout = 1400) {
+  const selectors = [
+    'a[href*="/messaging/compose"]:has(span:text-is("Message"))',
+    'a[href*="/messaging/compose"]:has-text("Message")',
+    'a[href*="/messaging/compose"]',
+  ];
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    for (const selector of selectors) {
+      const anchors = page.locator(selector);
+      const count = await anchors.count().catch(() => 0);
+      for (let index = 0; index < count; index++) {
+        const anchor = anchors.nth(index);
+        if (!(await anchor.isVisible({ timeout: 80 }).catch(() => false))) continue;
+        const text = await anchor.textContent().catch(() => "");
+        const aria = await anchor.getAttribute("aria-label").catch(() => "");
+        // The broad href-only fallback is allowed only when the control still
+        // exposes Message in text/aria; never click a compose link blindly.
+        if (
+          selector === selectors[2] &&
+          !/^message(?:\s|$)/i.test(String(aria || text || "").trim())
+        ) {
+          continue;
+        }
+        const href = await anchor.getAttribute("href").catch(() => null);
+        return {
+          locator: anchor,
+          href,
+          selector: `direct-profile-compose:${selector} >> nth=${index}`,
+        };
+      }
+    }
+    await humanDelay(80, 140);
+  }
+  return null;
+}
+
 async function findProfileMessageAction(page, timeout = 2200) {
-  // Path 1: best compose link for THIS profile (most reliable).
+  // Path 1: stable direct profile anchor. This matches the actual LinkedIn
+  // markup (<a href=".../messaging/compose/..."><span>Message</span></a>)
+  // without depending on generated CSS class names.
+  const directAnchor = await findDirectProfileMessageAnchor(
+    page,
+    Math.min(timeout, 1400),
+  );
+  if (directAnchor) return directAnchor;
+
+  // Path 2: best compose link for THIS profile (scored fallback).
   const compose = await findBestProfileComposeLink(
     page,
     Math.min(timeout, 1800),
   );
   if (compose) return compose;
 
-  // Path 2: header-scoped selectors only — do NOT fall through to
+  // Path 3: component/shadow-DOM-safe primary CTA lookup. This is the
+  // essential fallback for a visibly rendered Message button that does not
+  // appear in page.evaluate's light-DOM traversal.
+  const locatorPrimary = await findLocatorPrimaryMessageAction(
+    page,
+    Math.min(timeout, 1400),
+  );
+  if (locatorPrimary) return locatorPrimary;
+
+  // Path 4: header-scoped selectors only — do NOT fall through to
   // firstVisibleInMainProfileArea which picks unrelated "Message" links.
   const headerMatch = await getProfileHeader(page);
   if (headerMatch) {
@@ -679,5 +845,7 @@ module.exports = {
   findProfileAction,
   findProfileMessageAction,
   findBestProfileComposeLink,
+  findLocatorPrimaryMessageAction,
+  findDirectProfileMessageAnchor,
   extractProfileVanity,
 };

@@ -16,6 +16,19 @@ const {
   normalizeOptionalFlag,
 } = require("./linkedinSearch");
 
+// Relationship and social-proof strings are details rendered beside a
+// profile, never the profile owner's name. They must not become lead records.
+function isMetadataLeadName(value) {
+  const name = String(value || "").replace(/\s+/g, " ").trim();
+  if (!name) return true;
+  return (
+    /\b(mutual\s+connections?|are\s+mutual|other\s+mutual|mutuals?)\b/i.test(name) ||
+    /^\d+[,+\s]*(followers?|connections?|mutual)/i.test(name) ||
+    /^(followers?|connections?|people you may know)$/i.test(name) ||
+    /^(linkedin|facebook|instagram|x)\s+profile$/i.test(name)
+  );
+}
+
 /**
  * Coerce an arbitrary lead-profile object (LinkedIn / X / Facebook / Instagram)
  * into the canonical record shape that matches the `leads` table schema.
@@ -106,6 +119,12 @@ function validateLeadPersistenceRecord(record) {
     issues.push("missing profile_url");
   }
 
+  if (!record.name) {
+    issues.push("missing lead name");
+  } else if (isMetadataLeadName(record.name)) {
+    issues.push("lead name is relationship metadata, not a person");
+  }
+
   if (record.platform === "instagram" && !record.ig_username) {
     issues.push("missing ig_username");
   }
@@ -188,5 +207,6 @@ function insertLeads(profiles) {
 module.exports = {
   buildLeadPersistenceRecord,
   validateLeadPersistenceRecord,
+  isMetadataLeadName,
   insertLeads,
 };

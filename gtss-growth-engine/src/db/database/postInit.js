@@ -31,6 +31,7 @@ function initializeDatabase() {
   // Migrate keywords.json -> context store (runs once, skipped if already migrated)
   migrateKeywordsToContextStore();
   cleanupStaleJobs();
+  quarantineMetadataLeads();
 }
 
 function migrateKeywordsToContextStore() {
@@ -116,8 +117,54 @@ function cleanupStaleJobs() {
   }
 }
 
+// Historical discovery runs may already contain relationship strings such as
+// "Duncan Otieno, Shadrack Korir & 7 other mutual connections" as a lead
+// name. Those rows have valid profile URLs but are not valid people records.
+// Quarantine them and block unsent messages so they cannot re-enter the DM
+// queue after a restart.
+function quarantineMetadataLeads() {
+  try {
+    const db = getDb();
+    const rows = db.prepare(`
+      SELECT id FROM leads
+      WHERE LOWER(COALESCE(name, '')) LIKE '%mutual%'
+         OR LOWER(COALESCE(name, '')) IN ('followers', 'connections', 'people you may know')
+    `).all();
+    if (!rows.length) return;
+
+    const ids = rows.map((row) => row.id);
+    const placeholders = ids.map(() => "?").join(",");
+    const tx = db.transaction(() => {
+      db.prepare(`
+        UPDATE leads
+        SET status = 'dismissed',
+            score_reason = 'Invalid discovery record: relationship metadata was captured as the lead name',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id IN (${placeholders})
+      `).run(...ids);
+      db.prepare(`
+        UPDATE messages
+        SET status = 'blocked',
+            blocked_reason = 'Lead dismissed: relationship metadata was captured as the lead name',
+            last_error = 'Invalid lead identity',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE lead_id IN (${placeholders})
+          AND status IN ('pending', 'approved')
+      `).run(...ids);
+    });
+    tx();
+    require("../../utils/logger").info(
+      "DB",
+      `Quarantined ${ids.length} invalid metadata lead(s) and blocked their unsent messages.`,
+    );
+  } catch (err) {
+    console.warn("[DB] Metadata lead quarantine skipped:", err.message);
+  }
+}
+
 module.exports = {
   initializeDatabase,
   migrateKeywordsToContextStore,
   cleanupStaleJobs,
+  quarantineMetadataLeads,
 };

@@ -8,7 +8,7 @@
  * Throughput-optimised flow:
  *   navigate → [profile name verify] → message button? no → skip
  *             ↓ yes
- *           click → premium popup? yes → skip
+ *           compose URL navigation → premium gate? yes → skip
  *             ↓ no
  *           find editor (1 attempt) → not found → skip
  *             ↓ found
@@ -82,7 +82,7 @@ async function sendDirectMessage(
     // document.hasFocus() is false, so all keyboard events are dropped.
     await bringLinkedInPageToFront(page);
     removeNoNewTabsGuard = installNoNewTabsGuard(page, emit);
-    await closeStrayTabs(page.context(), "linkedin").catch(() => {});
+    await closeStrayTabs(page.context(), "linkedin", page).catch(() => {});
 
     // ── 0. Pre-navigation cleanup ────────────────────────────────────────────
     // Dismiss any stale messaging UI from a previous profile's DM attempt.
@@ -121,23 +121,12 @@ async function sendDirectMessage(
           /^[\d,.+\s]+\+?\s*(mutual|followers?|connections?)?$/i,
         ];
         if (metadataPatterns.some((re) => re.test(s))) return true;
-        // The ONLY acceptable form of "mutual connections" in a leadName is
-        // the exact "A & B are mutual connections" / "A and B are mutual
-        // connections" pattern — the profile_url owner is always B (the
-        // second name). Anything else ("A, B and 24 other mutual
-        // connections", "X mutual", etc.) is ambiguous → garbage.
+        // Any mutual-connection phrase is discovery relationship metadata,
+        // not a contact name. Even a seemingly clear "A & B are mutual
+        // connections" string is unsuitable as a campaign recipient because
+        // it can leak into an unpersonalised message, as happened in
+        // production. The lead must contain one actual person's name only.
         if (/\bmutual\s+connections?\b/i.test(s) || /\bare\s+mutual\b/i.test(s)) {
-          // Accept ONLY "NameA & NameB are mutual connections" or
-          // "NameA and NameB are mutual connections" (2 distinct names).
-          const pairMatch = s.match(
-            /^([a-z][a-z.'-]+(?:\s+[a-z][a-z.'-]+)*)\s+(?:&|and)\s+([a-z][a-z.'-]+(?:\s+[a-z][a-z.'-]+)*)\s+are\s+mutual\s+connections?$/i,
-          );
-          if (pairMatch) {
-            // The "A & B are mutual connections" form is unambiguous —
-            // NOT metadata. extractFirstName will return B.
-            return false;
-          }
-          // Any other "mutual connections" appearance is ambiguous.
           return true;
         }
         return false;
@@ -181,38 +170,36 @@ async function sendDirectMessage(
         return "";
       };
 
+      const leadNameIsMetadata = looksLikeMetadata(leadName);
       const intendedFirst = extractFirstName(leadName);
-
-      // Guard 0-pre-A: refuse to send when leadName is metadata garbage.
-      // We CANNOT safely verify the recipient's identity, so sending would
-      // risk messaging a stranger. Fail closed.
-      if (leadName && looksLikeMetadata(leadName)) {
-        emit(
-          "error",
-          `Refusing to send DM: lead name "${leadName}" is relationship metadata, ` +
-            `not a real person's name. The intended recipient cannot be verified. ` +
-            `Aborting BEFORE navigation to prevent sending to the wrong person.`,
+      const hasNamePlaceholder =
+        /\[(?:first\s*)?name\]|\{\{\s*(?:first_?)?name\s*\}\}/i.test(
+          String(message || ""),
         );
-        logger.error("LinkedIn DM Safety Block — garbage lead name", {
-          profileUrl,
-          leadName,
-          messageSnippet: messageSnippet(message),
-        });
-        // outcome "failed" with identity-guard reason: executor treats this as
-        // a no-send permanent skip (no verify, no 60–180s cooldown, no retries).
-        return {
-          outcome: "failed",
-          reason:
-            `Lead name "${leadName}" is metadata, not a person's name. ` +
-            `Send aborted by pre-navigation identity guard.`,
-        };
+
+      // A LinkedIn profile URL is the authoritative target. Some discovery
+      // results put mutual-connection text in leadName, but the matching
+      // message is still correctly pinned to this lead_id. Do not lose that
+      // opportunity: navigate to the URL, bind its visible profile identity,
+      // then use that verified name for personalisation and recipient checks.
+      if (leadNameIsMetadata) {
+        emit(
+          "warn",
+          `Lead name is relationship metadata; profile URL will be used as the authoritative identity for this DM.`,
+        );
+      }
+      if (hasNamePlaceholder) {
+        emit(
+          "info",
+          "Message contains a name token; it will be resolved from the verified profile before typing.",
+        );
       }
 
       // Guard 0-pre-B: cross-check message greeting vs leadName BEFORE
       // navigating. If the message says "Hi Duncan" but leadName is "Brian
       // Example", the lead record is internally inconsistent (wrong
       // profile_url, wrong message body, or wrong name) — abort now.
-      if (intendedFirst && message) {
+      if (!leadNameIsMetadata && !hasNamePlaceholder && intendedFirst && message) {
         const greetingMatch0 = message.match(
           /^(?:hi|hey|hello|dear|good\s+(?:morning|afternoon|evening))\s*,?\s+([a-z]+)/i,
         );
@@ -334,6 +321,10 @@ async function sendDirectMessage(
         return "";
       };
 
+      const leadNameIsRelationshipMetadata =
+        /\bmutual\s+connections?\b|\bare\s+mutual\b|\bother\s+mutual\b/i.test(
+          String(leadName || ""),
+        );
       const identityName = extractIdentityName(leadName) || leadName || "";
 
       let pageProfileName = null;
@@ -355,7 +346,7 @@ async function sendDirectMessage(
       // from it, the lead data is corrupt — refuse to send rather than
       // silently passing (which is the bug that let "7 other mutual
       // connections" match "Shadrack Kipkirui Korir").
-      if (leadName && !expectedFirst) {
+      if (leadName && !leadNameIsRelationshipMetadata && !expectedFirst) {
         emit(
           "error",
           `Cannot verify identity: leadName "${leadName}" could not be parsed ` +
@@ -374,7 +365,7 @@ async function sendDirectMessage(
         };
       }
 
-      if (leadName && expectedFirst && pageFirst) {
+      if (leadName && !leadNameIsRelationshipMetadata && expectedFirst && pageFirst) {
         if (pageFirst !== expectedFirst) {
           emit(
             "error",
@@ -397,6 +388,54 @@ async function sendDirectMessage(
           "info",
           `Profile identity verified: "${(pageProfileName || "").trim()}" matches lead "${identityName}".`,
         );
+      }
+
+      // The profile URL was checked against its loaded vanity above. Once its
+      // visible h1 is available, that name becomes the browser-side source of
+      // truth for this attempt. It keeps a dirty discovery label from leaking
+      // into either a message token or the composer recipient verification.
+      if (pageFirst) {
+        const originalLeadName = leadName;
+        leadName = String(pageProfileName || "").trim();
+        if (/\[(?:first\s*)?name\]|\{\{\s*(?:first_?)?name\s*\}\}/i.test(String(message || ""))) {
+          message = String(message).replace(
+            /\[(?:first\s*)?name\]|\{\{\s*(?:first_?)?name\s*\}\}/gi,
+            pageFirst,
+          );
+          emit(
+            "info",
+            `Message name token bound to verified profile "${leadName}".`,
+          );
+        }
+        if (leadNameIsRelationshipMetadata) {
+          // The discovery label can also have been interpolated into the
+          // approved copy (for example "Dennis and Angela are mutuals!").
+          // That sentence is not profile-specific evidence, so remove it
+          // rather than sending relationship metadata to the verified person.
+          const withoutMutualSentence = String(message || "").replace(
+            /(^|\n\s*)[^\n.!?]*\bmutual(?:s|\s+connections?)?[^\n.!?]*[.!?]\s*/gim,
+            "$1",
+          );
+          if (withoutMutualSentence !== message) {
+            message = withoutMutualSentence.trim();
+            emit(
+              "info",
+              "Removed discovery mutual-connection metadata from the profile-bound message.",
+            );
+          }
+          emit(
+            "info",
+            `Verified profile identity "${leadName}" replaced discovery relationship metadata "${originalLeadName}" for this DM attempt.`,
+          );
+        }
+      }
+
+      if (/\[(?:first\s*)?name\]|\{\{\s*(?:first_?)?name\s*\}\}/i.test(String(message || ""))) {
+        return {
+          outcome: "failed",
+          reason:
+            "Message name placeholder could not be resolved from the verified LinkedIn profile.",
+        };
       }
 
       // Check B: message greeting name vs profile page name
@@ -524,71 +563,108 @@ async function sendDirectMessage(
       }
     }
 
-    emit("info", `Clicking Message (${messageMatch.selector})...`);
-
-    // Prefer a real Playwright click (trusted events). DOM evaluate alone
-    // often fails to open the interop messaging overlay on modern LinkedIn.
-    // NEVER use force:true / mouse coordinates near the sticky header —
-    // that hits For Business / Hire with AI.
-    await messageMatch.locator
-      .click({ timeout: 2500 })
-      .catch(async () => {
-        await messageMatch.locator.evaluate((el) => el.click()).catch(() => {});
-      });
-    await humanDelay(450, 750);
-    await closeStrayTabs(page.context(), "linkedin").catch(() => {});
-    // Do NOT press Escape / dismiss UI here — that can close the Premium wall
-    // before we classify it. Probe the active modal first.
-    await diag.capture(page, "after-message-click");
-
-    // ── 3. ACTIVE MODAL PROBE (premium wall vs free composer) ─────────────────
-    // After Message click LinkedIn either:
-    //   A) mounts a free composer, or
-    //   B) shows a Premium / InMail wall modal, or
-    //   C) shows nothing useful.
-    // We MUST classify A/B before any compose-URL navigation. Navigating away
-    // while a Premium modal is open is what produced the embarrassing
-    // "opening compose URL" → "DM editor not found" loop.
     let activeModal = null;
-    {
+    let earlyUi = null;
+    const hasComposeUrl =
+      Boolean(composeHref) && /messaging\/(compose|thread)/i.test(composeHref);
+    let navigatedDirectly = false;
+
+    if (hasComposeUrl) {
+      // The profile CTA is an anchor, not merely a button. Navigating to its
+      // href is more reliable than triggering LinkedIn's overlay click handler
+      // and preserves the browser tab/URL as the messaging route.
+      emit("info", "Opening the profile Message URL directly...");
+      let target = composeHref;
+      try {
+        const url = new URL(composeHref);
+        if (!url.searchParams.has("interop")) {
+          url.searchParams.set("interop", "msgOverlay");
+        }
+        target = url.toString();
+      } catch (_) {}
+
+      // LinkedIn's messaging SPA can have the URL committed and the composer
+      // loading while its document never reaches domcontentloaded within the
+      // usual profile-navigation budget. Give it a full minute, and if that
+      // lifecycle event is still delayed, continue only when the tab really
+      // did land on LinkedIn's messaging route.
+      try {
+        await page.goto(target, { waitUntil: "domcontentloaded", timeout: 60000 });
+      } catch (error) {
+        const landedUrl = page.isClosed() ? "" : page.url();
+        if (!/linkedin\.com\/messaging\/(compose|thread)/i.test(landedUrl)) {
+          throw error;
+        }
+        emit(
+          "warn",
+          "Messaging URL is still loading after 60s; the route committed, so continuing to wait for its UI.",
+        );
+      }
+      navigatedDirectly = true;
+      await humanDelay(400, 700);
+      await closeStrayTabs(page.context(), "linkedin", page).catch(() => {});
+      await dismissLinkedInNavDropdowns(page);
+      await diag.capture(page, "after-compose-url-navigation");
+
+      // Direct navigation can load either the free composer or the Premium /
+      // InMail gate. Classify the gate before searching for an editor.
+      activeModal = await detectActiveMessagingModal(page);
+      if (activeModal?.kind === "premium") {
+        emit("warn", "Premium wall on compose URL — skipping profile.");
+        const blocked = await detectMessagingBlocked(page, 600);
+        await dismissLinkedInNavDropdowns(page);
+        return blocked || {
+          outcome: "premium_required",
+          reason: "LinkedIn Premium required to message this profile",
+        };
+      }
+      earlyUi = await messagingUiAppeared(page, 1500);
+    } else {
+      // Some LinkedIn experiments expose a button instead of a usable href.
+      // Keep a trusted click only for that button-only fallback.
+      emit("info", `Clicking Message (${messageMatch.selector})...`);
+      await messageMatch.locator
+        .click({ timeout: 2500 })
+        .catch(async () => {
+          await messageMatch.locator.evaluate((el) => el.click()).catch(() => {});
+        });
+      await humanDelay(450, 750);
+      await closeStrayTabs(page.context(), "linkedin", page).catch(() => {});
+      await diag.capture(page, "after-message-click");
+
       const modalDeadline = Date.now() + 2800;
       while (Date.now() < modalDeadline) {
         activeModal = await detectActiveMessagingModal(page);
         if (activeModal) break;
         await humanDelay(150, 250);
       }
-    }
 
-    if (activeModal?.kind === "premium") {
-      emit(
-        "warn",
-        `Premium wall detected after Message click${activeModal.snippet ? `: "${String(activeModal.snippet).slice(0, 80)}…"` : ""}`,
-      );
-      const blocked = await detectMessagingBlocked(page, 600);
-      if (blocked) {
-        emit("warn", blocked.reason);
+      if (activeModal?.kind === "premium") {
+        emit("warn", "Premium wall detected after Message click.");
+        const blocked = await detectMessagingBlocked(page, 600);
+        if (blocked) {
+          emit("warn", blocked.reason);
+          await dismissLinkedInNavDropdowns(page);
+          return blocked;
+        }
+        await dismissPremiumDialog(page, 1500).catch(() => {});
         await dismissLinkedInNavDropdowns(page);
-        return blocked;
+        return {
+          outcome: "premium_required",
+          reason: "LinkedIn Premium required to message this profile",
+        };
       }
-      // detectActiveMessagingModal saw premium even if detectMessagingBlocked
-      // failed to re-find it — still treat as premium_required.
-      await dismissPremiumDialog(page, 1500).catch(() => {});
-      await dismissLinkedInNavDropdowns(page);
-      return {
-        outcome: "premium_required",
-        reason: "LinkedIn Premium required to message this profile",
-      };
-    }
 
-    // Wait briefly for free composer UI.
-    let earlyUi =
-      activeModal?.kind === "composer"
-        ? { mode: "shadow", frame: null, reason: "active modal has free composer" }
-        : await messagingUiAppeared(page, 1000);
+      earlyUi =
+        activeModal?.kind === "composer"
+          ? { mode: "shadow", frame: null, reason: "active modal has free composer" }
+          : await messagingUiAppeared(page, 1000);
+    }
 
     // Fallback: ONLY if no modal and no UI mounted. Never navigate when a
     // premium/other modal is covering the page.
     if (
+      !navigatedDirectly &&
       !earlyUi &&
       !activeModal &&
       composeHref &&
@@ -618,7 +694,7 @@ async function sendDirectMessage(
         .goto(target, { waitUntil: "domcontentloaded", timeout: 25000 })
         .catch(() => {});
       await humanDelay(400, 700);
-      await closeStrayTabs(page.context(), "linkedin").catch(() => {});
+      await closeStrayTabs(page.context(), "linkedin", page).catch(() => {});
       await dismissLinkedInNavDropdowns(page);
 
       // Compose URL often lands on a Premium wall for non-1st / gated leads.
@@ -826,6 +902,7 @@ async function sendDirectMessage(
         msgCtx,
         activeEditorLocator,
         leadName,
+        { composeUrl: composeHref },
       ).catch((err) => ({
         ok: false,
         reason: `Recipient verification could not run: ${err.message}. Send aborted by recipient-verification guard.`,
@@ -900,6 +977,7 @@ async function sendDirectMessage(
           retryMsgCtx,
           activeEditorLocator,
           leadName,
+          { composeUrl: composeHref },
         ).catch((err) => ({
           ok: false,
           reason: `Recipient verification after editor retry could not run: ${err.message}.`,
@@ -1022,7 +1100,7 @@ async function sendDirectMessage(
 
     if (sendBtnData && !sendBtnData.disabled) {
       emit("info", `Send button found and enabled, attempting click...`);
-      await closeStrayTabs(page.context(), "linkedin").catch(() => {});
+      await closeStrayTabs(page.context(), "linkedin", page).catch(() => {});
       sendSuccessful = await clickSendButtonRobust(
         page,
         sendBtnData.locator,
@@ -1043,7 +1121,7 @@ async function sendDirectMessage(
     // ── 7a. Keyboard Enter fallback ───────────────────────────────────────────
     if (!sendSuccessful) {
       emit("info", "Executing keyboard Enter fallback.");
-      await closeStrayTabs(page.context(), "linkedin").catch(() => {});
+      await closeStrayTabs(page.context(), "linkedin", page).catch(() => {});
       await ensureSelectionInEditor(activeEditorLocator);
       await humanDelay(80, 140);
 
@@ -1111,7 +1189,7 @@ async function sendDirectMessage(
     return { outcome: "failed", reason: err.message };
   } finally {
     removeNoNewTabsGuard();
-    await closeStrayTabs(page.context(), "linkedin").catch(() => {});
+    await closeStrayTabs(page.context(), "linkedin", page).catch(() => {});
     // Flush diagnostics for this DM attempt
     diag.flush(profileUrl);
     // Clean up ALL data-gtss-* tags regardless of outcome — run in both contexts

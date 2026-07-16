@@ -2,7 +2,7 @@
  * Profile action & messaging-blocked tests.
  *
  * Verifies:
- *  - findProfileMessageAction locates Message from the profile More menu
+ *  - findProfileMessageAction locates the visible primary profile Message CTA
  *  - detectMessagingBlocked classifies LinkedIn premium messaging blocks
  */
 
@@ -12,10 +12,10 @@ const { chromium } = require("playwright");
 
 const { SKIP, __private } = require("./_helpers");
 
-// ─── test 8: profile Message action can be hidden in More menu ───────────────
+// ─── test 8: visible primary Message action is accepted ──────────────────────
 
 test(
-  "findProfileMessageAction locates Message from the profile More menu",
+  "findProfileMessageAction locates the visible primary profile Message CTA",
   { skip: SKIP },
   async () => {
     const browser = await chromium.launch({ headless: true });
@@ -28,17 +28,14 @@ test(
         <main>
           <section class="pv-top-card" style="position:relative;margin-top:90px;width:700px;height:260px;">
             <h1 class="text-heading-xlarge">Lilian Otieno</h1>
-            <button aria-label="More actions" style="width:120px;height:40px;">More</button>
+            <button style="width:120px;height:40px;">Message</button>
           </section>
         </main>
-        <div class="artdeco-dropdown__content" role="menu" style="display:block;position:absolute;top:170px;left:20px;width:220px;height:160px;">
-          <button aria-label="Message Lilian Otieno" style="width:180px;height:36px;">Message</button>
-        </div>
       `);
 
       const message = await __private.findProfileMessageAction(page, 1200);
-      assert.ok(message, "message action should be found inside More menu");
-      assert.match(message.selector, /More menu/);
+      assert.ok(message, "visible primary profile Message action should be found");
+      assert.match(message.selector, /compose:Message/);
     } finally {
       await browser.close();
     }
