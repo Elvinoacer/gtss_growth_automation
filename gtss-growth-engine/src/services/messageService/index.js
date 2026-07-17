@@ -21,7 +21,7 @@
  */
 
 const { registerJobStream, emitJobEvent, closeJobStream } = require("./sseInfrastructure");
-const { CHAR_LIMITS, getCharLimit } = require("./templates");
+const { CHAR_LIMITS, getCharLimit, sanitizeOutreachBody } = require("./templates");
 const { generateFromTemplate } = require("./generateFromTemplate");
 const { generateViaAI } = require("./generateViaAI");
 const { generateMessages } = require("./generateMessages");
@@ -41,4 +41,5 @@ module.exports = {
   closeJobStream,
   getCharLimit,
   CHAR_LIMITS,
+  sanitizeOutreachBody,
 };

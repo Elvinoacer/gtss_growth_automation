@@ -17,7 +17,12 @@ const { getDb } = require("../../db/database");
 const { getPrimaryPlatform } = require("../platformCatalog");
 const { callGeminiText, unwrapGeminiText } = require("../aiService");
 const logger = require("../../utils/logger");
-const { getCharLimit, getFirstName, stripCodeFences } = require("./templates");
+const {
+  getCharLimit,
+  getFirstName,
+  stripCodeFences,
+  sanitizeOutreachBody,
+} = require("./templates");
 
 async function generateFollowUp(leadId) {
   const db = getDb();
@@ -48,6 +53,7 @@ async function generateFollowUp(leadId) {
   const prompt = `Generate a brief, non-pushy follow-up for ${resolvedPlatform}.
 Name: ${lead.name}. Sent ${daysSince} days ago.
 Original: "${originalMsg ? originalMsg.body.slice(0, 100) : ""}"
+Rules: plain text only; never use placeholder tokens like [link], [url], or (link).
 Return ONLY the message body (max 300 chars).`;
 
   try {
@@ -58,7 +64,9 @@ Return ONLY the message body (max 300 chars).`;
       source: generation.source || "unknown",
       model: generation.model,
     });
-    let cleanBody = stripCodeFences(body).replace(/^["']|["']$/g, "");
+    let cleanBody = sanitizeOutreachBody(
+      stripCodeFences(body).replace(/^["']|["']$/g, ""),
+    );
 
     // Strict character limit enforcement for follow-up DMs
     const limit = getCharLimit(resolvedPlatform, "dm");

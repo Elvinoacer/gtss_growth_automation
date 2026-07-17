@@ -30,6 +30,7 @@ const {
   getCharLimit,
   extractPainPoint,
   stripCodeFences,
+  sanitizeOutreachBody,
 } = require("./templates");
 const { generateFromTemplate } = require("./generateFromTemplate");
 
@@ -78,6 +79,11 @@ async function generateViaAI(lead) {
     return result;
   }
 
+  const websiteUrl = String(ctx.ctx_biz_website || "").trim() || null;
+  const websiteLine = websiteUrl
+    ? `Business website (only include if a real URL is needed; never invent placeholders): ${websiteUrl}`
+    : "Business website: none configured — do NOT invent or placeholder a link.";
+
   const prompt = `Write a short, genuine outreach ${messageType === "connect" ? "connection note" : "direct message"} for ${resolvedPlatform}.
 Lead name: ${lead.name || "there"}
 Lead role: ${lead.role || "unknown"}
@@ -89,19 +95,25 @@ Relevant pain point: ${extractPainPoint(lead.score_reason, painPoints)}
 Sender: ${ctx.ctx_sender_name}
 Sign-off: ${ctx.ctx_sender_sign_off}
 Call to action: ${ctx.ctx_content_cta}
+${websiteLine}
 
 Rules:
 - Max ${limit} characters including spaces.
 - Plain text only, no markdown, no emojis unless they fit the tone naturally.
 - Open with the lead's first name, end with the sign-off.
 - Be specific about the pain point — don't be generic.
-- One clear CTA, low friction.
+- One clear CTA, low friction. Prefer a question ("open to a quick demo?") over a URL.
+- NEVER write placeholder tokens such as [link], [url], [website], (link), <link>, or "insert link here".
+- If you include a URL it MUST be the exact business website above — never a fake or placeholder link.
 Return ONLY the message body, no explanations or quotes.`;
 
   try {
     const generation = await callGeminiText(prompt, { timeoutMs: 25_000 });
     const raw = unwrapGeminiText(generation);
-    let body = stripCodeFences(raw).replace(/^["']|["']$/g, "");
+    let body = sanitizeOutreachBody(
+      stripCodeFences(raw).replace(/^["']|["']$/g, ""),
+      { websiteUrl },
+    );
     if (body.length > limit) body = body.slice(0, limit);
 
     logger.db("info", "outreach", "message_ai", "AI outreach message generated", {

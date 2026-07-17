@@ -935,9 +935,18 @@ async function sendDirectMessage(
       }
 
       if (recipientCheck?.actual) {
+        const via =
+          recipientCheck.via === "compose_url" ||
+          recipientCheck.via === "compose_url_override_mismatch_scrape"
+            ? ` (via ${recipientCheck.via}${
+                recipientCheck.scrapedNameIgnored
+                  ? `; ignored scrape "${recipientCheck.scrapedNameIgnored}"`
+                  : ""
+              })`
+            : "";
         emit(
           "info",
-          `Modal recipient verified: "${recipientCheck.actual}" matches lead "${leadName}".`,
+          `Modal recipient verified: "${recipientCheck.actual}" matches lead "${leadName}"${via}.`,
         );
       }
     }

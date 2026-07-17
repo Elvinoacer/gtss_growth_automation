@@ -145,8 +145,27 @@ async function findBestDmOverlay(page, timeout = 1500) {
           // Try to extract the recipient name from the modal header. Used
           // both for scoring (chat bubbles have a recipient header; compose
           // modals typically don't) and for downstream recipient verification.
+          //
+          // IMPORTANT: never read `.msg-s-message-group__name` — that is the
+          // *sender* of a prior message (often the logged-in user) on
+          // existing threads, not the recipient.
           const getRecipientName = (el) => {
+            const isInsideMessageList = (node) =>
+              Boolean(
+                node.closest(
+                  ".msg-s-event-listitem, .msg-s-message-group, .msg-s-message-list-content, [data-view-name='message-list-item']",
+                ),
+              );
             const headerSelectors = [
+              // Existing-thread profile card + compose chips first
+              ".msg-s-profile-card .artdeco-entity-lockup__title .truncate",
+              ".msg-s-profile-card .artdeco-entity-lockup__title",
+              '.msg-s-profile-card a[href*="/in/"]',
+              ".msg-form__recipient-chip",
+              ".msg-connections-typeahead__recipient-token",
+              ".msg-form__recipients .artdeco-pill__text",
+              ".msg-form__recipients .artdeco-pill",
+              // Classic overlay headers
               ".msg-overlay-bubble-header__name",
               ".msg-overlay-conversation-bubble__name",
               ".msg-convo-wrapper__name",
@@ -158,19 +177,20 @@ async function findBestDmOverlay(page, timeout = 1500) {
             ];
             for (const sel of headerSelectors) {
               const node = el.querySelector(sel);
-              if (node) {
-                const text = (node.textContent || node.getAttribute("title") || "")
-                  .trim();
-                if (text && text.length > 0 && text.length < 100) {
-                  return text;
-                }
+              if (!node || isInsideMessageList(node)) continue;
+              const text = (node.textContent || node.getAttribute("title") || "")
+                .replace(/\s+/g, " ")
+                .replace(/[×x]\s*$/i, "")
+                .trim();
+              if (text && text.length > 0 && text.length < 100) {
+                return text;
               }
             }
             return null;
           };
 
           const overlaySelectors =
-            ".msg-overlay-conversation-bubble, .msg-convo-wrapper, [role=\"dialog\"], .artdeco-modal--type-is-messaging";
+            ".msg-overlay-conversation-bubble, .msg-convo-wrapper, [role=\"dialog\"], .artdeco-modal--type-is-messaging, .scaffold-layout__detail, .msg-s-message-list-container";
 
           const overlays = [...document.querySelectorAll(overlaySelectors)]
             .filter(visible)

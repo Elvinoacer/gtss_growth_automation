@@ -25,6 +25,9 @@ const platformPolicies = require("../../config/platformPolicies");
 const limits = require("../../config/limits");
 const { getContext } = require("../../services/contextService");
 const {
+  sanitizeOutreachBody,
+} = require("../../services/messageService/templates");
+const {
   calculateBackoffDelay,
   recordCampaignEvent,
   getNextDayBusinessHourWindow,
@@ -675,6 +678,33 @@ async function processDmQueue(page, options = {}) {
 
       // Skip this job if any safety guard triggered above
       if (skipJob) continue;
+
+      // ── 7b. Strip placeholder tokens like `[link]` before browser send ─────
+      // AI sometimes invents "Book a demo: [link]" when no URL was provided.
+      // Sanitize here so already-approved messages are fixed at send time.
+      if (messageBody) {
+        const ctxForSanitize = getContext();
+        const cleanedBody = sanitizeOutreachBody(messageBody, {
+          websiteUrl: ctxForSanitize.ctx_biz_website || null,
+        });
+        if (cleanedBody !== messageBody) {
+          queueLog(
+            "info",
+            "dm_queue",
+            job.id,
+            "Sanitized placeholder link tokens from message body before send.",
+          );
+          messageBody = cleanedBody;
+          // Persist so retries / CRM don't re-send the dirty body.
+          if (messageId) {
+            try {
+              db.prepare(
+                "UPDATE messages SET body = ? WHERE id = ?",
+              ).run(cleanedBody, messageId);
+            } catch (_) {}
+          }
+        }
+      }
 
       report.processed++;
       queueLog(

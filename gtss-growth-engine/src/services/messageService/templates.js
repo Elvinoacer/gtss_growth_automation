@@ -113,6 +113,87 @@ function stripCodeFences(text) {
   return cleaned.trim();
 }
 
+/**
+ * Clean AI/template outreach text so we never send placeholder tokens like
+ * `[link]`, `[url]`, or empty markdown links.
+ *
+ * Production: Gemini invented `Book a free 15-min demo to see how: [link]`
+ * because the prompt asked for a CTA without a real URL. This sanitizer is
+ * the hard backstop; the prompt also forbids placeholders.
+ *
+ * @param {string} text
+ * @param {{ websiteUrl?: string|null }} [opts]
+ * @returns {string}
+ */
+function sanitizeOutreachBody(text, { websiteUrl = null } = {}) {
+  let body = String(text || "");
+  if (!body) return "";
+
+  const site = String(websiteUrl || "")
+    .trim()
+    .replace(/\s+/g, "");
+  const hasSite = /^https?:\/\/\S+/i.test(site);
+
+  // Markdown images/links → plain text, optionally keep a real http(s) URL.
+  body = body.replace(/!\[([^\]]*)\]\((.*?)\)/g, "$1");
+  body = body.replace(/\[([^\]]+)\]\((.*?)\)/g, (_, label, href) => {
+    const h = String(href || "").trim();
+    if (/^https?:\/\/\S+/i.test(h)) {
+      return `${label} ${h}`.trim();
+    }
+    // Placeholder hrefs like (link), (url), (your-link) — drop the wrapper.
+    return label;
+  });
+
+  // Bare placeholder tokens the model invents when it wants a URL slot.
+  // If we have a real business website, substitute it; otherwise remove.
+  const placeholderRe =
+    /\[(?:link|url|website|site|demo(?:\s*link)?|insert\s*link|your\s*link|cta\s*link|here)\]/gi;
+  if (hasSite) {
+    body = body.replace(placeholderRe, site);
+  } else {
+    body = body.replace(placeholderRe, "");
+  }
+
+  // Parenthetical placeholders: (link), (insert url), etc.
+  body = body.replace(
+    /\(\s*(?:link|url|website|insert\s*link|your\s*link)\s*\)/gi,
+    hasSite ? site : "",
+  );
+
+  // Angle-bracket placeholders: <link>, <url>
+  body = body.replace(
+    /<\s*(?:link|url|website|insert\s*link)\s*>/gi,
+    hasSite ? site : "",
+  );
+
+  // Common AI filler left after stripping a missing URL:
+  // "to see how:", "see how:", "click here:", dangling "to" at EOL, etc.
+  body = body.replace(
+    /\b(?:to\s+)?(?:see how|click here|visit here|check here|learn more here)\s*:?\s*(?=\n|$|[.!?])/gi,
+    "",
+  );
+  // "Book a free 15-min demo to" → "Book a free 15-min demo"
+  body = body.replace(/\bto\s*(?=\n|$)/gi, "");
+  // Trailing ":" before newline after CTA cleanup ("demo:")
+  body = body.replace(/:\s*(?=\n|$)/g, (match, offset, full) => {
+    const rest = full.slice(offset + match.length);
+    if (!rest || /^\s*(\n|$)/.test(rest)) return "";
+    return match;
+  });
+
+  // Whitespace tidy
+  body = body
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/ +\./g, ".")
+    .replace(/[ \t]+([,;!?])/g, "$1")
+    .trim();
+
+  return body;
+}
+
 module.exports = {
   CHAR_LIMITS,
   getCharLimit,
@@ -122,4 +203,5 @@ module.exports = {
   getFirstName,
   extractPainPoint,
   stripCodeFences,
+  sanitizeOutreachBody,
 };

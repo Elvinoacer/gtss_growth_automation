@@ -25,6 +25,7 @@ const {
   fillTemplate,
   getFirstName,
   extractPainPoint,
+  sanitizeOutreachBody,
 } = require("./templates");
 
 /**
@@ -68,6 +69,12 @@ function generateFromTemplate(lead) {
   let body = template
     ? fillTemplate(template, templateVars)
     : `Hi ${templateVars.lead_name},\n\n${ctx.ctx_product_value_prop}\n\nWould love to connect!\n\n${ctx.ctx_sender_sign_off}`;
+
+  // Strip any leftover placeholder tokens (e.g. a template that still has [link])
+  // and optionally substitute the real business website.
+  body = sanitizeOutreachBody(body, {
+    websiteUrl: ctx.ctx_biz_website || null,
+  });
 
   // Strict character limit enforcement
   const limit = getCharLimit(resolvedPlatform, messageType);
