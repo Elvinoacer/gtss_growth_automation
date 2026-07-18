@@ -81,6 +81,34 @@ jobs:
           # so the workflow_dispatch tag input can be resolved.
           fetch-depth: 0
 
+      # electron-builder publishes to the GitHub release matching
+      # desktop/package.json "version" (tag vX.Y.Z), NOT the git tag alone.
+      # v1.0.1 was tagged while package.json still said 1.0.0 — builds
+      # succeeded but every asset was skipped as "existing release >2h old".
+      # Fail fast when they diverge so empty releases can't look "green".
+      - name: Verify package version matches git tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF_NAME="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag || '' }}" ]; then
+            REF_NAME="${{ inputs.tag }}"
+          fi
+          # Accept tags like v1.0.2 or bare 1.0.2
+          TAG_VERSION="${REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./desktop/package.json').version")"
+          echo "git ref:     ${REF_NAME}"
+          echo "tag version: ${TAG_VERSION}"
+          echo "package.json:${PKG_VERSION}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::desktop/package.json version ($PKG_VERSION) does not match git tag ($REF_NAME → $TAG_VERSION)."
+            echo "Bump desktop/package.json (and lockfile) before tagging, e.g.:"
+            echo "  (cd desktop && npm version $TAG_VERSION --no-git-tag-version)"
+            echo "  git commit -am 'chore(release): $TAG_VERSION' && git tag v$TAG_VERSION && git push origin main v$TAG_VERSION"
+            exit 1
+          fi
+          echo "Version OK — will publish as v${PKG_VERSION}"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -216,7 +244,16 @@ jobs:
           if [ -n "$APPLE_ID_RAW" ]; then export APPLE_ID="$APPLE_ID_RAW"; fi
           if [ -n "$APPLE_APP_SPECIFIC_PASSWORD_RAW" ]; then export APPLE_APP_SPECIFIC_PASSWORD="$APPLE_APP_SPECIFIC_PASSWORD_RAW"; fi
           if [ -n "$APPLE_TEAM_ID_RAW" ]; then export APPLE_TEAM_ID="$APPLE_TEAM_ID_RAW"; fi
-          npx electron-builder ${{ matrix.targets }} --publish always
+          # Fail if electron-builder skips upload (v1.0.1 silent-empty-release bug:
+          # package.json still 1.0.0 → tried to attach to week-old v1.0.0 → skipped).
+          set -o pipefail
+          LOG="$(mktemp)"
+          npx electron-builder ${{ matrix.targets }} --publish always 2>&1 | tee "$LOG"
+          if grep -q "skipped publishing" "$LOG" \
+            || grep -q "existing release published more than 2 hours ago" "$LOG"; then
+            echo "::error::electron-builder skipped publishing assets (version/tag mismatch or stale release). See log above."
+            exit 1
+          fi
         env:
           # GitHub token — auto-provided by Actions. Must have `contents: write`
           # (granted at the top of this file).
@@ -256,7 +293,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-${{ matrix.os }}
-          path: ${{ matrix.artifact_glob }}
+          # Brace globs (*.{deb,rpm}) are unreliable in upload-artifact;
+          # upload the whole dist tree instead (still small vs source).
+          path: desktop/dist/**
           if-no-files-found: warn
           retention-days: 30
 
