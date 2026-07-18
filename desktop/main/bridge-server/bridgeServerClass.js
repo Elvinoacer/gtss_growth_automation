@@ -24,6 +24,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const { secureWriteSync } = require("../secure-write");
 
 const { DEFAULT_PORT } = require("./constants");
 const { dispatchRoute } = require("./routeHandlers");
@@ -171,7 +172,7 @@ class BridgeServer {
 
   _markSigninComplete() {
     try {
-      fs.writeFileSync(this._sentinelPath(), new Date().toISOString(), {
+      secureWriteSync(this._sentinelPath(), new Date().toISOString(), {
         mode: 0o600,
       });
     } catch (err) {

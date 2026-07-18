@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Standard Electron hardened-runtime entitlements.
+
+  Required when the app is signed with a Developer ID certificate and
+  hardenedRuntime: true (see desktop/electron-builder.yml). Without these,
+  Electron's V8 JIT / unsigned executable memory / library loading can
+  fail at launch with "not valid for use in process" errors.
+
+  Harmless when the build is unsigned (signing is skipped without CSC_LINK).
+-->
+<plist version="1.0">
+  <dict>
+    <!-- Allow Electron / V8 JIT compilation -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <!-- Allow unsigned executable memory (Electron renderer / native modules) -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- Allow loading of third-party libraries (better-sqlite3, sharp, etc.) -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- Network client (Gemini API, Gmail SMTP, GitHub auto-update checks) -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <!-- Localhost server (Express on 127.0.0.1 + bridge server) -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+  </dict>
+</plist>

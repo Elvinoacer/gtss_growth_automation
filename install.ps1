@@ -117,8 +117,10 @@ function Install-Native {
     # MSI: msiexec /i <file> /qb   (quiet, basic UI)
     Start-Process msiexec.exe -ArgumentList "/i `"$dest`" /qb" -Wait
   } else {
-    # NSIS: /S = silent, /peruser = install for current user only (no UAC)
-    Start-Process -FilePath $dest -ArgumentList "/S","/peruser" -Wait
+    # NSIS: /S = silent. Per-user install (no UAC) comes from
+    # electron-builder.yml `perMachine: false`, not from a /peruser flag
+    # (electron-builder's NSIS template does not recognize /peruser).
+    Start-Process -FilePath $dest -ArgumentList "/S" -Wait
   }
 
   Write-GtssOk "Installer completed. GTSS Growth Engine is in your Start Menu."

@@ -201,6 +201,10 @@ class ServerManager {
     Object.assign(childEnv, ourEnv);
 
     childEnv.DOTENV_CONFIG_PATH = envPath;
+    // envWriter.js (settings routes) also reads GTSS_ENV_PATH so runtime
+    // writes (passphrase change, pipeline settings) hit the same writable
+    // .env — never the read-only bundled server tree.
+    childEnv.GTSS_ENV_PATH = envPath;
     childEnv.PORT = String(port);
     childEnv.NODE_ENV = "production";
     // Force data paths into DATA_ROOT (overrides anything in .env so the

@@ -115,6 +115,7 @@ win:
   icon: build/icon.ico
   publisherName: GTSS
   # Signed builds require a code-signing cert; omitted for the open-source build.
+  artifactName: GTSS-Growth-Engine-Setup-${version}-${arch}.${ext}
 
 nsis:
   oneClick: false
@@ -129,11 +130,13 @@ nsis:
   uninstallerIcon: build/icon.ico
   installerHeaderIcon: build/icon.ico
   deleteAppDataOnUninstall: false
+  artifactName: GTSS-Growth-Engine-Setup-${version}-${arch}.${ext}
 
 msi:
   oneClick: false
   perMachine: false
   runAfterFinish: true
+  artifactName: GTSS-Growth-Engine-${version}-${arch}.${ext}
 
 # ─── Linux ───────────────────────────────────────────────────────────────────
 linux:
@@ -152,6 +155,7 @@ linux:
   description: GTSS Growth Engine is a local-first desktop application that helps founders discover, qualify, and reach out to potential clients across LinkedIn, X (Twitter), Facebook, and Instagram — without paid SaaS or cloud servers.
 
 deb:
+  artifactName: GTSS-Growth-Engine-${version}-${arch}.${ext}
   # Electron's own shared-library dependencies (libnss3, libatk, etc.) plus
   # `libvips` (needed by sharp at runtime when the prebuilt sharp-libvips
   # package isn't bundled — we exclude it from extraResources for platforms
@@ -181,6 +185,7 @@ deb:
     - google-chrome-stable | chromium-browser | chromium
 
 rpm:
+  artifactName: GTSS-Growth-Engine-${version}-${arch}.${ext}
   depends:
     - nss
     - atk
@@ -214,6 +219,11 @@ mac:
   category: public.app-category.business
   hardenedRuntime: true
   gatekeeperAssess: false
+  # Entitlements required once a Developer ID cert is present (hardened
+  # runtime without these is a known launch-failure mode for Electron).
+  # Harmless when unsigned (signing is skipped without CSC_LINK).
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
   # Notarization requires an Apple Developer ID — left as a CI secret.
   # notarize:
   #   teamId: <TEAM_ID>

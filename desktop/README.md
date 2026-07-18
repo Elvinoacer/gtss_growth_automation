@@ -15,13 +15,17 @@ desktop/
 ├── main/                    # Electron main process (Node.js)
 │   ├── main.js              # Entry point — creates windows, tray, IPC
 │   ├── server-manager.js    # Spawns + supervises gtss-growth-engine
-│   ├── cdp-manager.js       # Cross-platform port of launch-chrome.sh
+│   ├── cdp-manager/         # Cross-platform port of launch-chrome.sh
+│   │   └── index.js
 │   ├── lifecycle.js         # High-level start/stop orchestration
 │   ├── log-stream.js        # In-memory log ring buffer
 │   ├── first-run.js         # Onboarding wizard logic
 │   ├── auto-updater.js      # electron-updater wrapper
 │   ├── env-bootstrap.js     # Generates .env, ENCRYPTION_KEY, dirs
-│   └── ipc-handlers.js      # Bridges renderer ↔ main
+│   ├── secure-write.js      # Owner-only file writes (POSIX + Windows ACL)
+│   ├── bridge-server/       # Localhost-only HTTP bridge for the web app
+│   └── ipc-handlers/        # Bridges renderer ↔ main
+│       └── index.js
 ├── preload/
 │   └── preload.js           # Security boundary — exposes window.gtss.*
 ├── renderer/                # UI (HTML/CSS/JS, no framework)
@@ -33,7 +37,7 @@ desktop/
 │   └── onboarding.js        # Onboarding logic
 ├── cli/
 │   └── gtss-growth.js       # npm global bin (developer install path)
-├── build/                   # Icons (icon.png, icon.ico, icon.icns, tray-icon.png)
+├── build/                   # Icons + macOS entitlements
 ├── electron-builder.yml     # Build config for all 6 installer formats
 ├── package.json             # Electron + dev dependencies
 └── README.md                # This file
@@ -59,30 +63,39 @@ npx playwright install chromium
 
 ## How the server is launched
 
-`ServerManager.start()` detects and uses the **system Node.js** binary
-(`node` on PATH). This is critical because the server's `node_modules/`
-(especially `better-sqlite3`) are compiled against the system Node.js ABI —
-spawning the server with Electron's bundled Node.js would cause
-`NODE_MODULE_VERSION mismatch` errors.
+`ServerManager.start()` **always** spawns the server under Electron's
+bundled Node.js via `ELECTRON_RUN_AS_NODE=1` — never the system `node` on
+PATH. This is intentional:
 
-The user already has Node.js installed (it's required for `npm install` in
-`gtss-growth-engine/`), so this approach works without any extra setup. If
-system Node is somehow missing, we fall back to `ELECTRON_RUN_AS_NODE=1`
-with Electron's bundled Node and emit a clear warning.
+1. **End users do not have Node.js installed.** Native installers
+   (`.deb` / `.exe` / `.dmg`) ship the full engine; requiring a system
+   Node would break every non-developer install.
+2. **Native modules are rebuilt for Electron's ABI.** Build scripts run
+   `electron-rebuild` against `gtss-growth-engine/node_modules/` so
+   `better-sqlite3` / `sharp` load under Electron's `NODE_MODULE_VERSION`.
+   Spawning with a system Node would throw `NODE_MODULE_VERSION mismatch`.
+3. **One deterministic runtime** eliminates "works on my machine" version
+   skew across user machines.
 
-The child's `cwd` is the gtss-growth-engine source root, so all of the
-server's `path.join(__dirname, "..", "public")` references resolve
-correctly.
+If a power user wants to run the server under their own Node (e.g. for
+`node --inspect` debugging), they can clone the repo and run `npm start`
+inside `gtss-growth-engine/` directly.
 
-**Env injection:** the server calls `require('dotenv').config()` without
-args, which reads `.env` from `process.cwd()`. If the user previously ran
-`setup.sh`, that file exists with stale values. To make sure our
-onboarding-generated values win, `ServerManager` loads our `DATA_ROOT/.env`
-and injects every key into the child's process env. Process env vars take
-precedence over dotenv-loaded vars, so our `ENCRYPTION_KEY`,
+The child's `cwd` is the gtss-growth-engine source root (read-only when
+packaged), so all of the server's `path.join(__dirname, "..", "public")`
+references resolve to the bundled static frontend. Writable state
+(uploads, media, DB, sessions, `.env`) is pointed into `userData` via env
+vars — see `EnvBootstrap.getRuntimeEnvOverrides()`.
+
+**Env injection:** `ServerManager` loads `DATA_ROOT/.env` (the file
+onboarding generated) and injects every key into the child's process env.
+It also sets `DOTENV_CONFIG_PATH` and `GTSS_ENV_PATH` to that same path so
+runtime writes from settings routes (passphrase change, pipeline flags)
+hit the writable file, not the read-only bundled tree. Process env vars
+take precedence over dotenv-loaded vars, so our `ENCRYPTION_KEY`,
 `PASSPHRASE_HASH`, `GEMINI_API_KEY`, etc. always win. We also force
-`DB_PATH`, `SESSION_DIR`, and other path keys into `DATA_ROOT` so the
-server reads from the right place regardless of legacy config.
+`DB_PATH`, `SESSION_DIR`, `UPLOADS_DIR`, `MEDIA_DIR`, `CDP_PROFILE_DIR`,
+`PROFILES_DIR`, and related path keys into `DATA_ROOT`.
 
 **Crash diagnostics:** when the server exits with a non-zero code,
 `ServerManager` scans the last 200 stderr lines for known error signatures
@@ -114,7 +127,7 @@ and violate Google's distribution terms.
 
 The renderer talks to the main process exclusively through `window.gtss.*`,
 exposed by `preload/preload.js`. Each method maps 1:1 to an
-`ipcMain.handle` channel in `main/ipc-handlers.js`.
+`ipcMain.handle` channel in `main/ipc-handlers/`.
 
 | Channel | Purpose |
 |---------|---------|
@@ -136,8 +149,12 @@ exposed by `preload/preload.js`. Each method maps 1:1 to an
 - The preload script is the only thing that can call `ipcRenderer`, and it
   exposes a tightly-whitelisted `window.gtss` API.
 - All user secrets (passphrase hash, Gemini key, Gmail creds) live in the
-  `.env` file inside `userData`, with `0o600` permissions. They never enter
-  the renderer, never get logged, and never get sent over IPC.
+  `.env` file inside `userData`. On POSIX they are written with `0o600`
+  permissions; on Windows, `secure-write.js` additionally runs `icacls` to
+  strip inherited ACLs and grant only the current user full control. Secrets
+  never enter the renderer, never get logged, and never get sent over IPC.
+- The main Express server and the bridge server both bind to `127.0.0.1`
+  only — nothing is exposed on the LAN.
 
 ## Building installers
 
@@ -149,7 +166,8 @@ npx electron-builder --linux deb rpm AppImage # Linux
 npx electron-builder --mac dmg                # macOS
 ```
 
-Or use the top-level helper scripts:
+Or use the top-level helper scripts (bash — on Windows use Git Bash or WSL;
+CI already forces `shell: bash`):
 
 ```bash
 ../scripts/build-windows.sh

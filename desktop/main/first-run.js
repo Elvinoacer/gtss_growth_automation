@@ -15,6 +15,7 @@
 
 const path = require("path");
 const fs = require("fs");
+const { secureWriteSync } = require("./secure-write");
 
 class FirstRun {
   constructor({ envBootstrap }) {
@@ -34,7 +35,7 @@ class FirstRun {
     if (geminiKey) {
       this.env.setGeminiKey(geminiKey);
     }
-    fs.writeFileSync(this.sentinel, new Date().toISOString(), { mode: 0o600 });
+    secureWriteSync(this.sentinel, new Date().toISOString(), { mode: 0o600 });
   }
 }
 

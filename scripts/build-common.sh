@@ -135,5 +135,23 @@ prepare_build_environment() {
       }
   )
 
+  # ─── 4. Verify the rebuilt native module actually loads under Electron ──
+  # electron-rebuild's exit code only means the rebuild *command* finished.
+  # It does not guarantee the resulting .node file is the right ABI for this
+  # Electron version. Requiring better-sqlite3 under ELECTRON_RUN_AS_NODE=1
+  # turns a future silent ABI mismatch into a clear build-time failure.
+  echo ">> Verifying better-sqlite3 loads under Electron's bundled Node..."
+  (
+    cd "$engine_dir"
+    # `require('electron')` returns the absolute path to the Electron binary
+    # (electron.exe / Electron.app/.../Electron / electron).
+    electron_bin="$(cd "$desktop_dir" && node -p "require('electron')")"
+    if [ -z "$electron_bin" ] || [ ! -e "$electron_bin" ]; then
+      echo "ERROR: could not resolve Electron binary path for ABI check" >&2
+      exit 1
+    fi
+    ELECTRON_RUN_AS_NODE=1 "$electron_bin" -e "require('better-sqlite3'); console.log('better-sqlite3 OK under Electron ABI')"
+  )
+
   echo ">> Build environment ready."
 }

@@ -58,6 +58,22 @@ scripts/build-all.sh        # Current platform
 scripts/build-all.sh --all  # All platforms (cross-compile, unreliable)
 ```
 
+> **Windows note:** `scripts/build-*.sh` are bash scripts. On a Windows host
+> run them from **Git Bash** or **WSL**. CI already forces `shell: bash` in
+> `.github/workflows/release.yml`, so tagged releases do not need this.
+
+### Linux desktop notes (Wayland / tray)
+
+The app is designed to keep running in the system tray after the window is
+closed. On some Linux desktop environments (especially minimal or
+Wayland-only sessions without a tray implementation), the tray icon may not
+appear. If the window disappears and you cannot reopen it:
+
+1. Look for a tray / status-area icon for **GTSS Growth Engine**.
+2. If none is present, stop the process and relaunch from your applications
+   menu: `killall gtss-growth-desktop` (or `killall "GTSS Growth Engine"`),
+   then open the app again.
+
 ## Code signing
 
 ### Windows

@@ -149,12 +149,18 @@ for a in data.get("assets", []):
       ;;
   esac
 
-  echo "$assets" | while IFS=$'\t' read -r name url size; do
+  # IMPORTANT: do NOT pipe into `while read` — that creates a subshell in
+  # bash, so `return 0` inside the loop only exits the subshell and the
+  # function always falls through to `return 1` (native installers were
+  # silently never selected). Use process substitution so the loop runs
+  # in the current shell and `return` exits the function.
+  while IFS=$'\t' read -r name url size; do
+    [ -n "$name" ] || continue
     if echo "$name" | grep -qE "$pattern"; then
       echo "$name|$url|$size"
       return 0
     fi
-  done
+  done < <(printf '%s\n' "$assets")
   return 1
 }
 

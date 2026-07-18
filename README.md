@@ -31,10 +31,10 @@ the Electron app directly.
 
 1. Download the installer for your platform from the
    [Releases page](https://github.com/Elvinoacer/gtss_growth_automation/releases):
-   - **Windows:** `GTSS-Growth-Engine-Setup-x64.exe`
-   - **macOS:** `GTSS-Growth-Engine-x64.dmg` (Intel) or
-     `GTSS-Growth-Engine-arm64.dmg` (Apple Silicon)
-   - **Linux:** `GTSS-Growth-Engine-x64.AppImage` (or `.deb` / `.rpm`)
+   - **Windows:** `GTSS-Growth-Engine-Setup-<version>-x64.exe`
+   - **macOS:** `GTSS-Growth-Engine-<version>-x64.dmg` (Intel) or
+     `GTSS-Growth-Engine-<version>-arm64.dmg` (Apple Silicon)
+   - **Linux:** `GTSS-Growth-Engine-<version>-x64.AppImage` (or `.deb` / `.rpm`)
 2. Run the installer.
 3. Launch **GTSS Growth Engine** from your Start Menu / Applications folder /
    AppImage.
@@ -89,10 +89,11 @@ unreachable or no installer exists for your platform), they fall back to
 
 ```bash
 # Build for the current platform (run on each target OS in CI).
+# On Windows these .sh helpers need Git Bash or WSL (CI forces shell: bash).
 scripts/build-all.sh
 
 # Or build a specific platform:
-scripts/build-windows.sh    # must run on Windows
+scripts/build-windows.sh    # must run on Windows (Git Bash/WSL)
 scripts/build-linux.sh      # must run on Linux
 scripts/build-macos.sh      # must run on macOS
 

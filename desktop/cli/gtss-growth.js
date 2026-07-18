@@ -180,32 +180,49 @@ function pickAsset(assets) {
 
 async function fetchLatestRelease() {
   return new Promise((resolve, reject) => {
-    const opts = {
+    const request = (urlOrOpts) => {
+      https
+        .get(urlOrOpts, (res) => {
+          // Follow redirects by re-entering the same handler (do NOT use
+          // arguments.callee — illegal in strict mode / async functions).
+          if (
+            res.statusCode === 301 ||
+            res.statusCode === 302 ||
+            res.statusCode === 307 ||
+            res.statusCode === 308
+          ) {
+            if (!res.headers.location) {
+              reject(new Error(`GitHub API redirect without Location header (${res.statusCode})`));
+              return;
+            }
+            request(res.headers.location);
+            return;
+          }
+          if (res.statusCode !== 200) {
+            reject(new Error(`GitHub API returned ${res.statusCode}`));
+            return;
+          }
+          let data = "";
+          res.on("data", (b) => (data += b));
+          res.on("end", () => {
+            try {
+              resolve(JSON.parse(data));
+            } catch (e) {
+              reject(e);
+            }
+          });
+        })
+        .on("error", reject);
+    };
+
+    request({
       hostname: "api.github.com",
       path: `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`,
       headers: {
         "User-Agent": "gtss-growth-cli",
         Accept: "application/vnd.github+json",
       },
-    };
-    https.get(opts, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        return https.get(res.headers.location, arguments.callee.caller);
-      }
-      if (res.statusCode !== 200) {
-        reject(new Error(`GitHub API returned ${res.statusCode}`));
-        return;
-      }
-      let data = "";
-      res.on("data", (b) => (data += b));
-      res.on("end", () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (e) {
-          reject(e);
-        }
-      });
-    }).on("error", reject);
+    });
   });
 }
 

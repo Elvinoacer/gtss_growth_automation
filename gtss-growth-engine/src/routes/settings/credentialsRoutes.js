@@ -141,7 +141,11 @@ function registerCredentialsRoutes(router) {
     }
 
     const nextHash = await bcrypt.hash(newPassphrase, 10);
+    // Write to the runtime .env (DOTENV_CONFIG_PATH / GTSS_ENV_PATH when
+    // packaged — see envWriter.js) AND to the settings table so passphrase
+    // is not the only setting living exclusively in a flat file.
     upsertEnvValue("PASSPHRASE_HASH", nextHash);
+    upsertSetting("passphrase_hash", nextHash);
     process.env.PASSPHRASE_HASH = nextHash;
 
     return res.json({ success: true });

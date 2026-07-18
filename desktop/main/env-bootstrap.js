@@ -24,6 +24,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { secureWriteSync } = require("./secure-write");
 
 // All writable per-user state lives in DATA_ROOT. The bundled
 // <resources>/server/ directory is READ-ONLY on Linux (.deb installs to
@@ -189,7 +190,8 @@ class EnvBootstrap {
 
     const lines = Object.entries(env).map(([k, v]) => `${k}=${v}`);
     lines.push("");
-    fs.writeFileSync(this.envPath, lines.join("\n"), { mode: 0o600 });
+    // Owner-only perms on POSIX; icacls ACL lockdown on Windows (see secure-write.js).
+    secureWriteSync(this.envPath, lines.join("\n"), { mode: 0o600 });
   }
 
   backfillMissingKeys() {
@@ -291,7 +293,8 @@ class EnvBootstrap {
       return l;
     });
     if (!found) next.push(`${key}=${value}`);
-    fs.writeFileSync(this.envPath, next.join("\n") + "\n", { mode: 0o600 });
+    // Owner-only perms on POSIX; icacls ACL lockdown on Windows (see secure-write.js).
+    secureWriteSync(this.envPath, next.join("\n") + "\n", { mode: 0o600 });
   }
 
   /** True if the user has gone through onboarding at least once. */

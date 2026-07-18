@@ -219,7 +219,10 @@ app.use("/", require("./routes/auditPage"));
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-const server = app.listen(PORT, () => {
+// Bind to localhost only — this is a local-first app; the passphrase-gated
+// UI and automation controls must not be reachable from the LAN. Matches
+// the bridge-server pattern (desktop/main/bridge-server/).
+const server = app.listen(PORT, "127.0.0.1", () => {
   logger.info(
     "SERVER",
     `${getContext().ctx_biz_name} Growth Engine v${packageJson.version} started on http://localhost:${PORT}`,

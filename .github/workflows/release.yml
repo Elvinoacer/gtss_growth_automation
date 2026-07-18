@@ -156,6 +156,49 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: npx electron-rebuild -f --module-dir "${{ github.workspace }}/gtss-growth-engine" --which better-sqlite3 --which sharp || npx electron-rebuild -f --module-dir "${{ github.workspace }}/gtss-growth-engine"
 
+      # ── Verify native modules load under Electron's ABI ──────────────────
+      # Catches silent ABI mismatches that electron-rebuild's exit code
+      # would miss (e.g. after an electron / better-sqlite3 bump without a
+      # matching prebuild).
+      - name: Verify better-sqlite3 under Electron ABI
+        working-directory: gtss-growth-engine
+        shell: bash
+        run: |
+          ELECTRON_BIN="$(cd ../desktop && node -p "require('electron')")"
+          ELECTRON_RUN_AS_NODE=1 "$ELECTRON_BIN" -e "require('better-sqlite3'); console.log('better-sqlite3 OK under Electron ABI')"
+
+      # ── Run engine unit tests before packaging (Linux only — fastest signal) ─
+      # ENCRYPTION_KEY is required by several modules at import time.
+      #
+      # IMPORTANT: the workspace currently has Electron-ABI native modules
+      # (from the rebuild step above). Tests run under system Node, so we
+      # temporarily rebuild better-sqlite3 for Node, run tests, then restore
+      # the Electron ABI so electron-builder still packages the right binary.
+      - name: Run engine tests
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: gtss-growth-engine
+        env:
+          ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          NODE_ENV: test
+          TEST_NO_BROWSER_LAUNCH: "true"
+          DISABLE_CDP_AUTO_LAUNCH: "true"
+        run: |
+          # DevDep for the test script (cross-env); --no-save keeps package.json clean.
+          npm install --no-save cross-env
+          # System-Node ABI so `require('better-sqlite3')` works in tests.
+          npm rebuild better-sqlite3
+          npm test
+          # Restore Electron ABI for packaging.
+          cd ../desktop
+          npx electron-rebuild -f \
+            --module-dir "${{ github.workspace }}/gtss-growth-engine" \
+            --which better-sqlite3 --which sharp \
+            || npx electron-rebuild -f --module-dir "${{ github.workspace }}/gtss-growth-engine"
+          # Re-verify after restore.
+          cd ../gtss-growth-engine
+          ELECTRON_BIN="$(cd ../desktop && node -p "require('electron')")"
+          ELECTRON_RUN_AS_NODE=1 "$ELECTRON_BIN" -e "require('better-sqlite3'); console.log('better-sqlite3 OK after test restore')"
+
       # ── macOS only: enable notarization when APPLE_TEAM_ID is set ───────────
       # We don't touch electron-builder.yml directly. Instead we set the env
       # vars that electron-builder reads natively for notarization
