@@ -20,6 +20,10 @@ const {
   getPostMediaPaths,
   getPrimaryPostMediaPath,
   getPostLocationTag,
+  isLibraryMediaPath,
+  deleteMediaFiles,
+  deleteMediaFile,
+  resolveMediaFilePath,
 } = require("./mediaPaths");
 const { publishPost } = require("./publishPost");
 const { generateCaption } = require("./generateCaption");
@@ -35,4 +39,8 @@ module.exports = {
   getPostMediaPaths,
   getPrimaryPostMediaPath,
   getPostLocationTag,
+  isLibraryMediaPath,
+  deleteMediaFiles,
+  deleteMediaFile,
+  resolveMediaFilePath,
 };

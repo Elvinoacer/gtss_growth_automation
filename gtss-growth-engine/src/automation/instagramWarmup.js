@@ -404,48 +404,116 @@ function completeWarmup(leadId, emitter) {
       ? 1
       : 0;
 
-  // Generate personalized DM using template and details
-  const template = getTemplate("instagram", "dm");
-  const ctx = getContext();
-  const geographies = Array.isArray(ctx.ctx_audience_geographies)
-    ? ctx.ctx_audience_geographies
-    : [];
-  const templateVars = {
-    lead_name: getFirstName(lead.name),
-    role: lead.role || "",
-    company: lead.company || "your business",
-    location: lead.location || geographies[0] || "Kenya",
-    product: ctx.ctx_product_name,
-    product_tagline: ctx.ctx_product_tagline,
-    pain_point: extractPainPoint(lead.score_reason),
-    value_prop: ctx.ctx_product_value_prop,
-    sender_name: ctx.ctx_sender_name,
-    sign_off: ctx.ctx_sender_sign_off,
-    cta: ctx.ctx_content_cta,
-    biz_name: ctx.ctx_biz_name,
-  };
-  let body = template
-    ? fillTemplate(template, templateVars)
-    : `Hi ${templateVars.lead_name},\n\n${ctx.ctx_product_value_prop}\n\nWould love to connect!\n\n${ctx.ctx_sender_sign_off}`;
+  // Prefer an existing AI-generated (or founder-approved) message from the
+  // Messages page. Template fill is only the emergency fallback when no real
+  // outreach body was prepared for this lead.
+  let preferred = null;
+  try {
+    const {
+      getPreferredApprovedMessage,
+    } = require("../services/messageSelectionService");
+    preferred = getPreferredApprovedMessage(db, {
+      leadId,
+      platform: "instagram",
+      isFollowUp: false,
+    });
+    if (!preferred) {
+      preferred = db
+        .prepare(
+          `SELECT id, body, generated_by FROM messages
+           WHERE lead_id = ?
+             AND platform = 'instagram'
+             AND status IN ('pending', 'approved')
+             AND COALESCE(is_follow_up, 0) = 0
+             AND COALESCE(generated_by, '') NOT IN ('template', 'template-fallback')
+           ORDER BY
+             CASE WHEN COALESCE(generated_by, '') IN ('ai', 'ai-web') THEN 0 ELSE 1 END,
+             id DESC
+           LIMIT 1`,
+        )
+        .get(leadId);
+    }
+  } catch (_) {
+    preferred = null;
+  }
+
+  let body;
+  let generatedBy = "template";
+  if (preferred && preferred.body) {
+    body = preferred.body;
+    generatedBy = preferred.generated_by || "ai";
+  } else {
+    const template = getTemplate("instagram", "dm");
+    const ctx = getContext();
+    const geographies = Array.isArray(ctx.ctx_audience_geographies)
+      ? ctx.ctx_audience_geographies
+      : [];
+    const templateVars = {
+      lead_name: getFirstName(lead.name),
+      role: lead.role || "",
+      company: lead.company || "your business",
+      location: lead.location || geographies[0] || "Kenya",
+      product: ctx.ctx_product_name,
+      product_tagline: ctx.ctx_product_tagline,
+      pain_point: extractPainPoint(lead.score_reason),
+      value_prop: ctx.ctx_product_value_prop,
+      sender_name: ctx.ctx_sender_name,
+      sign_off: ctx.ctx_sender_sign_off,
+      cta: ctx.ctx_content_cta,
+      biz_name: ctx.ctx_biz_name,
+    };
+    body = template
+      ? fillTemplate(template, templateVars)
+      : `Hi ${templateVars.lead_name},\n\n${ctx.ctx_product_value_prop}\n\nWould love to connect!\n\n${ctx.ctx_sender_sign_off}`;
+    generatedBy = "template-fallback";
+  }
 
   // Limit check (1000 characters for instagram_dm)
   if (body.length > 1000) {
     body = body.slice(0, 1000);
   }
 
-  // Insert single draft message
+  // If we already have an approved AI message, promote it for instagram_dm
+  // rather than inserting a second template draft that could steal the queue.
+  if (
+    preferred &&
+    preferred.id &&
+    !["template", "template-fallback"].includes(
+      String(preferred.generated_by || "").toLowerCase(),
+    )
+  ) {
+    db.prepare(
+      `UPDATE messages
+       SET action_type = 'instagram_dm',
+           ig_is_message_request = ?,
+           status = CASE WHEN status = 'pending' THEN 'approved' ELSE status END,
+           approved_by = COALESCE(approved_by, 'pipeline-auto'),
+           approved_at = COALESCE(approved_at, CURRENT_TIMESTAMP)
+       WHERE id = ?`,
+    ).run(ig_is_message_request, preferred.id);
+
+    safeEmit(
+      emitter,
+      "info",
+      `Warm-up complete for lead #${leadId} — reused AI message #${preferred.id} for DM (Message Request: ${ig_is_message_request === 1 ? "Yes" : "No"})`,
+    );
+    return { success: true };
+  }
+
+  // Insert single draft message (template fallback only)
   db.prepare(
     `
     INSERT INTO messages (
-      lead_id, platform, status, variant, is_follow_up, body, action_type, ig_is_message_request, generated_at
-    ) VALUES (?, 'instagram', 'draft', 'A', 0, ?, 'instagram_dm', ?, CURRENT_TIMESTAMP)
+      lead_id, platform, status, variant, is_follow_up, body, action_type,
+      ig_is_message_request, generated_by, generated_at
+    ) VALUES (?, 'instagram', 'draft', 'A', 0, ?, 'instagram_dm', ?, ?, CURRENT_TIMESTAMP)
   `,
-  ).run(leadId, body, ig_is_message_request);
+  ).run(leadId, body, ig_is_message_request, generatedBy);
 
   safeEmit(
     emitter,
     "info",
-    `Warm-up complete for lead #${leadId} — DM draft created (Message Request: ${ig_is_message_request === 1 ? "Yes" : "No"})`,
+    `Warm-up complete for lead #${leadId} — DM draft created via ${generatedBy} (Message Request: ${ig_is_message_request === 1 ? "Yes" : "No"})`,
   );
 
   return { success: true };

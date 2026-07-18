@@ -10,8 +10,28 @@ const path = require("path");
 const { getDb } = require("../db/database");
 const { discoverLeads } = require("../services/discoveryService");
 const { getContext } = require("../services/contextService");
-const { stageMode, keywordsFilePath } = require("../config/pipelineConfig");
+const {
+  stageMode,
+  keywordsFilePath,
+  filterOutreachPlatforms,
+  defaultOutreachPlatforms,
+  describeStrippedOutreachPlatforms,
+} = require("../config/pipelineConfig");
 const logger = require("../utils/logger");
+
+/**
+ * Resolve default discovery platforms (env override, else LinkedIn-only).
+ * Always strips X when X DM outreach is disabled.
+ * @returns {string[]}
+ */
+function resolveDefaultDiscoveryPlatforms() {
+  const fromEnv = process.env.DISCOVERY_PLATFORMS
+    ? process.env.DISCOVERY_PLATFORMS.split(",")
+        .map((p) => p.trim().toLowerCase())
+        .filter(Boolean)
+    : defaultOutreachPlatforms();
+  return filterOutreachPlatforms(fromEnv);
+}
 
 /**
  * Load the keywords configuration file.
@@ -19,6 +39,7 @@ const logger = require("../utils/logger");
  */
 function loadKeywords() {
   const ctx = getContext();
+  const defaultPlatforms = resolveDefaultDiscoveryPlatforms();
 
   // Primary source: context store
   if (
@@ -26,12 +47,6 @@ function loadKeywords() {
     Array.isArray(ctx.ctx_discovery_keywords) &&
     ctx.ctx_discovery_keywords.length > 0
   ) {
-    const defaultPlatforms = process.env.DISCOVERY_PLATFORMS
-      ? process.env.DISCOVERY_PLATFORMS.split(",")
-          .map((p) => p.trim().toLowerCase())
-          .filter(Boolean)
-      : ["linkedin", "x"];
-
     return {
       keywords: ctx.ctx_discovery_keywords,
       platforms: defaultPlatforms,
@@ -41,11 +56,6 @@ function loadKeywords() {
 
   // Fallback: read from filesystem (pre-migration path)
   const filePath = path.resolve(keywordsFilePath());
-  const defaultPlatforms = process.env.DISCOVERY_PLATFORMS
-    ? process.env.DISCOVERY_PLATFORMS.split(",")
-        .map((p) => p.trim().toLowerCase())
-        .filter(Boolean)
-    : ["linkedin", "x"];
 
   try {
     if (!fs.existsSync(filePath)) {
@@ -56,7 +66,16 @@ function loadKeywords() {
         maxLeadsPerKeyword: 10,
       };
     }
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (Array.isArray(parsed.platforms)) {
+      parsed.platforms = filterOutreachPlatforms(parsed.platforms);
+      if (parsed.platforms.length === 0) {
+        parsed.platforms = defaultPlatforms;
+      }
+    } else {
+      parsed.platforms = defaultPlatforms;
+    }
+    return parsed;
   } catch (err) {
     logger.error("PIPELINE", "Failed to load keywords", { error: err.message });
     return {
@@ -147,6 +166,18 @@ async function runDiscoveryStage(
       .filter(Boolean);
   }
 
+  // X / Instagram cold-DM outreach is off by default. Never discover those
+  // platforms for the outreach → DM path while their flags are disabled.
+  const beforeFilter = platforms.slice();
+  platforms = filterOutreachPlatforms(platforms);
+  if (platforms.length === 0) {
+    platforms = defaultOutreachPlatforms();
+  }
+  const strippedNote = describeStrippedOutreachPlatforms(beforeFilter, platforms);
+  if (strippedNote) {
+    emit({ type: "info", message: strippedNote });
+  }
+
   if (keywords.length === 0) {
     emit({
       type: "warn",
@@ -172,7 +203,8 @@ async function runDiscoveryStage(
     if (keyword && typeof keyword === "object") {
       keywordText = keyword.keyword || "";
       if (keyword.platforms && Array.isArray(keyword.platforms)) {
-        keywordPlatforms = keyword.platforms;
+        keywordPlatforms = filterOutreachPlatforms(keyword.platforms);
+        if (keywordPlatforms.length === 0) keywordPlatforms = platforms;
       }
     }
 

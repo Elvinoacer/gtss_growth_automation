@@ -158,15 +158,31 @@ function recordOutcome(action, actionType, outcomeObj) {
           .get(action.lead_id);
 
         if (!existing) {
-          // Add a 1-hour delay/snooze for X follows to prevent immediate bot-like direct messaging
+          // Preserve the original AI body + provenance so the follow-up DM
+          // queue sends the same Gemini message (not a template rewrite).
+          // Auto-approve so Automation can pick it up without a second
+          // manual pass — the body was already approved as the connection
+          // note source.
           const snoozeDelay =
             action.platform === 'x' ? "datetime('now', '+1 hour')" : 'NULL';
+          const generatedBy = originalMessage.generated_by || 'ai';
           db.prepare(
             `
-            INSERT INTO messages (lead_id, platform, body, variant, is_follow_up, status, snooze_until, generated_at)
-            VALUES (?, ?, ?, 'A', 0, 'pending', ${snoozeDelay}, CURRENT_TIMESTAMP)
+            INSERT INTO messages (
+              lead_id, platform, body, variant, is_follow_up, status,
+              snooze_until, generated_by, approved_by, approved_at, generated_at
+            )
+            VALUES (
+              ?, ?, ?, 'A', 0, 'approved',
+              ${snoozeDelay}, ?, 'pipeline-auto', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
           `,
-          ).run(action.lead_id, action.platform, originalMessage.body);
+          ).run(
+            action.lead_id,
+            action.platform,
+            originalMessage.body,
+            generatedBy,
+          );
         }
       }
     }

@@ -120,8 +120,52 @@ async function postToFacebook(page, body, mediaPath, emit) {
     await humanDelay(500, 1000);
 
     await humanTypeText(page, editor.locator, cleanBody);
-    await page.keyboard.press("Escape").catch(() => {});
-    await page.keyboard.press("Escape").catch(() => {});
+
+    // Guard against doubled captions (FB Lexical can re-insert if a fallback
+    // path runs after a successful type). Collapse to a single copy.
+    const composerText = await editor.locator
+      .evaluate((node) => {
+        if (typeof node.value === "string") return node.value;
+        return node.innerText || node.textContent || "";
+      })
+      .catch(() => "");
+    const compact = (s) =>
+      String(s || "")
+        .replace(/\s+/g, " ")
+        .trim();
+    const expected = compact(cleanBody);
+    const actual = compact(composerText);
+    const doubled =
+      expected.length >= 20 &&
+      actual.length >= expected.length * 1.6 &&
+      (actual.includes(expected + expected) ||
+        actual.replace(/\s+/g, "").includes(expected.replace(/\s+/g, "") + expected.replace(/\s+/g, "")));
+    if (doubled) {
+      emit({
+        type: "warn",
+        platform: "facebook",
+        message:
+          "Composer held a duplicated caption — clearing and re-inserting a single copy.",
+      });
+      await editor.locator.click().catch(() => {});
+      await page.keyboard.press("Control+A").catch(() => {});
+      await page.keyboard.press("Backspace").catch(() => {});
+      if (typeof page.keyboard.insertText === "function") {
+        await page.keyboard.insertText(cleanBody);
+      } else {
+        await humanTypeText(page, editor.locator, cleanBody);
+      }
+    } else if (expected && !actual) {
+      emit({
+        type: "warn",
+        platform: "facebook",
+        message: "Composer looked empty after typing — re-inserting caption once.",
+      });
+      await humanTypeText(page, editor.locator, cleanBody);
+    }
+
+    // Do NOT press Escape here — it can dismiss the compose dialog and/or
+    // lose focus mid-edit. (Older code pressed Escape twice after typing.)
     await humanDelay(1000, 2000);
 
     // ── Step 4: Attach media if provided ──────────────────────────────────

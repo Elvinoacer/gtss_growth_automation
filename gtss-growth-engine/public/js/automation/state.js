@@ -12,14 +12,20 @@
  *   - gtss API destructured from window.gtss: fetchJSON, showToast,
  *     initSocket, getSocket
  *   - Mutable state: activeJobId, isAutomationRunning, socketSub,
- *     sessionStatus, cachedLimits, currentCaptchaPlatform, selectedRetryIds
- *   - Cached `const` DOM element references for every getElementById call
- *     in the original (run/stop buttons, queue body, log container, limit
- *     cards, queue summary, post-run banner, retry buttons, DOM-capture
- *     controls, captcha banner / manual open / manual resume)
+ *     sessionStatus, cachedLimits, currentCaptchaPlatform, selectedRetryIds,
+ *     selectedTargetPlatforms (Set of platform keys for Run Queue filter)
+ *   - Constants: TARGET_DM_PLATFORMS, PLATFORM_TARGET_STORAGE_KEY
+ *   - Cached DOM element references (run/stop buttons, queue body, log
+ *     container, limit cards, queue summary, post-run banner, retry buttons,
+ *     platform target checkboxes, DOM-capture controls, captcha banner)
  */
 
 var { fetchJSON, showToast, initSocket, getSocket } = window.gtss;
+
+// Outreach platforms that can receive automated DMs from this page.
+// Order matches the pipelines page for consistency.
+var TARGET_DM_PLATFORMS = ["linkedin", "x", "instagram", "facebook"];
+var PLATFORM_TARGET_STORAGE_KEY = "gtss.automation.targetPlatforms";
 
 // State
 var activeJobId = null;
@@ -27,6 +33,12 @@ var isAutomationRunning = false;
 var socketSub = null;
 var sessionStatus = {}; // { platform: bool } — true = session active
 var cachedLimits = null; // last loaded limits object, used for re-render
+// Selected platforms for Run Queue + queue table filter. Empty means none
+// selected (run is blocked). Defaults to all TARGET_DM_PLATFORMS.
+var selectedTargetPlatforms = new Set(TARGET_DM_PLATFORMS);
+// Loaded on init from Settings — when false, platform is locked out of Run Queue.
+var xDmOutreachEnabledForAutomation = false;
+var igDmOutreachEnabledForAutomation = false;
 
 // DOM Refs
 var runAllBtn = document.getElementById("run-all-btn");
@@ -46,6 +58,11 @@ var retrySelectedBtn = document.getElementById("retry-selected-btn");
 var queueSelectAll = document.getElementById("queue-select-all");
 var retryWaitingBtn = document.getElementById("retry-waiting-btn");
 var retryBlockedBtn = document.getElementById("retry-blocked-btn");
+var platformTargetCheckboxes = document.getElementById(
+  "platform-target-checkboxes",
+);
+var platformSelectAllBtn = document.getElementById("platform-select-all-btn");
+var platformClearBtn = document.getElementById("platform-clear-btn");
 var domCapturePlatform = document.getElementById("dom-capture-platform");
 var domCapturePipeline = document.getElementById("dom-capture-pipeline");
 var domCaptureTab = document.getElementById("dom-capture-tab");

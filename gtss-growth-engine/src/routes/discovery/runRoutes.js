@@ -34,7 +34,16 @@ const { parseJsonArray } = require("./shared");
 function registerRunRoutes(router) {
   router.post("/start", (req, res) => {
     const { keyword, platforms, maxLeads, ig_auto_warmup } = req.body;
-    const selectedPlatforms = Array.isArray(platforms) ? platforms : [];
+    const {
+      filterOutreachPlatforms,
+      describeStrippedOutreachPlatforms,
+    } = require("../../config/pipelineConfig");
+    let selectedPlatforms = Array.isArray(platforms)
+      ? platforms.map((p) => String(p).trim().toLowerCase()).filter(Boolean)
+      : [];
+    // Strip X/Instagram when their cold-DM flags are off (re-enable in Settings).
+    const beforePlatforms = selectedPlatforms.slice();
+    selectedPlatforms = filterOutreachPlatforms(selectedPlatforms);
 
     if (ig_auto_warmup !== undefined) {
       const db = getDb();
@@ -51,6 +60,16 @@ function registerRunRoutes(router) {
     }
 
     if (selectedPlatforms.length === 0) {
+      const stripped = describeStrippedOutreachPlatforms(
+        beforePlatforms,
+        selectedPlatforms,
+      );
+      if (stripped) {
+        return res.status(400).json({
+          error:
+            "Selected platforms are disabled for discovery/DM. Enable X/Instagram under Settings → Pipeline Configuration, or choose LinkedIn / Facebook.",
+        });
+      }
       return res.status(400).json({ error: "At least one platform is required" });
     }
 

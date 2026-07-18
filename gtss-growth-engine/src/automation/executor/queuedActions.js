@@ -3,6 +3,9 @@
  *
  * getQueuedActions(options) returns the current action queue from the
  * `messages` table joined with `leads`, filtered by platform / action type.
+ * Exactly one approved message is selected for each lead/platform/follow-up
+ * group. This is important because a template fallback can have been approved
+ * before a later Gemini or founder-approved replacement was created.
  * Used by processActionQueue to decide what to run, and by callers
  * (automation routes, sendPipeline) to preview the queue.
  *
@@ -14,6 +17,10 @@ const {
   normalizeQueuedActionType,
   determineActionType,
 } = require('./actionTypes');
+const {
+  sendableApprovedMessageClause,
+  approvedMessagePrioritySql,
+} = require('../../services/messageSelectionService');
 
 function getQueuedActions(options = {}) {
   const db = getDb();
@@ -36,19 +43,38 @@ function getQueuedActions(options = {}) {
   return db
     .prepare(
       `
+    WITH ranked_messages AS (
+      SELECT
+        m.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY m.lead_id, m.platform, COALESCE(m.is_follow_up, 0)
+          ORDER BY
+            -- A message explicitly approved in the Messages page is the
+            -- operator's choice. Gemini output is next; generic/template
+            -- fallbacks can only be used when no better approved row exists.
+            ${approvedMessagePrioritySql('m')}
+        ) AS selected_rank
+      FROM messages m
+      WHERE (
+        (m.status = 'approved' AND ${sendableApprovedMessageClause('m')})
+        ${includeBlocked ? "OR m.status = 'blocked'" : ""}
+      )
+    )
     SELECT m.id AS message_id, m.platform, m.body, m.variant, m.is_follow_up, m.lead_id,
            m.status, m.snooze_until, m.retry_count, m.last_error, m.blocked_reason, m.fail_category, m.action_type,
+           m.generated_by, m.approved_by,
            CASE
              WHEN m.status = 'approved' AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now')) THEN 1
              ELSE 0
            END AS runnable,
            l.name AS lead_name, l.profile_url, l.status AS lead_status
-    FROM messages m
+    FROM ranked_messages m
     JOIN leads l ON m.lead_id = l.id
-    WHERE (
-      (m.status = 'approved' ${includeWaiting ? "" : "AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now'))"})
-      ${includeBlocked ? "OR m.status = 'blocked'" : ""}
-    )
+    WHERE m.selected_rank = 1
+      AND (
+        (m.status = 'approved' ${includeWaiting ? "" : "AND (m.snooze_until IS NULL OR m.snooze_until <= datetime('now'))"})
+        ${includeBlocked ? "OR m.status = 'blocked'" : ""}
+      )
     -- Relationship metadata is never an outreach recipient. This also
     -- protects active queues before the server-start data cleanup runs.
     AND LOWER(COALESCE(l.name, '')) NOT LIKE '%mutual%'

@@ -54,6 +54,9 @@
  *   automation/limits.js       — loadSessionStatus, loadLimits,
  *                                renderLimitCards + save-limit-btn +
  *                                auth-btn click bindings
+ *   automation/platformTargets.js — Target platform checkboxes (LinkedIn /
+ *                                X / IG / Facebook) for Run Queue; persists
+ *                                selection and filters the queue table
  *   automation/queue.js        — loadQueue, buildQueueSummary,
  *                                renderQueueSummary, renderRunSummary,
  *                                renderQueueGroup, renderQueueRow,
@@ -110,6 +113,7 @@
     'automation/logging.js',
     'automation/domCapture.js',
     'automation/limits.js',
+    'automation/platformTargets.js',
     'automation/queue.js',
     'automation/retryActions.js',
     'automation/execution.js',

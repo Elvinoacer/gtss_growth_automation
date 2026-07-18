@@ -26,7 +26,10 @@ const { generateFromTemplate } = require("./generateFromTemplate");
 const { generateViaAI } = require("./generateViaAI");
 const { generateMessages } = require("./generateMessages");
 const { generateFollowUp } = require("./generateFollowUp");
-const { generateAllMessages } = require("./generateAllMessages");
+const {
+  generateAllMessages,
+  retryFallbackMessages,
+} = require("./generateAllMessages");
 const { runMessageStage } = require("./runMessageStage");
 
 module.exports = {
@@ -34,6 +37,7 @@ module.exports = {
   generateViaAI,
   generateFollowUp,
   generateAllMessages,
+  retryFallbackMessages,
   generateFromTemplate,
   runMessageStage,
   registerJobStream,

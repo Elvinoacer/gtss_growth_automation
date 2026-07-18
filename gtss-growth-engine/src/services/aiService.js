@@ -128,24 +128,99 @@ async function callGeminiTextViaApi(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS } =
   throw lastError || new Error("All Gemini models exhausted");
 }
 
+/**
+ * Gemini text generation with the same cascade used by Generate All:
+ *   1. Gemini API (multi-model retries)
+ *   2. Gemini Web (browser session) — unless disableWebFallback
+ * Callers that still fail after Web should apply their own emergency
+ * template path (message generation stamps template-fallback).
+ *
+ * NOTE: Timeouts and parse failures used to skip Web. That made bulk
+ * "Retry Fallbacks" look API-only when the free tier was slow/429'd into
+ * timeouts. Web is now always attempted after any API failure.
+ */
 async function callGeminiText(prompt, options = {}) {
+  const onProgress =
+    typeof options.onProgress === "function" ? options.onProgress : null;
+
+  let apiErr = null;
   try {
-    return await callGeminiTextViaApi(prompt, options);
-  } catch (apiErr) {
-    if (options.disableWebFallback || apiErr.status === "timeout" || apiErr.status === "parse_failed") {
-      throw apiErr;
+    if (onProgress) onProgress({ stage: "api", message: "Trying Gemini API..." });
+    const apiResult = await callGeminiTextViaApi(prompt, options);
+    if (onProgress) {
+      onProgress({
+        stage: "api_ok",
+        message: `Gemini API ok (${apiResult.model || "model"})`,
+        source: "api",
+        model: apiResult.model,
+      });
     }
-    logger.warn("GEMINI", "All API text models exhausted, falling back to Gemini Web", {
-      error: apiErr.message,
+    return apiResult;
+  } catch (err) {
+    apiErr = err;
+  }
+
+  if (options.disableWebFallback) {
+    throw apiErr;
+  }
+
+  logger.warn("GEMINI", "API path failed, falling back to Gemini Web", {
+    error: apiErr?.message,
+    status: apiErr?.status,
+  });
+  if (onProgress) {
+    onProgress({
+      stage: "web",
+      message: `Gemini API failed (${apiErr?.status || "error"}); trying Gemini Web browser...`,
+      error: apiErr?.message,
     });
+  }
+
+  try {
     const text = await generateTextViaGeminiWeb(prompt, (event, message, data) => {
       logger.db("info", "content", "gemini_web_text", message || event, {
         event,
         ...(data || {}),
       });
+      if (onProgress) {
+        onProgress({
+          stage: "web_event",
+          event,
+          message: message || event,
+          data: data || null,
+        });
+      }
     });
     logger.info("GEMINI", "Text generated via Gemini Web fallback");
+    if (onProgress) {
+      onProgress({
+        stage: "web_ok",
+        message: "Gemini Web ok",
+        source: "web",
+      });
+    }
     return { text: cleanGeminiText(text), source: "web" };
+  } catch (webErr) {
+    logger.warn("GEMINI", "Gemini Web fallback also failed", {
+      apiError: apiErr?.message,
+      webError: webErr?.message,
+    });
+    if (onProgress) {
+      onProgress({
+        stage: "web_failed",
+        message: `Gemini Web failed: ${webErr.message}`,
+        error: webErr.message,
+      });
+    }
+    // Prefer the web error when both failed so operators see the browser
+    // path issue; keep api cause for diagnostics.
+    const combined = new Error(
+      `Gemini API and Web both failed. API: ${apiErr?.message || "n/a"}; Web: ${webErr.message}`,
+    );
+    combined.status = webErr.status || apiErr?.status || "all_sources_failed";
+    combined.apiError = apiErr;
+    combined.webError = webErr;
+    throw combined;
   }
 }
 

@@ -102,6 +102,10 @@ function seedDefaultSettings(database) {
     discovery_min_followers: "100",
     discovery_max_followers: "100000",
     ig_selector_version: "1",
+    // X DMs need premium; discovery + outreach DM exclude X until re-enabled.
+    x_dm_outreach_enabled: "false",
+    // IG cold DMs are rate-limited / request-gated; exclude until re-enabled.
+    ig_dm_outreach_enabled: "false",
   };
 
   const stmt = database.prepare(
@@ -121,7 +125,7 @@ function seedDefaultPipelineSchedules(database) {
       'Discovery → Qualification → Message Generation → DM Send',
       0,
       '0 8 * * *',
-      '{"platforms": ["linkedin", "x"], "max_leads_per_keyword": 10, "max_dms_per_run": 20, "max_connections_per_run": 15}'
+      '{"platforms": ["linkedin"], "max_leads_per_keyword": 10, "max_dms_per_run": 20, "max_connections_per_run": 15}'
     )
   `).run();
 
@@ -189,6 +193,53 @@ function seedDefaultPipelineSchedules(database) {
   database.prepare("DELETE FROM mass_follow_targets WHERE platform = 'tiktok'").run();
   database.prepare("DELETE FROM pipeline_schedules WHERE id = 'tiktok_mass_follow'").run();
   database.prepare("DELETE FROM settings WHERE key = 'pipeline_tiktok_mass_follow_paused'").run();
+
+  // Strip disabled cold-DM platforms (X / Instagram) from the outreach
+  // schedule so existing DBs do not keep discovering leads we cannot DM.
+  stripDisabledDmPlatformsFromOutreachSchedule(database);
+}
+
+function isSettingEnabled(database, key) {
+  const row = database
+    .prepare("SELECT value FROM settings WHERE key = ?")
+    .get(key);
+  const raw = String(row?.value || "false").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+/**
+ * Remove X and/or Instagram from outreach pipeline platforms when their
+ * DM-outreach flags are off. Does not touch mass_follow / content / dm_check.
+ */
+function stripDisabledDmPlatformsFromOutreachSchedule(database) {
+  const blocked = [];
+  if (!isSettingEnabled(database, "x_dm_outreach_enabled")) blocked.push("x");
+  if (!isSettingEnabled(database, "ig_dm_outreach_enabled")) {
+    blocked.push("instagram");
+  }
+  if (blocked.length === 0) return;
+
+  const row = database
+    .prepare("SELECT limits_json FROM pipeline_schedules WHERE id = 'outreach'")
+    .get();
+  if (!row?.limits_json) return;
+  try {
+    const limitsJson = JSON.parse(row.limits_json);
+    if (!Array.isArray(limitsJson.platforms)) return;
+    const before = limitsJson.platforms.length;
+    let platforms = limitsJson.platforms.filter(
+      (platform) => !blocked.includes(platform),
+    );
+    if (platforms.length === before) return;
+    if (platforms.length === 0) platforms = ["linkedin"];
+    database
+      .prepare(
+        "UPDATE pipeline_schedules SET limits_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'outreach'",
+      )
+      .run(JSON.stringify({ ...limitsJson, platforms }));
+  } catch (_) {
+    // ignore malformed JSON
+  }
 }
 
 module.exports = {

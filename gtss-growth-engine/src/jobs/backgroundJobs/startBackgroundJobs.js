@@ -18,8 +18,11 @@
  *      worker crashed mid-run and left the lock stuck).
  *   4. Register the scheduled poster + Instagram warmup jobs.
  *   5. Register the cron jobs (each via node-cron):
- *      - 3 AM daily: cleanupOrphanUploads (deletes uploads >7 days old
- *        not referenced by any pending post).
+ *      - 3 AM daily: cleanupOrphanUploads (deletes top-level uploads >7
+ *        days old not referenced by any pending post; never touches
+ *        the asset library under uploads/library/).
+ *      - 3:30 AM daily: cleanupArtifacts (deletes debug artifacts under
+ *        artifacts/ older than ARTIFACTS_RETENTION_DAYS, default 7).
  *      - 4 AM daily: checkFollowBacks (IG follow-back detector).
  *      - every 20 min: runConnectionQueueJob (campaign connection invites).
  *      - every 2 min: runDmQueueJob (campaign DMs).
@@ -36,6 +39,7 @@ const logger = require("../../utils/logger");
 const { runConnectionQueueJob } = require("./runConnectionQueueJob");
 const { runDmQueueJob } = require("./runDmQueueJob");
 const { cleanupOrphanUploads } = require("./cleanupOrphanUploads");
+const { cleanupArtifacts } = require("./cleanupArtifacts");
 
 async function startBackgroundJobs() {
   logger.info("SERVER", "Background automation worker initializing.");
@@ -117,11 +121,33 @@ async function startBackgroundJobs() {
   initScheduledPoster();
   initInstagramWarmupJobs();
 
-  // Cleanup orphan uploads (older than 7 days) at 3 AM daily
+  // Cleanup orphan uploads (older than 7 days) at 3 AM daily.
+  // Never deletes asset-library files — those are permanent until the
+  // user removes them from the Asset Library page.
   const cron = require("node-cron");
   cron.schedule("0 3 * * *", () => {
-    cleanupOrphanUploads();
+    try {
+      cleanupOrphanUploads();
+    } catch (err) {
+      logger.error("SERVER", "Orphan upload cleanup failed", err);
+    }
   });
+  logger.info("SERVER", "Orphan upload cleanup cron registered: daily at 3:00 AM");
+
+  // Cleanup debug artifacts (screenshots, DOM captures, gemini intermediates)
+  // at 3:30 AM daily. Retention defaults to 7 days; override with
+  // ARTIFACTS_RETENTION_DAYS in the environment.
+  cron.schedule("30 3 * * *", () => {
+    try {
+      cleanupArtifacts();
+    } catch (err) {
+      logger.error("SERVER", "Artifact cleanup failed", err);
+    }
+  });
+  logger.info(
+    "SERVER",
+    "Artifact cleanup cron registered: daily at 3:30 AM (ARTIFACTS_RETENTION_DAYS default 7)",
+  );
 
   // Instagram Follow-Backs cron (runs at 4 AM daily)
   cron.schedule("0 4 * * *", async () => {

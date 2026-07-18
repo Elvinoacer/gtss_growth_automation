@@ -42,5 +42,31 @@
               </label>
               <button id="clear-data" class="danger-button" type="button" disabled>Clear All Data</button>
             </div>
+            <div class="settings-card" style="grid-column: 1 / -1;">
+              <h3>Storage Cleanup</h3>
+              <p class="muted" style="font-size: 11.5px; margin: 0 0 14px; line-height: 1.55;">
+                Nightly crons clean debug artifacts (3:30&nbsp;AM) and orphan top-level uploads (3:00&nbsp;AM).
+                Run the same jobs immediately here. Library assets under
+                <code>uploads/library/</code> are never touched.
+              </p>
+              <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; align-items: end;">
+                <button id="run-cleanup-artifacts" class="secondary-button" type="button">
+                  Run artifact cleanup now
+                </button>
+                <button id="run-cleanup-orphans" class="secondary-button" type="button">
+                  Run orphan upload cleanup now
+                </button>
+                <button id="run-cleanup-all" class="primary-button" type="button">
+                  Run both cleanups now
+                </button>
+              </div>
+              <label class="field" style="margin-top: 12px; display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0;">
+                <input id="cleanup-force" type="checkbox" style="width: auto; min-height: auto;" />
+                <span style="font-size: 12px; font-weight: 500; color: var(--gtss-muted);">
+                  Force — ignore age retention (still never deletes the asset library)
+                </span>
+              </label>
+              <span id="cleanup-result" class="inline-result" role="status" aria-live="polite" style="display:block;margin-top:10px;"></span>
+            </div>
           </div>
         </section>

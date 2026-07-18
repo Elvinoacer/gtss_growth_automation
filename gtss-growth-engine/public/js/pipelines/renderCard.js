@@ -97,26 +97,55 @@ function renderLimitFields(meta, limits) {
 function renderPlatformCheckboxes(selectedPlatforms, pipelineId) {
   const fallback =
     pipelineId === 'outreach'
-      ? ['linkedin', 'x']
+      ? ['linkedin']
       : pipelineId === 'dm_check'
         ? ['instagram', 'linkedin', 'x', 'facebook']
         : pipelineId === 'mass_follow'
           ? ['instagram', 'x', 'linkedin', 'facebook']
           : ['instagram', 'linkedin'];
-  const selected = Array.isArray(selectedPlatforms) ? selectedPlatforms : fallback;
+  let selected = Array.isArray(selectedPlatforms) ? selectedPlatforms.slice() : fallback.slice();
+  // Outreach discovery → DM: hide X/IG while their cold-DM flags are off.
+  const isOutreach = pipelineId === 'outreach';
+  const outreachLocksX = isOutreach && !xDmOutreachEnabled;
+  const outreachLocksIg = isOutreach && !igDmOutreachEnabled;
+  if (outreachLocksX) selected = selected.filter((p) => p !== 'x');
+  if (outreachLocksIg) selected = selected.filter((p) => p !== 'instagram');
+  const anyLocked = outreachLocksX || outreachLocksIg;
   return `<div style="display:flex;flex-wrap:wrap;gap:10px;padding:6px 0">
     <label style="color:#94a3b8;font-size:13px;white-space:nowrap;width:100%">Target Platforms</label>
-    ${ALL_PLATFORMS.map(p => `
-      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+    ${ALL_PLATFORMS.map(p => {
+      const isXLocked = p === 'x' && outreachLocksX;
+      const isIgLocked = p === 'instagram' && outreachLocksIg;
+      const isLocked = isXLocked || isIgLocked;
+      const checked = !isLocked && selected.includes(p);
+      const lockLabel = isXLocked
+        ? 'X DM outreach is disabled — re-enable under Settings → Pipeline Configuration'
+        : isIgLocked
+          ? 'Instagram DM outreach is disabled — re-enable under Settings → Pipeline Configuration'
+          : '';
+      const badge = isXLocked
+        ? ' <span style="font-size:11px;color:#94a3b8">(premium)</span>'
+        : isIgLocked
+          ? ' <span style="font-size:11px;color:#94a3b8">(gated)</span>'
+          : '';
+      return `
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:${isLocked ? 'not-allowed' : 'pointer'};
         padding:6px 12px;border-radius:8px;border:1px solid rgba(148,163,184,0.18);
-        background:${selected.includes(p) ? 'rgba(14,165,233,0.12)' : 'transparent'};
-        color:#e2e8f0;font-size:13px;font-weight:500">
+        background:${checked ? 'rgba(14,165,233,0.12)' : 'transparent'};
+        color:#e2e8f0;font-size:13px;font-weight:500;opacity:${isLocked ? '0.5' : '1'}"
+        title="${lockLabel}">
         <input type="checkbox" data-platform-checkbox="${p}"
-          ${selected.includes(p) ? 'checked' : ''}
+          ${checked ? 'checked' : ''}
+          ${isLocked ? 'disabled' : ''}
           style="accent-color:#0ea5e9" />
-        ${gtss.formatPlatformLabel(p)}
+        ${gtss.formatPlatformLabel(p)}${badge}
       </label>
-    `).join('')}
+    `;
+    }).join('')}
+    ${anyLocked ? `<div style="width:100%;color:#94a3b8;font-size:12px;line-height:1.45;margin-top:2px">${[
+      outreachLocksX ? 'X' : null,
+      outreachLocksIg ? 'Instagram' : null,
+    ].filter(Boolean).join(' &amp; ')} off for lead discovery &amp; DMs by default. Re-enable under <strong style="color:#cbd5e1">Settings → Pipeline Configuration</strong>.</div>` : ''}
   </div>`;
 }
 

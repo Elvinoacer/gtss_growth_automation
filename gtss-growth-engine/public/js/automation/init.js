@@ -53,6 +53,12 @@ function startPolling(intervalMs = POLL_IDLE_MS) {
 // ----------------------------------------------------------------
 
 async function init() {
+  // Platform targeting UI first so loadQueue can filter by selection.
+  // initPlatformTargets is async (loads X DM outreach flag from settings).
+  if (typeof initPlatformTargets === "function") {
+    await initPlatformTargets();
+  }
+
   await loadSessionStatus();
   await loadLimits();
   await loadQueue();

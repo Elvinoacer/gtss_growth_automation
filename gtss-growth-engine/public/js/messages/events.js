@@ -9,6 +9,7 @@
  *   - Platform-filter <select>
  *   - Search input (debounced 350ms)
  *   - Generate All button (→ generateAll)
+ *   - Retry All Fallbacks button (→ retryFallbacks)
  *   - Approve-all-A / Approve-all-B bulk buttons (→ bulkApprove)
  *   - Pagination prev/next buttons
  *   - Table row action delegation (review / regenerate / skip / approve-row,
@@ -80,6 +81,11 @@ searchInput.addEventListener("input", () => {
 
 // Generate all
 generateAllBtn.addEventListener("click", generateAll);
+
+// Retry all template-fallback drafts with Gemini again
+if (retryFallbacksBtn) {
+  retryFallbacksBtn.addEventListener("click", retryFallbacks);
+}
 
 // Approve All A / Approve All B bulk buttons
 const approveAllABtn = document.getElementById("approve-all-a-btn");

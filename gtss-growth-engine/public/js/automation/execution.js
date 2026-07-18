@@ -103,7 +103,11 @@ function attachToAutomationJob(jobId, { alreadyRunning = false } = {}) {
     isAutomationRunning = false;
     activeJobId = null;
     runAllBtn.disabled = false;
-    runAllBtn.innerHTML = `<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1">play_arrow</span> Run Queue`;
+    if (typeof updateRunButtonPlatformHint === "function") {
+      updateRunButtonPlatformHint();
+    } else {
+      runAllBtn.innerHTML = `<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1">play_arrow</span> Run Queue`;
+    }
     stopBtn.style.display = "none";
     loadQueue();
     loadLimits();
@@ -128,12 +132,40 @@ async function resumeActiveAutomation() {
 async function startAutomation() {
   if (isAutomationRunning) return;
 
+  const platforms = typeof getSelectedTargetPlatforms === "function"
+    ? getSelectedTargetPlatforms()
+    : [];
+
+  if (!platforms.length) {
+    showToast(
+      "Select at least one platform (LinkedIn, X, Instagram, or Facebook) before running.",
+      "warn",
+    );
+    appendLog(
+      "warn",
+      "Run blocked — no target platforms selected.",
+    );
+    return;
+  }
+
   // Clear captcha warning if visible
   captchaBanner.style.display = "none";
   if (postRunBanner) postRunBanner.hidden = true;
 
+  const platformLabels = platforms
+    .map((p) =>
+      window.gtss && typeof window.gtss.formatPlatformLabel === "function"
+        ? window.gtss.formatPlatformLabel(p)
+        : p,
+    )
+    .join(", ");
+  appendLog("info", `Starting queue for platforms: ${platformLabels}`);
+
   try {
-    const res = await fetchJSON("/api/automation/run", { method: "POST" });
+    const res = await fetchJSON("/api/automation/run", {
+      method: "POST",
+      body: JSON.stringify({ platforms }),
+    });
     attachToAutomationJob(res.jobId);
   } catch (err) {
     showToast(err.message, "error");

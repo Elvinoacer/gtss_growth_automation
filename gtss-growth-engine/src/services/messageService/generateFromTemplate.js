@@ -93,6 +93,7 @@ function generateFromTemplate(lead) {
   return {
     variantA: { id: resultA.lastInsertRowid, body },
     variantB: { id: resultB.lastInsertRowid, body },
+    generatedBy: "template",
   };
 }
 

@@ -8,6 +8,10 @@
 
 const { getDb } = require("../../db/database");
 const { CHAR_LIMITS } = require("../../services/messageService");
+const {
+  countFallbackLeads,
+  countFallbackMessages,
+} = require("../../services/messageService/retireTemplateMessages");
 
 module.exports = function registerListRoutes(router) {
   // ---------------------------------------------------------------------------
@@ -133,6 +137,9 @@ module.exports = function registerListRoutes(router) {
       )
       .get({ days: followUpDays }).c;
 
+    const fallbackLeads = countFallbackLeads(db);
+    const fallbackMessages = countFallbackMessages(db);
+
     return res.json({
       pending,
       approved,
@@ -140,6 +147,8 @@ module.exports = function registerListRoutes(router) {
       skipped,
       followUps,
       unscored_qualified: unscoredQualified,
+      fallback_leads: fallbackLeads,
+      fallback_messages: fallbackMessages,
       charLimits: CHAR_LIMITS,
     });
   });

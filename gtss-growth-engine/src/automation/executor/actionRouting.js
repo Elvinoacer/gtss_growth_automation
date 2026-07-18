@@ -28,6 +28,39 @@ async function runAutomationAction(action, browserState, emit) {
   const { platform } = action;
   const actionType = action.action_type || determineActionType(action);
 
+  // Hard stop for cold DMs while platform feature flags are off.
+  // Re-enable under Settings → Pipeline Configuration.
+  {
+    const {
+      isXDmOutreachEnabled,
+      isIgDmOutreachEnabled,
+    } = require('../../config/pipelineConfig');
+    const isDm =
+      actionType === 'dm' ||
+      actionType === 'instagram_dm' ||
+      String(actionType || '').toLowerCase().includes('dm');
+    if (platform === 'x' && isDm && !isXDmOutreachEnabled()) {
+      emit(
+        'warn',
+        'X DM outreach is disabled. Enable it under Settings → Pipeline Configuration for premium-capable X accounts.',
+      );
+      return {
+        outcome: 'skipped',
+        reason: 'x_dm_outreach_disabled',
+      };
+    }
+    if (platform === 'instagram' && isDm && !isIgDmOutreachEnabled()) {
+      emit(
+        'warn',
+        'Instagram DM outreach is disabled. Enable it under Settings → Pipeline Configuration when ready for paced IG DMs.',
+      );
+      return {
+        outcome: 'skipped',
+        reason: 'ig_dm_outreach_disabled',
+      };
+    }
+  }
+
   // Handle specific Instagram actions directly via switch routing
   if (platform === 'instagram') {
     const instagram = require('../instagram');
@@ -53,6 +86,17 @@ async function runAutomationAction(action, browserState, emit) {
 
     switch (actionType) {
       case 'instagram_dm': {
+        const { isIgDmOutreachEnabled } = require('../../config/pipelineConfig');
+        if (!isIgDmOutreachEnabled()) {
+          emit(
+            'warn',
+            'Instagram DM outreach is disabled. Enable it under Settings → Pipeline Configuration.',
+          );
+          return {
+            outcome: 'skipped',
+            reason: 'ig_dm_outreach_disabled',
+          };
+        }
         const result = await instagram.sendDM(
           page,
           { username, message: action.body },

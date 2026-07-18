@@ -25,9 +25,18 @@ const { generateViaAI } = require("./generateViaAI");
  * @param {string} platform - optional override; falls back to lead.platform
  * @param {string} _productPitch - deprecated, kept for backward-compat
  * @param {string} _tone - deprecated, kept for backward-compat
- * @returns {Promise<{variantA: {id, body}, variantB: {id, body}}>}
+ * @param {{ forceAi?: boolean, onProgress?: Function }} [options]
+ *   forceAi — always use Gemini cascade (API → Web → template), even when
+ *             Settings is set to Template mode. Used by Retry Fallbacks.
+ * @returns {Promise<{variantA: {id, body}, variantB: {id, body}, generatedBy?: string}>}
  */
-async function generateMessages(leadId, platform, _productPitch, _tone) {
+async function generateMessages(
+  leadId,
+  platform,
+  _productPitch,
+  _tone,
+  options = {},
+) {
   const db = getDb();
   const lead = db.prepare("SELECT * FROM leads WHERE id = ?").get(leadId);
   if (!lead) throw new Error(`Lead ${leadId} not found`);
@@ -35,11 +44,14 @@ async function generateMessages(leadId, platform, _productPitch, _tone) {
     lead.platform = platform;
   }
 
+  const forceAi = options && options.forceAi === true;
   const source = messageGenerationSource();
-  if (source === 'template') {
+  if (!forceAi && source === "template") {
     return generateFromTemplate(lead);
   }
-  return generateViaAI(lead);
+  return generateViaAI(lead, {
+    onProgress: options && options.onProgress,
+  });
 }
 
 module.exports = { generateMessages };

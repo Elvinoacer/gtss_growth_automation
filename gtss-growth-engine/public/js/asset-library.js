@@ -4,7 +4,8 @@
 //   - Uploading images and videos
 //   - Grouping assets into multi-image posts / carousels
 //   - Labeling groups and choosing post type (carousel/video/single)
-//   - Per-asset tags, rename, delete
+//   - Per-asset tags, rename, delete (with confirmation)
+//   - Multi-select + bulk delete for assets no longer needed
 //   - Toggling the content pipeline's asset source (AI vs library)
 //
 // Refined to match the polished asset-library.html layout: header stats,
@@ -16,9 +17,12 @@ const assetState = {
   groups: [],
   settings: {},
   stats: {},
+  /** @type {Set<number>} */
+  selectedIds: new Set(),
 };
 
 async function loadAll() {
+  const previousSelection = new Set(assetState.selectedIds);
   const [assetsRes, groupsRes, settingsRes, statsRes] = await Promise.all([
     window.gtss.fetchJSON("/api/assets"),
     window.gtss.fetchJSON("/api/assets/groups").catch(() => ({ groups: [] })),
@@ -30,6 +34,12 @@ async function loadAll() {
   assetState.settings = settingsRes || {};
   assetState.stats = statsRes || {};
 
+  // Keep selection only for assets that still exist after reload.
+  const validIds = new Set(assetState.assets.map((a) => Number(a.id)));
+  assetState.selectedIds = new Set(
+    [...previousSelection].filter((id) => validIds.has(id)),
+  );
+
   document.getElementById("asset-source").value =
     assetState.settings.content_asset_source || "ai";
   document.getElementById("asset-media-type").value =
@@ -38,6 +48,7 @@ async function loadAll() {
   updateHeaderStats();
   renderGroups();
   renderAssets();
+  updateSelectionBar();
 }
 
 function updateHeaderStats() {
@@ -111,20 +122,20 @@ function renderGroups() {
 function renderAssets() {
   const grid = document.getElementById("asset-grid");
   if (!assetState.assets || assetState.assets.length === 0) {
+    assetState.selectedIds.clear();
     grid.innerHTML = `
       <div class="asset-empty-state">
         <div class="icon" aria-hidden="true">📁</div>
         <div class="title">No assets uploaded yet</div>
-        <div class="desc">Use the upload field above to add images or videos. Uploaded assets will appear here, ready to be grouped for carousels.</div>
+        <div class="desc">Use the upload field above to add images or videos. Uploaded assets will appear here, ready to be grouped for carousels. Delete any asset you no longer need from this page.</div>
       </div>`;
+    updateSelectionBar();
     return;
   }
-  // Build a list of group options for the assign dropdown.
-  const groupOptions = assetState.groups
-    .map((g) => `<option value="${g.id}">${window.gtss.escapeHtml(g.name)}</option>`)
-    .join("");
+
   grid.innerHTML = assetState.assets
     .map((asset) => {
+      const selected = assetState.selectedIds.has(Number(asset.id));
       const media =
         asset.media_type === "video"
           ? `<video src="${asset.file_url}" muted controls></video>`
@@ -138,7 +149,10 @@ function renderAssets() {
         .join("");
       const mediaTypeLabel = asset.media_type === "video" ? "Video" : "Image";
       return `
-        <article class="asset-card" data-asset-id="${asset.id}">
+        <article class="asset-card${selected ? " is-selected" : ""}" data-asset-id="${asset.id}">
+          <label class="asset-card-check" title="Select asset">
+            <input type="checkbox" data-select-asset="${asset.id}" ${selected ? "checked" : ""} />
+          </label>
           <div class="asset-media">${media}</div>
           <strong title="${window.gtss.escapeHtml(asset.name)}">${window.gtss.escapeHtml(asset.name)}</strong>
           <div class="asset-meta-row">
@@ -158,12 +172,133 @@ function renderAssets() {
           </div>
           <div class="asset-actions">
             <button type="button" data-rename-asset="${asset.id}">Rename</button>
-            <button type="button" data-delete-asset="${asset.id}">Delete</button>
+            <button type="button" class="asset-delete-btn" data-delete-asset="${asset.id}">Delete</button>
           </div>
         </article>
       `;
     })
     .join("");
+
+  updateSelectionBar();
+}
+
+function updateSelectionBar() {
+  const bar = document.getElementById("asset-selection-bar");
+  const countEl = document.getElementById("asset-selection-count");
+  const bulkBtn = document.getElementById("asset-bulk-delete");
+  const selectAll = document.getElementById("asset-select-all");
+  const total = assetState.assets.length;
+  const selected = assetState.selectedIds.size;
+
+  if (!bar) return;
+
+  // Show the bar whenever there is at least one asset so multi-select is discoverable.
+  bar.hidden = total === 0;
+
+  if (countEl) {
+    countEl.textContent = `${selected} selected`;
+  }
+  if (bulkBtn) {
+    bulkBtn.disabled = selected === 0;
+  }
+  if (selectAll) {
+    selectAll.checked = total > 0 && selected === total;
+    selectAll.indeterminate = selected > 0 && selected < total;
+  }
+
+  // Keep card selected styling in sync without a full re-render when toggled.
+  document.querySelectorAll(".asset-card[data-asset-id]").forEach((card) => {
+    const id = Number(card.dataset.assetId);
+    card.classList.toggle("is-selected", assetState.selectedIds.has(id));
+    const checkbox = card.querySelector("[data-select-asset]");
+    if (checkbox) checkbox.checked = assetState.selectedIds.has(id);
+  });
+}
+
+function setAssetSelected(assetId, selected) {
+  const id = Number(assetId);
+  if (!Number.isFinite(id)) return;
+  if (selected) assetState.selectedIds.add(id);
+  else assetState.selectedIds.delete(id);
+  updateSelectionBar();
+}
+
+function selectAllAssets(selected) {
+  assetState.selectedIds.clear();
+  if (selected) {
+    for (const asset of assetState.assets) {
+      assetState.selectedIds.add(Number(asset.id));
+    }
+  }
+  updateSelectionBar();
+}
+
+function clearSelection() {
+  assetState.selectedIds.clear();
+  updateSelectionBar();
+}
+
+async function confirmDestructive({ title, body, confirmLabel }) {
+  if (typeof window.gtss?.showConfirmDialog === "function") {
+    return window.gtss.showConfirmDialog({
+      title,
+      body,
+      confirmLabel: confirmLabel || "Delete",
+      cancelLabel: "Cancel",
+      danger: true,
+      icon: "🗑️",
+    });
+  }
+  // Fallback if the shared dialog is unavailable.
+  return window.confirm(`${title}\n\n${body}`);
+}
+
+async function deleteAsset(assetId) {
+  const asset = assetState.assets.find((a) => String(a.id) === String(assetId));
+  if (!asset) return;
+
+  const confirmed = await confirmDestructive({
+    title: "Delete asset?",
+    body: `Permanently delete "${asset.name}" from your library?\n\nThis removes the file from disk and it will no longer be used for rotation or reposts. This cannot be undone.`,
+    confirmLabel: "Delete asset",
+  });
+  if (!confirmed) return;
+
+  await window.gtss.fetchJSON(`/api/assets/${assetId}`, { method: "DELETE" });
+  assetState.selectedIds.delete(Number(assetId));
+  window.gtss.showToast("Asset deleted", "info");
+  await loadAll();
+}
+
+async function bulkDeleteSelected() {
+  const ids = [...assetState.selectedIds];
+  if (ids.length === 0) {
+    return window.gtss.showToast("Select at least one asset to delete", "warning");
+  }
+
+  const sampleNames = assetState.assets
+    .filter((a) => ids.includes(Number(a.id)))
+    .slice(0, 5)
+    .map((a) => a.name);
+  const more = ids.length > sampleNames.length ? `\n…and ${ids.length - sampleNames.length} more` : "";
+
+  const confirmed = await confirmDestructive({
+    title: `Delete ${ids.length} asset${ids.length === 1 ? "" : "s"}?`,
+    body: `Permanently delete the selected asset${ids.length === 1 ? "" : "s"} from your library and from disk:\n\n${sampleNames.map((n) => `• ${n}`).join("\n")}${more}\n\nThey will no longer be used for rotation or reposts. This cannot be undone.`,
+    confirmLabel: ids.length === 1 ? "Delete asset" : `Delete ${ids.length} assets`,
+  });
+  if (!confirmed) return;
+
+  const result = await window.gtss.fetchJSON("/api/assets/bulk-delete", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  });
+  assetState.selectedIds.clear();
+  window.gtss.showToast(
+    `Deleted ${result.count || ids.length} asset${(result.count || ids.length) === 1 ? "" : "s"}`,
+    "info",
+  );
+  await loadAll();
 }
 
 async function uploadAssets(event) {
@@ -255,7 +390,12 @@ async function renameGroup(groupId) {
 async function deleteGroup(groupId) {
   const group = assetState.groups.find((g) => String(g.id) === String(groupId));
   if (!group) return;
-  if (!confirm(`Delete group "${group.name}"?\n\nThe assets themselves will NOT be deleted — they will just be ungrouped.`)) return;
+  const confirmed = await confirmDestructive({
+    title: `Delete group "${group.name}"?`,
+    body: "The assets themselves will NOT be deleted — they will just be ungrouped so you can reassign them later.",
+    confirmLabel: "Delete group",
+  });
+  if (!confirmed) return;
   await window.gtss.fetchJSON(`/api/assets/groups/${groupId}`, { method: "DELETE" });
   window.gtss.showToast("Group deleted", "info");
   loadAll();
@@ -278,11 +418,31 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("save-asset-settings").addEventListener("click", saveAssetSettings);
   document.getElementById("create-group-btn").addEventListener("click", createGroup);
 
+  const bulkDeleteBtn = document.getElementById("asset-bulk-delete");
+  if (bulkDeleteBtn) {
+    bulkDeleteBtn.addEventListener("click", () => {
+      bulkDeleteSelected().catch((error) => window.gtss.showToast(error.message, "error"));
+    });
+  }
+  const clearSelectionBtn = document.getElementById("asset-clear-selection");
+  if (clearSelectionBtn) {
+    clearSelectionBtn.addEventListener("click", clearSelection);
+  }
+  const selectAllInput = document.getElementById("asset-select-all");
+  if (selectAllInput) {
+    selectAllInput.addEventListener("change", (event) => {
+      selectAllAssets(event.target.checked);
+    });
+  }
+
   document.addEventListener("click", async (event) => {
     const deleteBtn = event.target.closest("[data-delete-asset]");
     if (deleteBtn) {
-      await window.gtss.fetchJSON(`/api/assets/${deleteBtn.dataset.deleteAsset}`, { method: "DELETE" });
-      loadAll();
+      try {
+        await deleteAsset(deleteBtn.dataset.deleteAsset);
+      } catch (error) {
+        window.gtss.showToast(error.message, "error");
+      }
       return;
     }
     const renameAssetBtn = event.target.closest("[data-rename-asset]");
@@ -297,7 +457,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     const deleteGroupBtn = event.target.closest("[data-delete-group]");
     if (deleteGroupBtn) {
-      deleteGroup(deleteGroupBtn.dataset.deleteGroup);
+      try {
+        await deleteGroup(deleteGroupBtn.dataset.deleteGroup);
+      } catch (error) {
+        window.gtss.showToast(error.message, "error");
+      }
       return;
     }
     const removeFromGroupBtn = event.target.closest("[data-remove-from-group]");
@@ -308,6 +472,12 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document.addEventListener("change", async (event) => {
+    const selectCheckbox = event.target.closest("[data-select-asset]");
+    if (selectCheckbox) {
+      setAssetSelected(selectCheckbox.dataset.selectAsset, selectCheckbox.checked);
+      return;
+    }
+
     const assignSelect = event.target.closest("[data-assign-asset]");
     if (!assignSelect) return;
     const assetId = assignSelect.dataset.assignAsset;

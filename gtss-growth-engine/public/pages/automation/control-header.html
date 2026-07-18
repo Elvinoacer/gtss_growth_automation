@@ -1,5 +1,5 @@
             <!-- Control Header -->
-            <div class="flex justify-between items-end">
+            <div class="flex justify-between items-end gap-4 flex-wrap">
               <div>
                 <h2 class="font-display-lg text-display-lg text-on-surface">
                   Automation Control
@@ -10,7 +10,7 @@
                   Manage and monitor active browser routines.
                 </p>
               </div>
-              <div class="flex gap-3">
+              <div class="flex gap-3 flex-wrap">
                 <button
                   id="run-all-btn"
                   class="bg-primary hover:bg-surface-tint text-on-primary font-label-caps text-label-caps px-6 py-3 rounded-lg flex items-center gap-2 shadow-[0_4px_4px_rgba(0,0,0,0.04)] transition-colors"
@@ -74,6 +74,54 @@
                   >
                   Stop Automation
                 </button>
+              </div>
+            </div>
+            <!-- Platform targeting — Run Queue only processes selected platforms -->
+            <div
+              id="platform-target-panel"
+              class="rounded-lg border border-outline-variant bg-surface-container-lowest p-4 shadow-[0_4px_4px_rgba(0,0,0,0.04)]"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3
+                    class="font-label-caps text-label-caps text-on-surface flex items-center gap-2"
+                  >
+                    <span class="material-symbols-outlined text-[18px]"
+                      >tune</span
+                    >
+                    Target platforms for DMs
+                  </h3>
+                  <p
+                    class="font-body-xs text-body-xs text-on-surface-variant mt-1"
+                  >
+                    Only selected platforms will run when you click Run Queue.
+                    Queue table filters to match.
+                  </p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <button
+                    id="platform-select-all-btn"
+                    type="button"
+                    class="font-label-caps text-label-caps text-primary hover:bg-primary/10 px-3 py-1.5 rounded-lg border border-primary/20 transition-colors"
+                  >
+                    Select all
+                  </button>
+                  <button
+                    id="platform-clear-btn"
+                    type="button"
+                    class="font-label-caps text-label-caps text-on-surface-variant hover:bg-surface-variant/50 px-3 py-1.5 rounded-lg border border-outline-variant transition-colors"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div
+                id="platform-target-checkboxes"
+                class="mt-3 flex flex-wrap gap-2"
+                role="group"
+                aria-label="Target platforms for automation DMs"
+              >
+                <!-- Populated by JS: LinkedIn, X, Instagram, Facebook -->
               </div>
             </div>
             <div

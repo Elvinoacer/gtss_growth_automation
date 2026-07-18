@@ -12,9 +12,11 @@
  *   pageRoutes.js          — GET /messages (page render)
  *   generateRoutes.js      — POST /api/messages/generate (single-lead) +
  *                            POST /api/messages/generate-all (background
- *                            bulk job) + GET /api/messages/stream/:jobId
- *                            (SSE) + GET /api/messages/active (is a bulk
- *                            job running?). Owns the module-private
+ *                            bulk job) + POST /api/messages/retry-fallbacks
+ *                            (re-run Gemini for template-fallback leads) +
+ *                            GET /api/messages/stream/:jobId (SSE) +
+ *                            GET /api/messages/active (is a bulk job
+ *                            running?). Owns the module-private
  *                            `nextJobId` counter.
  *   listRoutes.js          — GET /api/messages (paginated filtered list with
  *                            lead data) + GET /api/messages/stats (header

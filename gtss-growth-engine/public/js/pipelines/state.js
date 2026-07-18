@@ -86,6 +86,11 @@ const PIPELINE_META = {
 
 const ALL_PLATFORMS = ['instagram', 'linkedin', 'x', 'facebook'];
 
+// Whether X / Instagram are allowed for lead discovery + outreach DMs.
+// Loaded from GET /api/pipelines. Default false until the API responds.
+let xDmOutreachEnabled = false;
+let igDmOutreachEnabled = false;
+
 const STATE_META = {
   idle:       { color: '#94a3b8', bg: 'rgba(148,163,184,0.12)', icon: '○', label: 'Idle' },
   scheduled:  { color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',  icon: '◷', label: 'Scheduled' },

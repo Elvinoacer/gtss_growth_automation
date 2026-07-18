@@ -77,11 +77,16 @@ async function runFullPipelineNow(triggerSource = "scheduled", options = {}) {
   const maxLeadsPerKeyword = limits.max_leads_per_keyword;
   const maxDmsPerRun = limits.max_dms_per_run;
   const maxConnectionsPerRun = limits.max_connections_per_run;
-  const selectedPlatforms = Array.isArray(limits.platforms)
-    ? limits.platforms
-        .map((platform) => String(platform).trim().toLowerCase())
-        .filter(Boolean)
-    : [];
+  const {
+    filterOutreachPlatforms,
+  } = require("../../config/pipelineConfig");
+  const selectedPlatforms = filterOutreachPlatforms(
+    Array.isArray(limits.platforms)
+      ? limits.platforms
+          .map((platform) => String(platform).trim().toLowerCase())
+          .filter(Boolean)
+      : [],
+  );
 
   const pipelineRunId = createPipelineRun(triggerSource);
   if (typeof options.onRunId === "function") options.onRunId(pipelineRunId);

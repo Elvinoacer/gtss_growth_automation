@@ -43,6 +43,19 @@ module.exports = function registerApproveRoutes(router) {
      WHERE id = ?`,
     ).run(body || msg.body, id);
 
+    // A newly approved message replaces any older, unsent approval for this
+    // same outreach. Without this, the Automation queue can see both an old
+    // template fallback and the founder-selected Gemini message.
+    db.prepare(
+      `UPDATE messages
+       SET status = 'skipped'
+       WHERE lead_id = ?
+         AND COALESCE(platform, '') = COALESCE(?, '')
+         AND COALESCE(is_follow_up, 0) = COALESCE(?, 0)
+         AND id != ?
+         AND status = 'approved'`,
+    ).run(msg.lead_id, msg.platform, msg.is_follow_up, id);
+
     db.prepare(
       "UPDATE leads SET status = 'message_approved', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'qualified'",
     ).run(msg.lead_id);
@@ -90,6 +103,15 @@ module.exports = function registerApproveRoutes(router) {
      SET status = 'skipped'
      WHERE lead_id = ? AND id != ? AND status = 'pending' AND is_follow_up = ?`,
     );
+    const retirePriorApprovalStmt = db.prepare(
+      `UPDATE messages
+       SET status = 'skipped'
+       WHERE lead_id = ?
+         AND COALESCE(platform, '') = COALESCE(?, '')
+         AND COALESCE(is_follow_up, 0) = COALESCE(?, 0)
+         AND id != ?
+         AND status = 'approved'`,
+    );
     const promoteLeadStmt = db.prepare(
       "UPDATE leads SET status = 'message_approved', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'qualified'",
     );
@@ -97,7 +119,7 @@ module.exports = function registerApproveRoutes(router) {
     // Find every pending, non-follow-up message of the requested variant.
     const targets = db
       .prepare(
-        `SELECT id, lead_id, variant, is_follow_up FROM messages
+        `SELECT id, lead_id, platform, variant, is_follow_up FROM messages
        WHERE status = 'pending' AND is_follow_up = 0 AND variant = ?`,
       )
       .all(variant);
@@ -114,6 +136,12 @@ module.exports = function registerApproveRoutes(router) {
         if (!fresh || fresh.status !== "pending") continue;
 
         approveStmt.run(msg.id);
+        retirePriorApprovalStmt.run(
+          msg.lead_id,
+          msg.platform,
+          msg.is_follow_up,
+          msg.id,
+        );
         skipSiblingStmt.run(msg.lead_id, msg.id, msg.is_follow_up);
         promoteLeadStmt.run(msg.lead_id);
         approved += 1;

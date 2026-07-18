@@ -196,6 +196,7 @@ app.use("/api/pipelines", authMiddleware, require("./routes/pipelines"));
 app.use("/api/monitoring", authMiddleware, require("./routes/monitoring"));
 app.use("/api/assets", authMiddleware, require("./routes/assets"));
 app.use("/api/audit", authMiddleware, require("./routes/audit"));
+app.use("/api/maintenance", authMiddleware, require("./routes/maintenance"));
 
 // Protected Page Routes (wrapped in auth)
 app.use(authMiddleware);

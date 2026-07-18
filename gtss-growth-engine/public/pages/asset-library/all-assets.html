@@ -1,10 +1,26 @@
 <!-- asset-library/all-assets.html — Asset Library "All Assets" section
      Extracted from asset-library.html. The "All Assets" <section> with
-     section title and the #asset-grid container that JS populates with
-     .asset-card tiles (or .asset-empty-state when the library is empty).
+     section title, multi-select toolbar (#asset-selection-bar), and the
+     #asset-grid container that JS populates with .asset-card tiles
+     (or .asset-empty-state when the library is empty).
      Rendered server-side via data-include. -->
 
         <section>
-          <h2 class="section-title">All Assets</h2>
+          <div class="asset-section-head">
+            <h2 class="section-title">All Assets</h2>
+            <div id="asset-selection-bar" class="asset-selection-bar" hidden>
+              <label class="asset-select-all">
+                <input type="checkbox" id="asset-select-all" />
+                <span>Select all</span>
+              </label>
+              <span id="asset-selection-count" class="asset-selection-count">0 selected</span>
+              <button type="button" id="asset-bulk-delete" class="asset-btn asset-btn-danger" disabled>
+                Delete selected
+              </button>
+              <button type="button" id="asset-clear-selection" class="asset-btn asset-btn-secondary">
+                Clear
+              </button>
+            </div>
+          </div>
           <div id="asset-grid" class="asset-grid"></div>
         </section>

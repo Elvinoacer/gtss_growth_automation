@@ -35,12 +35,34 @@ const {
 } = require("../../automation/executor");
 const { stopDmQueue } = require("../../campaign/dmQueue");
 const { stopConnectionQueue } = require("../../campaign/connectionQueue");
+const { getPlatformKeys } = require("../../services/platformCatalog");
 
 // SSE response storage
 const activeStreams = new Map();
 
-// Store pending executor calls, keyed by jobId
+// Store pending executor options, keyed by jobId.
+// Value is the options object passed to enqueueActionQueue (e.g. { platforms }).
 const pendingExecutors = new Map();
+
+/**
+ * Normalize platforms from the request body into a list of known platform keys.
+ * Empty / missing → [] (executor treats empty as "all platforms").
+ * Unknown keys are dropped so a typo cannot silently no-op the whole run.
+ *
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+function normalizeRunPlatforms(raw) {
+  if (!Array.isArray(raw)) return [];
+  const known = new Set(getPlatformKeys());
+  return [
+    ...new Set(
+      raw
+        .map((platform) => String(platform || "").trim().toLowerCase())
+        .filter((platform) => platform && known.has(platform)),
+    ),
+  ];
+}
 
 /**
  * Register run / stream / stop / active routes on the given router.
@@ -49,18 +71,24 @@ const pendingExecutors = new Map();
  */
 function registerRunRoutes(router) {
   // Run automation queue
+  // Body (optional): { platforms: string[] } — e.g. ["linkedin","x"]
+  // When platforms is non-empty, only queued actions for those platforms run.
   router.post("/api/automation/run", (req, res) => {
     const jobId = crypto.randomUUID();
-    res.json({ jobId });
+    const platforms = normalizeRunPlatforms(req.body?.platforms);
+    const options = platforms.length > 0 ? { platforms } : {};
+
+    res.json({ jobId, platforms: platforms.length > 0 ? platforms : null });
 
     // Mark as pending — executor will be triggered when SSE connects
-    pendingExecutors.set(jobId, true);
+    pendingExecutors.set(jobId, options);
 
     // Safety fallback: if SSE never connects within 5s, run headless
     setTimeout(() => {
       if (pendingExecutors.has(jobId)) {
+        const opts = pendingExecutors.get(jobId) || {};
         pendingExecutors.delete(jobId);
-        enqueueActionQueue(jobId, null).catch(console.error);
+        enqueueActionQueue(jobId, null, opts).catch(console.error);
       }
     }, 5000);
   });
@@ -79,8 +107,9 @@ function registerRunRoutes(router) {
 
     // If executor is pending, start it now that SSE is connected
     if (pendingExecutors.has(jobId)) {
+      const opts = pendingExecutors.get(jobId) || {};
       pendingExecutors.delete(jobId);
-      enqueueActionQueue(jobId, res).catch(console.error);
+      enqueueActionQueue(jobId, res, opts).catch(console.error);
     }
 
     req.on("close", () => {

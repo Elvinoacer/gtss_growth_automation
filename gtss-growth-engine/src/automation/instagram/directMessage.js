@@ -27,6 +27,20 @@ const {
 } = require("./dmEditor");
 
 async function sendDM(page, { username, message }, emitter) {
+  // Cold-DM gate: off by default until re-enabled in Settings.
+  try {
+    const { isIgDmOutreachEnabled } = require("../../config/pipelineConfig");
+    if (!isIgDmOutreachEnabled()) {
+      const reason =
+        "Instagram DM outreach is disabled. Enable it under Settings → Pipeline Configuration when ready for paced IG DMs.";
+      safeEmit(emitter, "warn", reason);
+      return { success: false, error: "ig_dm_outreach_disabled", reason };
+    }
+  } catch (_) {
+    // If config cannot load, fail closed for cold DM automation.
+    return { success: false, error: "ig_dm_outreach_disabled" };
+  }
+
   // Precondition checks
   if (!message || message.trim() === "") {
     return { success: false, error: "empty_message" };

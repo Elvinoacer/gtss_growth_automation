@@ -47,6 +47,19 @@ function bindCentralizedExtensions() {
   if (msgSourceSave) {
     msgSourceSave.addEventListener("click", saveMessageSource);
   }
+
+  // Storage cleanup — run the same jobs as the nightly crons, immediately.
+  document
+    .getElementById("run-cleanup-artifacts")
+    ?.addEventListener("click", () => runMaintenanceCleanup(["artifacts"]));
+  document
+    .getElementById("run-cleanup-orphans")
+    ?.addEventListener("click", () => runMaintenanceCleanup(["orphan_uploads"]));
+  document
+    .getElementById("run-cleanup-all")
+    ?.addEventListener("click", () =>
+      runMaintenanceCleanup(["artifacts", "orphan_uploads"]),
+    );
   // Update segmented control visual state on change
   document.querySelectorAll('input[name="msg-source"]').forEach((radio) => {
     radio.addEventListener("change", () => updateMsgSourceSegmentedVisual());
@@ -161,5 +174,62 @@ async function saveSchedulerPaused(paused) {
     setInline("scheduler-status-result", `✗ ${err.message}`, "error");
     // Revert the visual state on failure
     applySchedulerState(!paused);
+  }
+}
+
+/**
+ * Trigger cleanup jobs immediately (same functions the nightly crons use).
+ * @param {string[]} targets - 'artifacts' and/or 'orphan_uploads'
+ */
+async function runMaintenanceCleanup(targets) {
+  const force = Boolean(document.getElementById("cleanup-force")?.checked);
+  const buttons = [
+    "run-cleanup-artifacts",
+    "run-cleanup-orphans",
+    "run-cleanup-all",
+  ]
+    .map((id) => document.getElementById(id))
+    .filter(Boolean);
+
+  buttons.forEach((btn) => {
+    btn.disabled = true;
+  });
+  setInline("cleanup-result", "Running cleanup…", "info");
+
+  try {
+    const data = await window.gtss.fetchJSON("/api/maintenance/cleanup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targets, force }),
+    });
+
+    const parts = [];
+    if (data.artifacts) {
+      const a = data.artifacts;
+      const mb = ((a.deletedBytes || 0) / (1024 * 1024)).toFixed(2);
+      parts.push(
+        `artifacts: deleted ${a.deletedFiles || 0} file(s) (${mb} MB)`,
+      );
+    }
+    if (data.orphan_uploads) {
+      const o = data.orphan_uploads;
+      parts.push(
+        `orphan uploads: deleted ${o.deleted || 0}, kept ${o.kept || 0}`,
+      );
+    }
+    const summary =
+      parts.length > 0
+        ? `✓ Cleanup finished${force ? " (force)" : ""} — ${parts.join("; ")}`
+        : "✓ Cleanup finished (nothing to remove)";
+
+    setInline("cleanup-result", summary, "success");
+    window.gtss.showToast("Cleanup finished", "success");
+  } catch (err) {
+    setInline("cleanup-result", `✗ ${err.message}`, "error");
+    window.gtss.showToast(err.message, "error");
+  } finally {
+    buttons.forEach((btn) => {
+      btn.disabled = false;
+    });
   }
 }

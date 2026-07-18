@@ -15,6 +15,8 @@ async function loadPipelines() {
   try {
     const data = await gtss.fetchJSON('/api/pipelines');
     pipelinesData = data.pipelines || [];
+    xDmOutreachEnabled = Boolean(data.xDmOutreachEnabled);
+    igDmOutreachEnabled = Boolean(data.igDmOutreachEnabled);
     renderPipelines(pipelinesData);
     renderGlobalHealthStrip();
   } catch (err) {

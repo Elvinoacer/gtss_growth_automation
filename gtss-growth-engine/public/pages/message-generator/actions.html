@@ -5,6 +5,15 @@
           <button id="generate-all-btn" class="btn btn-primary" type="button">
             ⚡ Generate for All Qualified Leads
           </button>
+          <button
+            id="retry-fallbacks-btn"
+            class="btn btn-outline"
+            type="button"
+            title="Re-run Gemini (API then Web) for every lead stuck on a template fallback. Cascade: API → Web → template."
+          >
+            ↺ Retry All Fallbacks
+            <span id="retry-fallbacks-count" class="source-badge source-fallback" style="margin-left: 6px; margin-top: 0">0</span>
+          </button>
           <button id="approve-all-a-btn" class="btn btn-success" type="button" title="Approve every pending Variant A message (the Variant B sibling for each lead is automatically skipped)">
             ✓ Approve All A
           </button>

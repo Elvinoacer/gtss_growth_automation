@@ -30,11 +30,32 @@
 // Queue Summary + Queue
 // ----------------------------------------------------------------
 
+function buildPlatformQueryString() {
+  const platforms =
+    typeof getSelectedTargetPlatforms === "function"
+      ? getSelectedTargetPlatforms()
+      : [];
+  // Always send platforms so the table matches what Run Queue will process.
+  // Empty selection → platforms= (explicit empty set → empty queue).
+  if (!platforms.length) {
+    return "platforms=";
+  }
+  return `platforms=${encodeURIComponent(platforms.join(","))}`;
+}
+
 async function loadQueue() {
   try {
+    const qs = buildPlatformQueryString();
+    const queueUrl = qs
+      ? `/api/automation/queue?${qs}`
+      : "/api/automation/queue";
+    const summaryUrl = qs
+      ? `/api/automation/queue/summary?${qs}`
+      : "/api/automation/queue/summary";
+
     const [queueResult, summaryResult] = await Promise.allSettled([
-      fetchJSON("/api/automation/queue"),
-      fetchJSON("/api/automation/queue/summary"),
+      fetchJSON(queueUrl),
+      fetchJSON(summaryUrl),
     ]);
 
     const queue = queueResult.status === "fulfilled" ? queueResult.value : [];
@@ -215,6 +236,15 @@ function renderQueueRow(action) {
   const categoryBadge = action.fail_category
     ? `<span class="inline-flex rounded-full bg-surface-container-high px-2 py-0.5 text-[11px] font-semibold text-on-surface-variant">${escapeHtml(action.fail_category)}</span>`
     : "";
+  const genBy = String(action.generated_by || "").toLowerCase();
+  const sourceBadge =
+    genBy === "ai" || genBy === "ai-web"
+      ? `<span class="inline-flex rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary" title="Gemini body (API or Web)">${genBy === "ai-web" ? "AI · Web" : "AI · API"}</span>`
+      : genBy === "template-fallback"
+        ? `<span class="inline-flex rounded-full bg-error-container px-2 py-0.5 text-[11px] font-semibold text-error" title="Template fallback — founder-only">Template fallback</span>`
+        : genBy === "template"
+          ? `<span class="inline-flex rounded-full bg-surface-container-high px-2 py-0.5 text-[11px] font-semibold text-on-surface-variant">Template</span>`
+          : "";
   const retryCount = Number(action.retry_count || 0);
   const retryLabel =
     retryCount > 0
@@ -243,6 +273,7 @@ function renderQueueRow(action) {
         </div>
         <div class="mt-1 flex flex-col gap-1">
           ${categoryBadge}
+          ${sourceBadge}
           ${retryLabel}
           ${snoozeLabel}
           ${errorLabel}
@@ -271,7 +302,41 @@ function renderQueueRow(action) {
 function renderQueue(queue) {
   if (!queue || queue.length === 0) {
     queueBody.innerHTML = "";
-    if (emptyState) emptyState.classList.add("visible");
+    if (emptyState) {
+      emptyState.classList.add("visible");
+      // Clarify empty state when platform filter excludes everything.
+      const selected =
+        typeof getSelectedTargetPlatforms === "function"
+          ? getSelectedTargetPlatforms()
+          : [];
+      const titleEl = emptyState.querySelector("h3");
+      const descEl = emptyState.querySelector("p");
+      if (selected.length === 0) {
+        if (titleEl) titleEl.textContent = "No platforms selected";
+        if (descEl) {
+          descEl.textContent =
+            "Select LinkedIn, X, Instagram, and/or Facebook above to preview and run the queue.";
+        }
+      } else if (selected.length < TARGET_DM_PLATFORMS.length) {
+        if (titleEl) titleEl.textContent = "No actions for selected platforms";
+        if (descEl) {
+          const labels = selected
+            .map((p) =>
+              window.gtss && typeof window.gtss.formatPlatformLabel === "function"
+                ? window.gtss.formatPlatformLabel(p)
+                : p,
+            )
+            .join(", ");
+          descEl.textContent = `Nothing queued for ${labels}. Try selecting more platforms or approve more messages.`;
+        }
+      } else {
+        if (titleEl) titleEl.textContent = "Queue is Empty";
+        if (descEl) {
+          descEl.textContent =
+            "All approved messages have been processed. Approve more messages to run automation.";
+        }
+      }
+    }
     return;
   }
 

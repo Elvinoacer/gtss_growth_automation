@@ -52,6 +52,19 @@ const {
  */
 async function sendDirectMessage(page, profileUrl, message, emit) {
   try {
+    // Feature flag: X DMs stay off until the operator re-enables for premium.
+    const { isXDmOutreachEnabled } = require("../../config/pipelineConfig");
+    if (!isXDmOutreachEnabled()) {
+      const reason =
+        "X DM outreach is disabled. Enable it under Settings → Pipeline Configuration for premium-capable X accounts.";
+      emit("warn", reason);
+      return {
+        outcome: "skipped",
+        reason,
+        failCategory: "x_dm_outreach_disabled",
+      };
+    }
+
     emit("info", `Navigating to profile: ${profileUrl}`);
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
     await humanDelay(3000, 5000);

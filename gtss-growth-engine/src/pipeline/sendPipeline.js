@@ -14,6 +14,10 @@ const {
 } = require('../automation/executor');
 const { isSessionValid } = require('../automation/sessionManager');
 const { getPlatformKeys } = require('../services/platformCatalog');
+const {
+  filterOutreachPlatforms,
+  describeStrippedOutreachPlatforms,
+} = require('../config/pipelineConfig');
 const logger = require('../utils/logger');
 
 /**
@@ -35,9 +39,17 @@ async function runSendStage(
   platforms = [],
   maxConnectionsPerRun,
 ) {
-  const selectedPlatforms = Array.isArray(platforms)
+  const rawPlatforms = Array.isArray(platforms)
     ? platforms.map((platform) => String(platform).trim().toLowerCase()).filter(Boolean)
     : [];
+  const selectedPlatforms = filterOutreachPlatforms(rawPlatforms);
+  const strippedNote = describeStrippedOutreachPlatforms(
+    rawPlatforms,
+    selectedPlatforms,
+  );
+  if (strippedNote) {
+    emit({ type: 'info', message: strippedNote.replace('discovery/DM', 'DM send') });
+  }
   // Sending a DM must never trigger a connection or follow action. Those
   // actions run only from their dedicated pipeline.
   const dmActionTypes = ["dm", "instagram_dm"];

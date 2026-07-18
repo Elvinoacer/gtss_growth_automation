@@ -10,17 +10,11 @@
  * Instagram is checked (which triggers loadInstagramDiscoveryKeywords in
  * instagramHashtags.js).
  *
+ * X and Instagram cold-DM discovery stay locked until re-enabled under
+ * Settings → Pipeline Configuration.
+ *
  * Exposes (via global scope):
  *   - loadPlatformControls() — async; idempotent
- *
- * Depends on (from discovery/state.js, loaded earlier):
- *   - platformLabels, DISCOVERY_PLATFORM_KEYS
- * Depends on (from discovery/helpers.js, loaded earlier):
- *   - escapeHtml
- * Depends on (from discovery/instagramHashtags.js, loaded earlier):
- *   - loadInstagramDiscoveryKeywords
- * Depends on (from window.gtss, available via app.js):
- *   - loadPlatformCatalog, formatPlatformLabel
  */
 
 async function loadPlatformControls() {
@@ -31,20 +25,66 @@ async function loadPlatformControls() {
     catalog.map((platform) => [platform.key, platform.label]),
   );
 
+  let xDmOutreachEnabled = false;
+  let igDmOutreachEnabled = false;
+  try {
+    const pipelineCfg = await window.gtss.fetchJSON("/api/settings/pipeline");
+    xDmOutreachEnabled = Boolean(pipelineCfg?.xDmOutreachEnabled);
+    igDmOutreachEnabled = Boolean(pipelineCfg?.igDmOutreachEnabled);
+  } catch (_) {
+    xDmOutreachEnabled = false;
+    igDmOutreachEnabled = false;
+  }
+
   const platformRow = document.getElementById("platform-row");
   if (platformRow) {
     platformRow.innerHTML = catalog
-      .map(
-        (platform) => `
-      <label class="platform-option"><input type="checkbox" name="platforms" value="${platform.key}"> ${escapeHtml(platform.label || window.gtss.formatPlatformLabel(platform.key))}</label>
-    `,
-      )
+      .map((platform) => {
+        const isXLocked = platform.key === "x" && !xDmOutreachEnabled;
+        const isIgLocked = platform.key === "instagram" && !igDmOutreachEnabled;
+        const isLocked = isXLocked || isIgLocked;
+        const label = escapeHtml(
+          platform.label || window.gtss.formatPlatformLabel(platform.key),
+        );
+        const badge = isXLocked
+          ? ' <span class="muted" style="font-size:11px;">(premium)</span>'
+          : isIgLocked
+            ? ' <span class="muted" style="font-size:11px;">(gated)</span>'
+            : "";
+        const title = isXLocked
+          ? "X DM outreach disabled — enable under Settings → Pipeline Configuration"
+          : isIgLocked
+            ? "Instagram DM outreach disabled — enable under Settings → Pipeline Configuration"
+            : "";
+        return `
+      <label class="platform-option" style="${isLocked ? "opacity:0.55;" : ""}"
+        title="${title}">
+        <input type="checkbox" name="platforms" value="${platform.key}"
+          ${isLocked ? "disabled" : ""}>
+        ${label}${badge}
+      </label>
+    `;
+      })
       .join("");
 
+    if (!xDmOutreachEnabled || !igDmOutreachEnabled) {
+      const note = document.createElement("p");
+      note.className = "muted";
+      note.style.cssText =
+        "font-size:12px;margin:8px 0 0;line-height:1.5;width:100%;";
+      const parts = [];
+      if (!xDmOutreachEnabled) parts.push("X");
+      if (!igDmOutreachEnabled) parts.push("Instagram");
+      note.innerHTML = `${parts.join(" &amp; ")} off for discovery &amp; DMs by default. Re-enable under <strong>Settings → Pipeline Configuration</strong>.`;
+      platformRow.appendChild(note);
+    }
+
     const checkboxes = platformRow.querySelectorAll('input[name="platforms"]');
-    checkboxes.forEach(cb => {
+    checkboxes.forEach((cb) => {
       cb.addEventListener("change", () => {
-        const igChecked = [...platformRow.querySelectorAll('input[name="platforms"]:checked')].some(i => i.value === "instagram");
+        const igChecked = [
+          ...platformRow.querySelectorAll('input[name="platforms"]:checked'),
+        ].some((i) => i.value === "instagram");
         const igContainer = document.getElementById("ig-discovery-container");
         if (igContainer) {
           if (igChecked) {

@@ -91,23 +91,75 @@ async function processActionQueue(jobId, sseRes, options = {}) {
   emitState(emit, jobId, 'PENDING', 'Automation run queued.');
 
   try {
-    const platforms = Array.isArray(options.platforms)
+    const {
+      filterOutreachPlatforms,
+      disabledOutreachDmPlatforms,
+      describeStrippedOutreachPlatforms,
+    } = require('../../config/pipelineConfig');
+    let platforms = Array.isArray(options.platforms)
       ? options.platforms
           .map((platform) => String(platform).trim().toLowerCase())
           .filter(Boolean)
       : [];
+    // When the operator selected platforms, strip disabled cold-DM platforms.
+    // When no filter was provided (run-all), leave empty so getQueuedActions
+    // returns the full queue — we drop blocked rows after fetch (below).
+    if (platforms.length > 0) {
+      platforms = filterOutreachPlatforms(platforms);
+    }
     const actionTypes = Array.isArray(options.actionTypes)
       ? options.actionTypes
           .map((actionType) => normalizeQueuedActionType(actionType))
           .filter(Boolean)
       : [];
-    const runnableQueue = getQueuedActions({ platforms, actionTypes });
-    const fullQueue = getQueuedActions({
+    let runnableQueue = getQueuedActions({ platforms, actionTypes });
+    let fullQueue = getQueuedActions({
       includeBlocked: true,
       includeWaiting: true,
       platforms,
       actionTypes,
     });
+
+    // Exclude X / Instagram from the automation queue while their DM
+    // outreach flags are off (re-enable in Settings → Pipeline Configuration).
+    const blocked = new Set(disabledOutreachDmPlatforms());
+    if (blocked.size > 0) {
+      const beforePlatforms = [
+        ...new Set([
+          ...runnableQueue.map((a) => a.platform),
+          ...fullQueue.map((a) => a.platform),
+        ]),
+      ];
+      runnableQueue = runnableQueue.filter((a) => !blocked.has(a.platform));
+      fullQueue = fullQueue.filter((a) => !blocked.has(a.platform));
+      const afterPlatforms = [
+        ...new Set([
+          ...runnableQueue.map((a) => a.platform),
+          ...fullQueue.map((a) => a.platform),
+        ]),
+      ];
+      const note = describeStrippedOutreachPlatforms(
+        beforePlatforms,
+        afterPlatforms,
+      );
+      if (note) {
+        emit(
+          'info',
+          `Skipping blocked platform queue items — ${note}`,
+        );
+      }
+      if (
+        Array.isArray(options.platforms) &&
+        options.platforms.length > 0 &&
+        platforms.length === 0
+      ) {
+        emit(
+          'warn',
+          'No eligible platforms left after excluding disabled DM platforms. Enable X/Instagram DM outreach under Settings, or select LinkedIn / Facebook.',
+        );
+      }
+    }
+
     const waitingCount = fullQueue.filter(
       (action) => action.status === 'approved' && !action.runnable,
     ).length;

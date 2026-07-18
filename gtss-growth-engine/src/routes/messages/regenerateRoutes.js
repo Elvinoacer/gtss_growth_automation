@@ -10,6 +10,9 @@
 
 const { getDb } = require("../../db/database");
 const { generateMessages } = require("../../services/messageService");
+const {
+  retireTemplateMessages,
+} = require("../../services/messageService/retireTemplateMessages");
 
 module.exports = function registerRegenerateRoutes(router) {
   router.post("/api/messages/:id/regenerate", async (req, res) => {
@@ -25,6 +28,13 @@ module.exports = function registerRegenerateRoutes(router) {
         `DELETE FROM messages
        WHERE lead_id = ? AND status = 'pending' AND is_follow_up = 0`,
       ).run(msg.lead_id);
+
+      // Also retire approved template drafts so a fresh Gemini body owns the
+      // Automation queue after regenerate + approve.
+      retireTemplateMessages(db, {
+        leadId: msg.lead_id,
+        platform: msg.platform || null,
+      });
 
       const { productPitch, tone } = req.body || {};
       const result = await generateMessages(

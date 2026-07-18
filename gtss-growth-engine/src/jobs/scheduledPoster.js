@@ -1,5 +1,4 @@
 const cron = require("node-cron");
-const fs = require("fs");
 const { getDb } = require("../db/database");
 const {
   publishPost,
@@ -7,6 +6,8 @@ const {
   getPrimaryPostMediaPath,
   getPostLocationTag,
 } = require("../services/schedulerService");
+// Shared cleanup: skips asset-library files so rotation/reposts keep working.
+const { deleteMediaFiles } = require("../services/schedulerService/mediaPaths");
 const { isCheckingInbox } = require("../services/instagramReplyChecker");
 const logger = require("../utils/logger");
 
@@ -52,25 +53,6 @@ function buildScheduledPostEmitter(jobId, post) {
 function backoffMinutes(retryCount) {
   const index = Math.max(retryCount - 1, 0);
   return BACKOFF_MINUTES[Math.min(index, BACKOFF_MINUTES.length - 1)];
-}
-
-async function deleteMediaFile(mediaPath) {
-  if (!mediaPath) return;
-
-  try {
-    await fs.promises.unlink(mediaPath);
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      logger.warn("Could not delete media file after max retries", {
-        path: mediaPath,
-        error: error.message,
-      });
-    }
-  }
-}
-
-async function deleteMediaFiles(mediaPaths) {
-  await Promise.all(mediaPaths.map((mediaPath) => deleteMediaFile(mediaPath)));
 }
 
 // Initializes the cron job to publish scheduled posts.

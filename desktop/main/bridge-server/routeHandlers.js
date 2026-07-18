@@ -27,7 +27,8 @@
  *   POST /api/bridge/cdp/restart
  *   POST /api/bridge/cdp/open-webapp-in-cdp
  *   GET  /api/bridge/settings/browser-mode
- *   POST /api/bridge/settings/browser-mode
+ *   POST /api/bridge/settings/browser-mode (persists and applies the mode
+ *                                            by restarting owned CDP Chrome)
  *   POST /api/bridge/signin/complete
  *   POST /api/bridge/signin/reset
  */
@@ -257,7 +258,7 @@ function handleBrowserModeGet(method, pathname, _body, server) {
   return { ok: true, mode };
 }
 
-function handleBrowserModePost(method, pathname, body, server) {
+async function handleBrowserModePost(method, pathname, body, server) {
   if (method !== "POST" || pathname !== "/api/bridge/settings/browser-mode") return null;
 
   const mode = body && body.mode;
@@ -265,8 +266,52 @@ function handleBrowserModePost(method, pathname, body, server) {
     throw new Error("mode must be 'background' or 'visible'");
   }
   server.env.upsert("CDP_VISIBLE_DEFAULT", mode === "visible" ? "true" : "false");
-  server.log.append("lifecycle", `Bridge: browser mode set to '${mode}' (applies on next Start).`);
-  return { ok: true, mode };
+
+  // Chrome cannot change between headed and headless after it has launched.
+  // Restarting the CDP browser is enough; the Node server and desktop app stay
+  // running, and the next automation action reconnects to the same endpoint.
+  // Do not try to stop an externally-owned Chrome: CdpManager intentionally
+  // only attaches to it and has no authority to restart that process.
+  if (!server.cdp.isRunning()) {
+    server.log.append(
+      "lifecycle",
+      `Bridge: browser mode set to '${mode}'. It will be used when Chrome starts.`,
+    );
+    return { ok: true, mode, applied: false, reason: "chrome-not-running" };
+  }
+
+  if (!server.cdp.child) {
+    server.log.append(
+      "lifecycle",
+      `Bridge: browser mode set to '${mode}', but the current CDP Chrome is externally managed and was not restarted.`,
+    );
+    return {
+      ok: true,
+      mode,
+      applied: false,
+      reason: "external-chrome",
+      message: "Saved. Close and reopen the externally managed Chrome to apply this mode.",
+    };
+  }
+
+  try {
+    server.log.append(
+      "lifecycle",
+      `Bridge: applying browser mode '${mode}' by restarting the automation Chrome (the app stays running).`,
+    );
+    await server.cdp.restart({
+      visible: mode === "visible",
+      onProgress: (_stage, message) => {
+        try { server.log.append("cdp", message); } catch (_) {}
+      },
+    });
+    server.env.upsert("CDP_ENDPOINT", `http://127.0.0.1:${server.cdp.port}`);
+    server.env.upsert("BROWSER_MODE", "cdp");
+    return { ok: true, mode, applied: true, cdpState: server.cdp.getState() };
+  } catch (err) {
+    server.log.append("lifecycle:stderr", `Bridge: could not apply browser mode: ${err.message}`);
+    return { ok: false, mode, error: `Saved, but Chrome could not restart: ${err.message}` };
+  }
 }
 
 // ─── Sign-in sentinel ────────────────────────────────────────────────────

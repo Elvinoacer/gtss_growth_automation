@@ -86,8 +86,133 @@ async function humanScroll(page) {
  * caption typing takes ~10-30s for a 2200-char IG caption — fast
  * enough not to bottleneck the pipeline.
  *
+ * ─── Newlines must NOT be typed as Enter ────────────────────────────────
+ * Chat composers (Facebook Messenger, Instagram DMs, many others) bind
+ * bare Enter to "Send message". `page.keyboard.type("\n")` synthesizes
+ * Enter, so a multi-line DM was sending after the first line and leaving
+ * the rest of the message unsent or split across accidental sends.
+ * Shift+Enter inserts a line break without submitting — same approach
+ * LinkedIn's typing helpers already use. Post-caption editors also treat
+ * Shift+Enter as a newline, so this is safe for captions too.
+ *
  * Signature unchanged — existing call sites do not need updates.
  */
+
+/** Collapse whitespace / invisible chars for editor content comparisons. */
+function normalizeEditorCompareText(s) {
+  return String(s || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Alphanumeric-only fingerprint (ignores emoji encoding differences). */
+function editorTextFingerprint(s) {
+  return normalizeEditorCompareText(s)
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .toLowerCase();
+}
+
+/**
+ * True when the editor already holds the intended copy (once).
+ * Facebook Lexical composers often reformat emoji/newlines so a strict
+ * equality check fails even when the caption is correct — and the old
+ * fallback then re-inserted the same body, producing a doubled post.
+ */
+function editorLooksComplete(current, expected) {
+  const e = normalizeEditorCompareText(expected);
+  if (!e) return true;
+  const c = normalizeEditorCompareText(current);
+  if (!c) return false;
+  if (c === e) return true;
+  // Expected present once (allow short trailing junk / "See more" chrome).
+  if (c.includes(e) && c.length <= Math.ceil(e.length * 1.35)) return true;
+
+  const fe = editorTextFingerprint(expected);
+  const fc = editorTextFingerprint(current);
+  if (!fe) return true;
+  if (fc === fe) return true;
+  // High-coverage fingerprint match (emoji / ZWJ differences).
+  if (fc.includes(fe) && fc.length <= Math.ceil(fe.length * 1.35)) return true;
+  if (fe.length >= 24 && fc.startsWith(fe.slice(0, Math.floor(fe.length * 0.9)))) {
+    return true;
+  }
+  return false;
+}
+
+/** True when the body appears concatenated twice (the FB double-post bug). */
+function editorLooksDoubled(current, expected) {
+  const e = normalizeEditorCompareText(expected);
+  const c = normalizeEditorCompareText(current);
+  if (!e || e.length < 20) return false;
+  if (c.length < e.length * 1.6) return false;
+  const compact = (s) => s.replace(/\s+/g, "");
+  const cc = compact(c);
+  const ee = compact(e);
+  if (cc.includes(ee + ee)) return true;
+  // Soft check: fingerprint appears twice back-to-back.
+  const fe = editorTextFingerprint(expected);
+  const fc = editorTextFingerprint(current);
+  if (fe.length >= 16 && fc.includes(fe + fe)) return true;
+  return false;
+}
+
+async function readEditorText(target) {
+  return target
+    .evaluate((node) => {
+      if (typeof node.value === "string") return node.value;
+      return node.innerText || node.textContent || "";
+    })
+    .catch(() => "");
+}
+
+async function clearEditorContents(page, target) {
+  await target.click({ timeout: 5000 }).catch(() => {});
+  await page.keyboard.press("Control+A").catch(() => {});
+  await page.keyboard.press("Backspace").catch(() => {});
+  await page.keyboard.press("Delete").catch(() => {});
+  // contenteditable sometimes needs Meta on macOS — try both is cheap.
+  if (process.platform === "darwin") {
+    await page.keyboard.press("Meta+A").catch(() => {});
+    await page.keyboard.press("Backspace").catch(() => {});
+  }
+}
+
+/**
+ * Replace editor contents with a single bulk insert (no double-write).
+ * Used when per-char typing is incomplete OR when the body was doubled.
+ */
+async function replaceEditorWithInsertText(page, target, value) {
+  await clearEditorContents(page, target);
+  // Playwright insertText fires beforeinput/input the way Lexical/Draft
+  // expect, without the "set innerText THEN insertText" double that used
+  // to concatenate the caption twice on Facebook.
+  if (typeof page.keyboard.insertText === "function") {
+    await page.keyboard.insertText(value).catch(async () => {
+      // Older Playwright / odd targets — fall back to type with newlines
+      // as Shift+Enter.
+      for (let i = 0; i < value.length; i++) {
+        const ch = value[i];
+        if (ch === "\n") {
+          await page.keyboard.press("Shift+Enter").catch(() => {});
+        } else {
+          await page.keyboard.type(ch);
+        }
+      }
+    });
+  } else {
+    for (let i = 0; i < value.length; i++) {
+      const ch = value[i];
+      if (ch === "\n") {
+        await page.keyboard.press("Shift+Enter").catch(() => {});
+      } else {
+        await page.keyboard.type(ch);
+      }
+    }
+  }
+}
+
 async function humanTypeText(page, locatorOrSelector, text) {
   if (!text) return;
   const target =
@@ -101,16 +226,23 @@ async function humanTypeText(page, locatorOrSelector, text) {
   // fallbacks below will surface a clearer error if the element truly
   // can't be interacted with.
   await target.click({ timeout: 8000 }).catch(() => {});
-  // Clear any existing text using keyboard select all if needed
-  await page.keyboard.press("Control+A").catch(() => {});
-  await page.keyboard.press("Backspace").catch(() => {});
+  await clearEditorContents(page, target);
+
+  // Normalize CRLF/CR so each logical newline is handled once.
+  const value = String(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
   // Per-character typing — see the long comment above for why this is
   // NOT `target.type(text, { delay })`. Each character is a separate
   // keyboard event so React-controlled editors (Instagram, X) reconcile
-  // correctly. In TEST_SPEEDUP mode we skip the human delay.
-  for (let i = 0; i < text.length; i++) {
-    await page.keyboard.type(text[i]);
+  // correctly. Newlines use Shift+Enter so Messenger/IG DM composers do
+  // not send mid-message. In TEST_SPEEDUP mode we skip the human delay.
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === "\n") {
+      await page.keyboard.press("Shift+Enter").catch(() => {});
+    } else {
+      await page.keyboard.type(ch);
+    }
     if (process.env.TEST_SPEEDUP !== "true") {
       await new Promise((resolve) =>
         setTimeout(resolve, Math.floor(Math.random() * 40) + 30),
@@ -118,41 +250,34 @@ async function humanTypeText(page, locatorOrSelector, text) {
     }
   }
 
-  // ── Best-effort verification: ensure the text actually made it into ──
-  // ── the element. If the editor swallowed the typing (rare but happens ──
-  // ── when React re-rendered mid-typing), fall back to direct DOM      ──
-  // ── mutation + synthetic input event so the editor at least shows    ──
-  // ── the text. This fallback uses `innerText` (NOT `textContent`) so  ──
-  // ── visible line breaks are preserved, and dispatches an `input`     ──
-  // ── InputEvent with `inputType: "insertText"` which React's          ──
-  // ── synthetic event system DOES pick up.                             ──
-  try {
-    const current = await target.evaluate((node) => {
-      if (typeof node.value === "string") return node.value;
-      return node.innerText || node.textContent || "";
-    }).catch(() => "");
-    if (current === text) return;
-    // If the typed text matches what's in the editor (allowing for
-    // minor whitespace differences), we're done.
-    const normalised = (s) => String(s || "").replace(/\s+/g, " ").trim();
-    if (normalised(current) === normalised(text)) return;
-  } catch (_) {
-    // Verification failed — proceed to fallback.
+  // ── Verification ───────────────────────────────────────────────────────
+  // Accept "good enough" matches so we do NOT re-insert into Facebook's
+  // Lexical composer (set-innerText + insertText was concatenating the
+  // caption twice → "bodybody" posts).
+  let current = await readEditorText(target);
+  if (editorLooksComplete(current, value) && !editorLooksDoubled(current, value)) {
+    return;
   }
 
-  // Fallback: direct DOM mutation. Used only when the per-character
-  // typing didn't produce the expected text (e.g., React re-rendered
-  // mid-typing and swallowed some keystrokes).
+  // Doubled or incomplete → clear once and bulk-insert a single copy.
   try {
-    await target.evaluate((node, value) => {
-      const element = node;
-      const textValue = String(value);
-
-      element.focus();
-
-      if (typeof element.value === "string") {
-        // <textarea> / <input> — use the native setter so React's
-        // onChange fires.
+    await replaceEditorWithInsertText(page, target, value);
+    current = await readEditorText(target);
+    if (editorLooksComplete(current, value) && !editorLooksDoubled(current, value)) {
+      return;
+    }
+    // Still doubled? Clear + insert one more time only.
+    if (editorLooksDoubled(current, value)) {
+      await replaceEditorWithInsertText(page, target, value);
+    }
+  } catch (_) {
+    // Last resort for plain inputs only — never combine innerText + insertText
+    // on contenteditable (that path caused Facebook caption duplication).
+    try {
+      await target.evaluate((node, textValue) => {
+        const element = node;
+        if (typeof element.value !== "string") return;
+        element.focus();
         const descriptor = Object.getOwnPropertyDescriptor(
           Object.getPrototypeOf(element),
           "value",
@@ -164,28 +289,10 @@ async function humanTypeText(page, locatorOrSelector, text) {
         }
         element.dispatchEvent(new Event("input", { bubbles: true }));
         element.dispatchEvent(new Event("change", { bubbles: true }));
-        return;
-      }
-
-      // contenteditable — set innerText (preserves line breaks) and
-      // dispatch an InputEvent with insertText so React reconciles.
-      // The previous fallback used `textContent`, which strips line
-      // breaks AND doesn't trigger React's onChange.
-      element.innerText = textValue;
-      element.dispatchEvent(
-        new InputEvent("input", {
-          bubbles: true,
-          cancelable: true,
-          inputType: "insertText",
-          data: textValue,
-        }),
-      );
-      element.dispatchEvent(new Event("change", { bubbles: true }));
-    }, text);
-  } catch (_) {
-    // Last resort: ignore. The per-character typing already ran; if it
-    // didn't take, the caller will see the empty caption and can decide
-    // how to handle it (e.g., abort the post).
+      }, value);
+    } catch (__) {
+      // Caller may still see empty/wrong caption and can abort.
+    }
   }
 }
 

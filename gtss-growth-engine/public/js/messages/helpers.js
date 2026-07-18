@@ -67,6 +67,26 @@ function getCharLimitForPlatform(platform) {
   return charLimits[connectKey] || charLimits[dmKey] || 1000;
 }
 
+/**
+ * Badge for how a message was produced. AI (API/Web) is what Automation
+ * will send; template / template-fallback is emergency-only unless the
+ * founder explicitly approves it with no AI alternative.
+ */
+function sourceBadgeHtml(generatedBy) {
+  const key = String(generatedBy || "").toLowerCase();
+  if (key === "ai" || key === "ai-web") {
+    const label = key === "ai-web" ? "AI · Web" : "AI · API";
+    return `<span class="source-badge source-ai" title="Gemini-generated — preferred for DM send">${label}</span>`;
+  }
+  if (key === "template-fallback") {
+    return `<span class="source-badge source-fallback" title="Emergency template — only sent if founder approves and no AI body exists">Template fallback</span>`;
+  }
+  if (key === "template") {
+    return `<span class="source-badge source-template" title="Canonical template">Template</span>`;
+  }
+  return "";
+}
+
 async function loadPlatformFilterOptions() {
   platformCatalog = await window.gtss.loadPlatformCatalog();
   platformLabels = Object.fromEntries(

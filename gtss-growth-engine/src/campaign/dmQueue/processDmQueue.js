@@ -35,6 +35,7 @@ const {
 } = require("../utils/campaignUtils");
 const { sendNotification } = require("../../services/notificationService");
 const { closeStrayTabs } = require("../../automation/browserBase");
+const { getPreferredApprovedMessage } = require("../../services/messageSelectionService");
 
 const { resetDmQueueStopFlag, isDmQueueStopped } = require("./stopFlag");
 const { normalizeProfileUrl, buildProfileUrlVariants } = require("./profileUrlDedup");
@@ -545,12 +546,17 @@ async function processDmQueue(page, options = {}) {
             .trim()
             .split(/\s+/)[0] || "there";
 
-        // ── FIX A: Honour the pinned message_id ──────────────────────────
-        // When a dm_job already has a message_id, use THAT specific message.
-        // The old code always re-queried for the "latest approved" message,
-        // which caused message drift: if lead B's message was approved after
-        // lead A's job was queued, lead A's job would silently pick up lead
-        // B's message and send it.  Pinning prevents this entirely.
+        // Resolve the same preferred, sendable approved message used by the
+        // Automation page. A pin prevents cross-lead drift, but it must not
+        // preserve an old auto-approved template fallback after a Gemini or
+        // founder-approved replacement exists.
+        const preferredMessage = getPreferredApprovedMessage(db, {
+          leadId: job.lead_id,
+          platform: normPlatform,
+          isFollowUp: false,
+        });
+
+        // ── FIX A: Honour a valid, still-preferred pinned message ────────
         if (job.message_id) {
           const pinnedMessage = db
             .prepare("SELECT id, body, lead_id FROM messages WHERE id = ?")
@@ -582,39 +588,47 @@ async function processDmQueue(page, options = {}) {
               );
               report.failed++;
               skipJob = true;
-            } else {
-              // Ownership confirmed — use this exact message body
+            } else if (preferredMessage && preferredMessage.id === pinnedMessage.id) {
+              // Ownership and current sendability confirmed — use this exact
+              // message body. This preserves retry stability.
               messageBody = pinnedMessage.body;
               messageId = pinnedMessage.id;
             }
           }
         }
 
-        // Only search for an approved message if nothing is pinned yet
+        // Use the preferred message whenever no valid preferred pin exists.
+        // This updates stale pins from old template rows before any send.
         if (!skipJob && !messageBody) {
-          const approvedMessage = db
-            .prepare(
-              `
-            SELECT id, body FROM messages 
-            WHERE lead_id = ? AND platform = ? AND status = 'approved' 
-            ORDER BY approved_at DESC LIMIT 1
-          `,
-            )
-            .get(job.lead_id, normPlatform);
-
-          if (approvedMessage) {
-            messageBody = approvedMessage.body;
-            messageId = approvedMessage.id;
+          if (preferredMessage) {
+            messageBody = preferredMessage.body;
+            messageId = preferredMessage.id;
             // Pin this message to the job so retries never drift to a
-            // different approved message that appears later.
+            // different approved message that appears later. This also
+            // replaces a stale template-fallback pin.
             db.prepare("UPDATE dm_jobs SET message_id = ? WHERE id = ?").run(
               messageId,
               job.id,
             );
           } else {
-            // Last-resort generic fallback — always uses THIS lead's name,
-            // never a name from another lead's message body.
-            messageBody = `Hi ${firstName}, I wanted to reach out and say hi! Hope you are doing great.`;
+            // Never manufacture a generic fallback at send time. Leaving the
+            // job pending makes the missing approved Gemini/manual message
+            // visible for review instead of sending risky boilerplate.
+            db.prepare(
+              `UPDATE dm_jobs
+               SET status = 'pending',
+                   error_message = ?,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?`,
+            ).run("No sendable approved Gemini or founder-approved message exists for this lead.", job.id);
+            queueLog(
+              "warn",
+              "dm_queue",
+              job.id,
+              `Skipped ${job.lead_name}: no sendable approved Gemini or founder-approved message.`,
+            );
+            report.skipped++;
+            skipJob = true;
           }
         }
 
@@ -667,13 +681,17 @@ async function processDmQueue(page, options = {}) {
           "error",
           "dm_queue",
           job.id,
-          `Failed to check approved templates: ${err.message}`,
+          `Failed to resolve the approved message: ${err.message}`,
         );
-        const firstName =
-          String(job.lead_name || "there")
-            .trim()
-            .split(/\s+/)[0] || "there";
-        messageBody = `Hi ${firstName}, I wanted to reach out and say hi! Hope you are doing great.`;
+        db.prepare(
+          `UPDATE dm_jobs
+           SET status = 'pending',
+               error_message = ?,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`,
+        ).run(`Could not resolve a sendable approved message: ${err.message}`, job.id);
+        report.skipped++;
+        skipJob = true;
       }
 
       // Skip this job if any safety guard triggered above

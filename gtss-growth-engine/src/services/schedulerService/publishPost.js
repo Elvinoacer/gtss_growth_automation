@@ -6,7 +6,9 @@
  * instagram.postImage|postStory|postCarousel flow inside a 3-attempt
  * retry loop that REUSES the same browserState across attempts (so a
  * transient failure doesn't flicker the user's Chrome), updates the
- * posts table status at the end, and cleans up media files on success.
+ * posts table status at the end, and cleans up *ephemeral* media files
+ * on success (library assets under uploads/library/ are never deleted —
+ * they must survive for rotation / repost cycles).
  * Extracted from the original schedulerService.js for maintainability.
  *
  * This is a single ~450-line function — allowed to exceed 500 lines per
@@ -480,7 +482,9 @@ async function publishPost(postId, emit, browserOptions = {}) {
     }
   }
 
-  // Cleanup uploaded media file
+  // Cleanup ephemeral media only (AI / one-off composer uploads).
+  // Asset-library files are skipped inside deleteMediaFiles so they
+  // remain available for the next rotation / repost cycle.
   const cleanupMediaPaths = getPostMediaPaths(post);
   if (cleanupMediaPaths.length > 0 && failed.length === 0) {
     await deleteMediaFiles(cleanupMediaPaths);

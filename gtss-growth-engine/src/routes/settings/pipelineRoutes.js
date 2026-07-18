@@ -47,6 +47,12 @@ function registerPipelineRoutes(router) {
         return fallback;
       }
     };
+    const xDmOutreachEnabled = pipelineConfig.isXDmOutreachEnabled();
+    const igDmOutreachEnabled = pipelineConfig.isIgDmOutreachEnabled();
+    const storedPlatforms = getPipelineLimit(
+      "platforms",
+      pipelineConfig.defaultOutreachPlatforms(),
+    );
     res.json({
       pipelineMode: getSettingValue("pipeline_mode") || process.env.PIPELINE_MODE || "ai",
       discoveryMode: getSettingValue("discovery_mode") || process.env.DISCOVERY_MODE || "",
@@ -57,9 +63,11 @@ function registerPipelineRoutes(router) {
       qualificationManualScore: pipelineConfig.manualQualificationScore(),
       autoApproveVariant: pipelineConfig.autoApproveVariant(),
       pipelineCron: pipelineConfig.pipelineCron(),
-      outreachPlatforms: getPipelineLimit("platforms", ["linkedin", "x"]),
+      outreachPlatforms: pipelineConfig.filterOutreachPlatforms(storedPlatforms),
       maxDmsPerRun: getPipelineLimit("max_dms_per_run", 20),
       maxConnectionsPerRun: getPipelineLimit("max_connections_per_run", 15),
+      xDmOutreachEnabled,
+      igDmOutreachEnabled,
       xOutreachMode:
         getSettingValue("x_outreach_mode") ||
         process.env.X_OUTREACH_MODE ||
@@ -89,6 +97,33 @@ function registerPipelineRoutes(router) {
     const updated = [];
     const db = getDb();
 
+    // Boolean feature flags: X / Instagram cold-DM outreach (default off).
+    const boolFlags = [
+      {
+        bodyKey: "xDmOutreachEnabled",
+        envKey: "X_DM_OUTREACH_ENABLED",
+        settingKey: "x_dm_outreach_enabled",
+      },
+      {
+        bodyKey: "igDmOutreachEnabled",
+        envKey: "IG_DM_OUTREACH_ENABLED",
+        settingKey: "ig_dm_outreach_enabled",
+      },
+    ];
+    for (const flag of boolFlags) {
+      if (req.body[flag.bodyKey] === undefined) continue;
+      const enabled =
+        req.body[flag.bodyKey] === true ||
+        req.body[flag.bodyKey] === 1 ||
+        String(req.body[flag.bodyKey]).trim().toLowerCase() === "true" ||
+        String(req.body[flag.bodyKey]).trim() === "1";
+      const value = enabled ? "true" : "false";
+      upsertEnvValue(flag.envKey, value);
+      process.env[flag.envKey] = value;
+      upsertSetting(flag.settingKey, value);
+      updated.push(flag.bodyKey);
+    }
+
     for (const [bodyKey, [envKey, settingKey]] of Object.entries(fields)) {
       if (req.body[bodyKey] !== undefined) {
         const value = String(req.body[bodyKey]).trim();
@@ -110,9 +145,13 @@ function registerPipelineRoutes(router) {
 
     if (Array.isArray(req.body.outreachPlatforms)) {
       const valid = new Set(getPlatformCatalog().keys);
-      limits.platforms = req.body.outreachPlatforms
+      let platforms = req.body.outreachPlatforms
         .map((platform) => String(platform).trim().toLowerCase())
         .filter((platform) => valid.has(platform));
+      // Refuse to persist disabled cold-DM platforms while their flags are off.
+      // Same-request toggle saves apply first (above), so re-enable + check works.
+      platforms = pipelineConfig.filterOutreachPlatforms(platforms);
+      limits.platforms = platforms;
       if (limits.platforms.length === 0) {
         return res.status(400).json({ error: "Select at least one outreach platform" });
       }

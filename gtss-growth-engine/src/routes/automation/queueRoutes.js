@@ -17,17 +17,46 @@ const { getDb } = require("../../db/database");
 const { getQueuedActions } = require("../../automation/executor");
 
 /**
+ * Parse optional ?platforms=linkedin,x query param into a string array.
+ * Empty string after platforms= means "filter to nothing" (explicit empty set).
+ * Missing param means no platform filter (all platforms).
+ *
+ * @param {import('express').Request} req
+ * @returns {{ platforms?: string[], emptyFilter: boolean }}
+ */
+function parsePlatformsQuery(req) {
+  if (req.query.platforms === undefined) {
+    return { emptyFilter: false };
+  }
+  const raw = String(req.query.platforms || "");
+  if (!raw.trim()) {
+    return { platforms: [], emptyFilter: true };
+  }
+  const platforms = raw
+    .split(",")
+    .map((platform) => platform.trim().toLowerCase())
+    .filter(Boolean);
+  return { platforms, emptyFilter: false };
+}
+
+/**
  * Register the queue + history read-only routes on the given router.
  *
  * @param {import('express').Router} router
  */
 function registerQueueRoutes(router) {
   // Get queued actions
+  // Optional query: ?platforms=linkedin,x  (comma-separated)
   router.get("/api/automation/queue", (req, res) => {
     try {
+      const { platforms, emptyFilter } = parsePlatformsQuery(req);
+      if (emptyFilter) {
+        return res.json([]);
+      }
       const queue = getQueuedActions({
         includeBlocked: true,
         includeWaiting: true,
+        ...(platforms ? { platforms } : {}),
       });
       res.json(queue);
     } catch (error) {
@@ -37,9 +66,20 @@ function registerQueueRoutes(router) {
 
   router.get("/api/automation/queue/summary", (req, res) => {
     try {
+      const { platforms, emptyFilter } = parsePlatformsQuery(req);
+      if (emptyFilter) {
+        return res.json({
+          total: 0,
+          runnable: 0,
+          waiting: 0,
+          blocked: 0,
+          byCategory: [],
+        });
+      }
       const queue = getQueuedActions({
         includeBlocked: true,
         includeWaiting: true,
+        ...(platforms ? { platforms } : {}),
       });
       const summary = queue.reduce(
         (accumulator, action) => {

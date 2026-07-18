@@ -19,6 +19,10 @@ const facebook = require("../../automation/facebook");
 const tiktok = require("../../automation/tiktok");
 const { queueLog } = require("../utils/campaignUtils");
 const {
+  isXDmOutreachEnabled,
+  isIgDmOutreachEnabled,
+} = require("../../config/pipelineConfig");
+const {
   getInstagramUsername,
   getEmitCallback,
   classifyAndNormalizeError,
@@ -51,6 +55,32 @@ async function runDmAction(platform, page, lead, message, emitter) {
       outcome: "failed",
       error: `Unsupported platform: ${platform}`,
       metadata: {},
+      retryable: false,
+    };
+  }
+
+  // X / Instagram cold-DM outreach is off by default until re-enabled in Settings.
+  if (normPlatform === "x" && !isXDmOutreachEnabled()) {
+    const reason =
+      "X DM outreach is disabled. Enable it under Settings → Pipeline Configuration when you have a premium-capable X account.";
+    queueLog("warn", "adapter", "x", reason);
+    emit("warn", reason);
+    return {
+      outcome: "skipped",
+      error: reason,
+      metadata: { reason: "x_dm_outreach_disabled" },
+      retryable: false,
+    };
+  }
+  if (normPlatform === "instagram" && !isIgDmOutreachEnabled()) {
+    const reason =
+      "Instagram DM outreach is disabled. Enable it under Settings → Pipeline Configuration when you are ready for paced, personalized IG DMs.";
+    queueLog("warn", "adapter", "instagram", reason);
+    emit("warn", reason);
+    return {
+      outcome: "skipped",
+      error: reason,
+      metadata: { reason: "ig_dm_outreach_disabled" },
       retryable: false,
     };
   }

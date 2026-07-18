@@ -26,6 +26,11 @@ const {
   buildRuntimeState,
 } = require('./shared');
 const { normalizeLimits } = require('./massFollowHelpers');
+const {
+  isXDmOutreachEnabled,
+  isIgDmOutreachEnabled,
+  filterOutreachPlatforms,
+} = require('../../config/pipelineConfig');
 
 /**
  * Register CRUD + health routes on the given router.
@@ -38,9 +43,16 @@ function registerCrudRoutes(router) {
     const db = getDb();
     const rows = db.prepare('SELECT * FROM pipeline_schedules ORDER BY id').all();
     const activeCrons = cronRegistry.listAll();
+    const xDmEnabled = isXDmOutreachEnabled();
+    const igDmEnabled = isIgDmOutreachEnabled();
 
     const result = rows.map(row => {
       const limits = parseJsonObject(row.limits_json);
+      // Surface X/IG as unchecked for outreach when DM flags are off so the
+      // UI matches what discovery/send will actually run.
+      if (row.id === 'outreach' && Array.isArray(limits.platforms)) {
+        limits.platforms = filterOutreachPlatforms(limits.platforms);
+      }
       const paused = isPipelinePaused(row.id);
       return {
         ...row,
@@ -52,7 +64,11 @@ function registerCrudRoutes(router) {
       };
     });
 
-    res.json({ pipelines: result });
+    res.json({
+      pipelines: result,
+      xDmOutreachEnabled: xDmEnabled,
+      igDmOutreachEnabled: igDmEnabled,
+    });
   });
 
   router.get('/active', (_req, res) => {
@@ -92,6 +108,17 @@ function registerCrudRoutes(router) {
       };
     } catch (err) {
       return res.status(400).json({ error: err.message });
+    }
+
+    // Outreach path cannot persist X/Instagram while their DM flags are off.
+    if (id === 'outreach' && Array.isArray(mergedLimits.platforms)) {
+      mergedLimits.platforms = filterOutreachPlatforms(mergedLimits.platforms);
+      if (mergedLimits.platforms.length === 0) {
+        return res.status(400).json({
+          error:
+            'Selected DM platforms are disabled. Enable X/Instagram under Settings → Pipeline Configuration, or select LinkedIn / Facebook.',
+        });
+      }
     }
 
     const nextEnabled =

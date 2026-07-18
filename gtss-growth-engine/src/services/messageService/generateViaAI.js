@@ -33,14 +33,21 @@ const {
   sanitizeOutreachBody,
 } = require("./templates");
 const { generateFromTemplate } = require("./generateFromTemplate");
+const { retireTemplateMessages } = require("./retireTemplateMessages");
 
 /**
- * Generate outreach DMs via Gemini (API key first, Gemini Web fallback).
+ * Generate outreach DMs via Gemini cascade:
+ *   1. Gemini API (multi-model)
+ *   2. Gemini Web (browser)
+ *   3. template-fallback (emergency only)
+ *
+ * Same path as Generate All / pipeline message stage / Retry Fallbacks.
  *
  * @param {Object} lead - Lead row from DB
- * @returns {Promise<{variantA: {id, body}, variantB: {id, body}}>}
+ * @param {{ onProgress?: Function }} [options]
+ * @returns {Promise<{variantA: {id, body}, variantB: {id, body}, generatedBy?: string}>}
  */
-async function generateViaAI(lead) {
+async function generateViaAI(lead, options = {}) {
   const db = getDb();
   const ctx = getContext();
   const resolvedPlatform = lead.platform || getPrimaryPlatform();
@@ -52,6 +59,8 @@ async function generateViaAI(lead) {
   const geographies = Array.isArray(ctx.ctx_audience_geographies)
     ? ctx.ctx_audience_geographies
     : [];
+  const onProgress =
+    typeof options.onProgress === "function" ? options.onProgress : null;
 
   // ── Pre-flight: skip AI when no Gemini source is available ─────────────
   // If neither the Gemini API key nor a shared Chrome CDP endpoint is
@@ -69,6 +78,12 @@ async function generateViaAI(lead) {
   );
   if (!hasApiKey && !hasCdp) {
     logger.info("MESSAGES", "Skipping AI message generation — no GEMINI_API_KEY and no CDP endpoint; using template");
+    if (onProgress) {
+      onProgress({
+        stage: "template",
+        message: "No Gemini API key or CDP — using template fallback",
+      });
+    }
     const result = generateFromTemplate(lead);
     try {
       db.prepare(
@@ -76,7 +91,7 @@ async function generateViaAI(lead) {
          WHERE id IN (?, ?)`,
       ).run(result.variantA.id, result.variantB.id);
     } catch (_) {}
-    return result;
+    return { ...result, generatedBy: "template-fallback" };
   }
 
   const websiteUrl = String(ctx.ctx_biz_website || "").trim() || null;
@@ -108,7 +123,12 @@ Rules:
 Return ONLY the message body, no explanations or quotes.`;
 
   try {
-    const generation = await callGeminiText(prompt, { timeoutMs: 25_000 });
+    // Full cascade: API → Web. Never disable Web here — Retry Fallbacks
+    // and Generate All must share this path.
+    const generation = await callGeminiText(prompt, {
+      timeoutMs: 25_000,
+      onProgress,
+    });
     const raw = unwrapGeminiText(generation);
     let body = sanitizeOutreachBody(
       stripCodeFences(raw).replace(/^["']|["']$/g, ""),
@@ -116,27 +136,55 @@ Return ONLY the message body, no explanations or quotes.`;
     );
     if (body.length > limit) body = body.slice(0, limit);
 
+    // Stamp source so Automation can prefer real Gemini bodies and the UI
+    // can show API vs browser (Web) origin. Both are first-class AI messages.
+    const generatedBy = generation.source === "web" ? "ai-web" : "ai";
+
     logger.db("info", "outreach", "message_ai", "AI outreach message generated", {
       leadId: lead.id,
       platform: resolvedPlatform,
       source: generation.source || "unknown",
       model: generation.model,
+      generatedBy,
     });
 
     const insertStmt = db.prepare(
       `INSERT INTO messages (lead_id, platform, body, variant, status, generated_by, generated_at)
-       VALUES (?, ?, ?, ?, 'pending', 'ai', CURRENT_TIMESTAMP)`,
+       VALUES (?, ?, ?, ?, 'pending', ?, CURRENT_TIMESTAMP)`,
     );
-    const resultA = insertStmt.run(lead.id, resolvedPlatform, body, "A");
-    const resultB = insertStmt.run(lead.id, resolvedPlatform, body, "B");
+    const resultA = insertStmt.run(lead.id, resolvedPlatform, body, "A", generatedBy);
+    const resultB = insertStmt.run(lead.id, resolvedPlatform, body, "B", generatedBy);
+
+    // Critical: remove any leftover template/template-fallback drafts so the
+    // Automation DM queue cannot pick a fallback over this Gemini body.
+    const retired = retireTemplateMessages(db, {
+      leadId: lead.id,
+      platform: resolvedPlatform,
+      keepIds: [resultA.lastInsertRowid, resultB.lastInsertRowid],
+    });
+    if (retired > 0) {
+      logger.info(
+        "MESSAGES",
+        `Retired ${retired} template draft(s) for lead ${lead.id} after AI generation`,
+      );
+    }
+
     return {
       variantA: { id: resultA.lastInsertRowid, body },
       variantB: { id: resultB.lastInsertRowid, body },
+      generatedBy,
     };
   } catch (err) {
     logger.warn("MESSAGES", `AI message generation failed for lead ${lead.id}, falling back to template`, {
       error: err.message,
     });
+    if (onProgress) {
+      onProgress({
+        stage: "template",
+        message: `API + Web failed — template fallback (${err.message})`,
+        error: err.message,
+      });
+    }
     // Fall back to template so the pipeline keeps moving. The rows are
     // stamped 'template-fallback' so the review UI can show the user that
     // AI wasn't actually used for this lead.
@@ -148,7 +196,7 @@ Return ONLY the message body, no explanations or quotes.`;
          WHERE id IN (?, ?)`,
       ).run(result.variantA.id, result.variantB.id);
     } catch (_) {}
-    return result;
+    return { ...result, generatedBy: "template-fallback" };
   }
 }
 

@@ -62,8 +62,8 @@ function bindEvents() {
   // Reads/writes CDP_VISIBLE_DEFAULT via the bridge HTTP server
   // (desktop/main/bridge-server.js, port 9224). The setting controls
   // whether the CDP Chrome runs visibly or in the background on normal
-  // Starts. Takes effect on the next Start — we don't restart Chrome
-  // immediately when the user changes it.
+  // Starts. Saving also restarts launcher-owned CDP Chrome immediately, so
+  // the desktop app itself never needs to restart for the change to apply.
   const saveBrowserModeBtn = document.getElementById("save-browser-mode");
   if (saveBrowserModeBtn) {
     saveBrowserModeBtn.addEventListener("click", saveBrowserMode);
@@ -261,15 +261,21 @@ async function saveBrowserMode() {
     });
     const data = await res.json();
     if (data && data.ok) {
+      const applied = data.applied === true;
+      const resultMessage = applied
+        ? mode === "visible"
+          ? "✓ Chrome restarted visibly — GTSS stays running"
+          : "✓ Chrome restarted in the background — GTSS stays running"
+        : data.message || "✓ Saved — this mode will be used when Chrome next starts";
       setInline(
         "browser-mode-result",
-        mode === "visible"
-          ? "✓ Chrome will run visibly on next Start"
-          : "✓ Chrome will run in the background on next Start",
+        resultMessage,
         "success",
       );
       window.gtss.showToast(
-        `Browser mode: ${mode}. Applies on next Start.`,
+        applied
+          ? `Browser mode changed to ${mode}. Automation Chrome restarted; the app stayed running.`
+          : `Browser mode saved as ${mode}. ${data.message || "It will apply when Chrome next starts."}`,
         "success",
       );
     } else {

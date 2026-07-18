@@ -32,6 +32,11 @@ var pageLimit = 20;
 var totalMessages = 0;
 var cachedMessages = [];
 var activeSocketCleanup = null;
+// True only while a bulk generate / retry job is actively running.
+// Retry button is disabled solely because of this — never because the
+// server count of fallbacks was 0 (that caused the "I still see Template
+// rows but the button is grey" bug).
+var isBulkGenRunning = false;
 var charLimits = {};
 var platformCatalog = [];
 var platformLabels = {};
@@ -65,6 +70,8 @@ var tabSent = document.getElementById("tab-sent");
 var tabFollowups = document.getElementById("tab-followups");
 
 var generateAllBtn = document.getElementById("generate-all-btn");
+var retryFallbacksBtn = document.getElementById("retry-fallbacks-btn");
+var retryFallbacksCount = document.getElementById("retry-fallbacks-count");
 var progressPanel = document.getElementById("progress-panel");
 var progressFill = document.getElementById("progress-fill");
 var progressText = document.getElementById("progress-text");

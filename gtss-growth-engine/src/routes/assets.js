@@ -137,6 +137,77 @@ router.post("/upload", upload.array("assets", 20), (req, res) => {
   res.status(201).json({ assets });
 });
 
+/**
+ * Remove one asset from the library: usage log + DB row.
+ * Returns the asset row when deleted (caller should unlink file_path),
+ * or null when the id was not found.
+ */
+function deleteAssetRow(db, assetId) {
+  const asset = db.prepare("SELECT * FROM asset_library WHERE id = ?").get(assetId);
+  if (!asset) return null;
+  db.prepare("DELETE FROM asset_usage_log WHERE asset_id = ?").run(asset.id);
+  db.prepare("DELETE FROM asset_library WHERE id = ?").run(asset.id);
+  return asset;
+}
+
+/** Best-effort disk cleanup for a library asset file path. */
+function unlinkAssetFile(filePath) {
+  if (!filePath) return;
+  fs.promises.unlink(filePath).catch(() => {});
+}
+
+// Stats + bulk-delete must be registered before /:id so Express does not
+// treat "stats" / "bulk-delete" as numeric ids.
+router.get("/stats", (_req, res) => {
+  const db = getDb();
+  const counts = db
+    .prepare("SELECT media_type, COUNT(*) AS count FROM asset_library GROUP BY media_type")
+    .all();
+  const groupCounts = db
+    .prepare("SELECT COUNT(*) AS count FROM asset_groups")
+    .get();
+  const next = pickNextAsset({ mediaType: "both" });
+  const nextGroup = pickNextAssetGroup({ postType: "any" });
+  res.json({
+    counts,
+    total: counts.reduce((sum, row) => sum + row.count, 0),
+    groupCount: groupCounts ? groupCounts.count : 0,
+    next,
+    nextGroup,
+  });
+});
+
+// Body: { ids: [1, 2, 3] } — permanently remove multiple library assets.
+router.post("/bulk-delete", (req, res) => {
+  const db = getDb();
+  const ids = Array.isArray(req.body?.ids)
+    ? req.body.ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+    : [];
+  if (ids.length === 0) {
+    return res.status(400).json({ error: "Provide at least one asset id in ids[]" });
+  }
+
+  const deleted = [];
+  const tx = db.transaction(() => {
+    for (const id of ids) {
+      const asset = deleteAssetRow(db, id);
+      if (asset) deleted.push(asset);
+    }
+  });
+  tx();
+
+  // Unlink disk files after the DB transaction commits.
+  for (const asset of deleted) {
+    unlinkAssetFile(asset.file_path);
+  }
+
+  res.json({
+    deleted: true,
+    deletedIds: deleted.map((a) => a.id),
+    count: deleted.length,
+  });
+});
+
 router.patch("/:id", (req, res) => {
   const db = getDb();
   const asset = db.prepare("SELECT * FROM asset_library WHERE id = ?").get(req.params.id);
@@ -163,31 +234,12 @@ router.patch("/:id", (req, res) => {
 
 router.delete("/:id", (req, res) => {
   const db = getDb();
-  const asset = db.prepare("SELECT * FROM asset_library WHERE id = ?").get(req.params.id);
-  if (!asset) return res.status(404).json({ error: "Asset not found" });
-  db.prepare("DELETE FROM asset_usage_log WHERE asset_id = ?").run(asset.id);
-  db.prepare("DELETE FROM asset_library WHERE id = ?").run(asset.id);
-  fs.promises.unlink(asset.file_path).catch(() => {});
+  const asset = deleteAssetRow(db, req.params.id);
+  if (!asset) {
+    return res.status(404).json({ error: "Asset not found" });
+  }
+  unlinkAssetFile(asset.file_path);
   res.json({ deleted: true });
-});
-
-router.get("/stats", (_req, res) => {
-  const db = getDb();
-  const counts = db
-    .prepare("SELECT media_type, COUNT(*) AS count FROM asset_library GROUP BY media_type")
-    .all();
-  const groupCounts = db
-    .prepare("SELECT COUNT(*) AS count FROM asset_groups")
-    .get();
-  const next = pickNextAsset({ mediaType: "both" });
-  const nextGroup = pickNextAssetGroup({ postType: "any" });
-  res.json({
-    counts,
-    total: counts.reduce((sum, row) => sum + row.count, 0),
-    groupCount: groupCounts ? groupCounts.count : 0,
-    next,
-    nextGroup,
-  });
 });
 
 // ── Asset Group CRUD ──────────────────────────────────────────────────────

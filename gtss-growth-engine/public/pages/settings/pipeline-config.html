@@ -111,6 +111,57 @@
             </div>
           </div>
 
+          <h3 style="margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--gtss-muted);">Cold DM Platform Gates</h3>
+          <p class="muted" style="font-size: 12px; margin: 0 0 12px; line-height: 1.55;">
+            X and Instagram make automated cold DMs intentionally hard (rate limits,
+            privacy, anti-bot). Both stay off for discovery → DM until you opt in.
+            Mass-follow, warmup, and content posting are unaffected.
+          </p>
+          <div
+            class="callout"
+            style="margin-bottom: 12px; padding: 14px 16px; border-radius: 10px; border: 1px solid rgba(148,163,184,0.25); background: rgba(15,23,42,0.35);"
+          >
+            <label style="display:flex; align-items:flex-start; gap:12px; cursor:pointer; margin:0;">
+              <input
+                id="x-dm-outreach-enabled"
+                type="checkbox"
+                style="margin-top: 3px; accent-color: #0ea5e9; width: 16px; height: 16px;"
+              />
+              <span>
+                <strong style="display:block; color: var(--gtss-text); font-size: 14px;">
+                  Enable X for lead discovery &amp; DM send
+                </strong>
+                <span class="muted" style="display:block; font-size: 12px; line-height: 1.55; margin-top: 4px;">
+                  Off by default. Free X accounts cannot reliably send DMs through automation.
+                  Turn this on only when you use a premium-capable X account.
+                </span>
+              </span>
+            </label>
+          </div>
+          <div
+            class="callout"
+            style="margin-bottom: 16px; padding: 14px 16px; border-radius: 10px; border: 1px solid rgba(148,163,184,0.25); background: rgba(15,23,42,0.35);"
+          >
+            <label style="display:flex; align-items:flex-start; gap:12px; cursor:pointer; margin:0;">
+              <input
+                id="ig-dm-outreach-enabled"
+                type="checkbox"
+                style="margin-top: 3px; accent-color: #0ea5e9; width: 16px; height: 16px;"
+              />
+              <span>
+                <strong style="display:block; color: var(--gtss-text); font-size: 14px;">
+                  Enable Instagram for lead discovery &amp; DM send
+                </strong>
+                <span class="muted" style="display:block; font-size: 12px; line-height: 1.55; margin-top: 4px;">
+                  Off by default. Instagram limits profile visits, DMs, and message requests;
+                  many accounts only accept DMs from people they follow. Prefer paced,
+                  personalized outreach when you re-enable. While off, Instagram is excluded
+                  from discovery, the outreach pipeline, and the automation DM queue.
+                </span>
+              </span>
+            </label>
+          </div>
+
           <h3 style="margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--gtss-muted);">Outreach Platforms</h3>
           <div id="outreach-platforms-list" class="checkbox-list" style="margin-bottom: 20px;"></div>
 

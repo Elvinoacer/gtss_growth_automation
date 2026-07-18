@@ -96,31 +96,99 @@ function applyPipelineConfig(config) {
     config.linkedinOutreachMode || "connect_first";
   document.getElementById("x-outreach-mode").value =
     config.xOutreachMode || "follow_first";
-  renderOutreachPlatforms(config.outreachPlatforms || []);
+  const xDmToggle = document.getElementById("x-dm-outreach-enabled");
+  if (xDmToggle) {
+    xDmToggle.checked = Boolean(config.xDmOutreachEnabled);
+  }
+  const igDmToggle = document.getElementById("ig-dm-outreach-enabled");
+  if (igDmToggle) {
+    igDmToggle.checked = Boolean(config.igDmOutreachEnabled);
+  }
+  const xModeSelect = document.getElementById("x-outreach-mode");
+  if (xModeSelect) {
+    xModeSelect.disabled = !config.xDmOutreachEnabled;
+    xModeSelect.title = config.xDmOutreachEnabled
+      ? ""
+      : "Enable X DM outreach above to configure X modes";
+  }
+  renderOutreachPlatforms(config.outreachPlatforms || [], {
+    x: config.xDmOutreachEnabled,
+    ig: config.igDmOutreachEnabled,
+  });
+  // When toggles flip, re-render platform checkboxes so X/IG enable/disable live.
+  const rebindGate = (el, datasetKey) => {
+    if (!el || el.dataset[datasetKey]) return;
+    el.dataset[datasetKey] = "1";
+    el.addEventListener("change", () => {
+      const selected = collectOutreachPlatforms();
+      if (xModeSelect && el === xDmToggle) {
+        xModeSelect.disabled = !xDmToggle.checked;
+        xModeSelect.title = xDmToggle.checked
+          ? ""
+          : "Enable X DM outreach above to configure X modes";
+      }
+      renderOutreachPlatforms(selected, {
+        x: Boolean(document.getElementById("x-dm-outreach-enabled")?.checked),
+        ig: Boolean(document.getElementById("ig-dm-outreach-enabled")?.checked),
+      });
+    });
+  };
+  rebindGate(xDmToggle, "boundXToggle");
+  rebindGate(igDmToggle, "boundIgToggle");
 }
 
-function renderOutreachPlatforms(selectedPlatforms) {
+function renderOutreachPlatforms(selectedPlatforms, flags) {
   const container = document.getElementById("outreach-platforms-list");
   if (!container) return;
+  const xEnabled =
+    flags && flags.x !== undefined
+      ? Boolean(flags.x)
+      : Boolean(document.getElementById("x-dm-outreach-enabled")?.checked);
+  const igEnabled =
+    flags && flags.ig !== undefined
+      ? Boolean(flags.ig)
+      : Boolean(document.getElementById("ig-dm-outreach-enabled")?.checked);
   const selected = new Set(
     (Array.isArray(selectedPlatforms) ? selectedPlatforms : [])
       .map((platform) => String(platform).toLowerCase())
       .filter(Boolean),
   );
+  // Never show gated platforms as selected while their feature is off.
+  if (!xEnabled) selected.delete("x");
+  if (!igEnabled) selected.delete("instagram");
   const platforms = settingsState.settings.platforms || [];
   container.innerHTML = platforms
-    .map(
-      (platform) => `
-      <label>
+    .map((platform) => {
+      const isX = platform.key === "x";
+      const isIg = platform.key === "instagram";
+      const disabled = (isX && !xEnabled) || (isIg && !igEnabled);
+      const checked = !disabled && selected.has(platform.key);
+      let hint = "";
+      if (disabled && isX) {
+        hint =
+          ' <span class="muted" style="font-size:11px;">(enable X DM outreach above)</span>';
+      } else if (disabled && isIg) {
+        hint =
+          ' <span class="muted" style="font-size:11px;">(enable Instagram DM outreach above)</span>';
+      }
+      const title = disabled
+        ? isX
+          ? "Turn on Enable X for lead discovery & DM send first"
+          : "Turn on Enable Instagram for lead discovery & DM send first"
+        : "";
+      return `
+      <label style="${disabled ? "opacity:0.55;" : ""}">
         <input
           type="checkbox"
           data-outreach-platform="${platform.key}"
-          ${selected.has(platform.key) ? "checked" : ""}
+          ${checked ? "checked" : ""}
+          ${disabled ? "disabled" : ""}
+          title="${title}"
         />
-        ${platform.label || platformLabel(platform.key)}
+        ${platform.label || platformLabel(platform.key)}${hint}
       </label>
-    `,
-    )
+    `;
+    })
     .join("");
 }
 
@@ -217,6 +285,12 @@ async function savePipelineSettings() {
         linkedinOutreachMode: document.getElementById("linkedin-outreach-mode")
           .value,
         xOutreachMode: document.getElementById("x-outreach-mode").value,
+        xDmOutreachEnabled: Boolean(
+          document.getElementById("x-dm-outreach-enabled")?.checked,
+        ),
+        igDmOutreachEnabled: Boolean(
+          document.getElementById("ig-dm-outreach-enabled")?.checked,
+        ),
       }),
     });
     window.gtss.showToast("Pipeline settings saved", "success");

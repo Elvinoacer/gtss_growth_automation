@@ -37,6 +37,11 @@ const {
 const { BATCH_SIZE, BATCH_DELAY_MS } = require("./sseInfrastructure");
 const { generateFromTemplate } = require("./generateFromTemplate");
 const { generateMessages } = require("./generateMessages");
+const {
+  needsAiMessageSql,
+  retireTemplateMessages,
+  isAiGeneratedBy,
+} = require("./retireTemplateMessages");
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -44,8 +49,9 @@ function delay(ms) {
 
 /**
  * Run the message generation stage for the pipeline.
- * Generates messages for all qualified leads that don't yet have an approved message.
- * Auto-approves the configured variant (default: B).
+ * Generates messages for all qualified leads that don't yet have a real
+ * AI (or non-template) approved message. Auto-approves the configured
+ * variant (default: B) — never auto-approves template-fallback.
  *
  * @param {string|number} jobId - Pipeline run ID for event tracking
  * @param {Function} emit - Event emitter function
@@ -64,13 +70,14 @@ async function runMessageStage(jobId, emit, platforms = []) {
       ? `AND l.platform IN (${selectedPlatforms.map(() => "?").join(",")})`
       : "";
 
-  // Get all qualified leads that don't yet have an approved message
+  // Qualified leads without a real AI body yet. Template-only drafts do
+  // not block re-generation — they are emergency fallbacks only.
   const leads = db
     .prepare(
       `
     SELECT l.* FROM leads l
-    LEFT JOIN messages m ON m.lead_id = l.id AND m.status = 'approved'
-    WHERE l.status = 'qualified' AND m.id IS NULL
+    WHERE l.status = 'qualified'
+      AND ${needsAiMessageSql("l")}
     ${platformClause}
     ORDER BY l.lead_score DESC
   `,
@@ -118,6 +125,12 @@ async function runMessageStage(jobId, emit, platforms = []) {
       if (mode === "manual" || source === "template") {
         result = generateFromTemplate(lead);
       } else {
+        // Drop stale template drafts before Gemini so bulk-approve and
+        // the Automation queue only see the AI body.
+        retireTemplateMessages(db, {
+          leadId: lead.id,
+          platform: lead.platform || null,
+        });
         // AI mode — generateViaAI handles its own template fallback on
         // Gemini failure, so this never deadlocks.
         result = await generateMessages(lead.id, lead.platform);
@@ -125,7 +138,8 @@ async function runMessageStage(jobId, emit, platforms = []) {
 
       generated++;
 
-      // Auto-approve configured variant
+      // Auto-approve configured variant — never template-fallback, and
+      // never plain template unless the operator forced template mode.
       const updated = db
         .prepare(
           `
@@ -133,12 +147,45 @@ async function runMessageStage(jobId, emit, platforms = []) {
         SET status = 'approved',
             approved_by = 'pipeline-auto',
             approved_at = CURRENT_TIMESTAMP
-        WHERE lead_id = ? AND variant = ? AND status = 'pending'
+        WHERE lead_id = ?
+          AND variant = ?
+          AND status = 'pending'
+          AND COALESCE(generated_by, '') NOT IN ('template-fallback'
+            ${mode === "manual" || source === "template" ? "" : ", 'template'"})
       `,
         )
         .run(lead.id, variant);
 
       if (updated.changes > 0) {
+        // Retire any remaining template rows and older approvals for this
+        // lead so the DM queue pins the AI body that was just approved.
+        const approvedRow = db
+          .prepare(
+            `SELECT id, platform, generated_by FROM messages
+             WHERE lead_id = ? AND variant = ? AND status = 'approved'
+             ORDER BY approved_at DESC, id DESC LIMIT 1`,
+          )
+          .get(lead.id, variant);
+
+        if (approvedRow) {
+          if (isAiGeneratedBy(approvedRow.generated_by)) {
+            retireTemplateMessages(db, {
+              leadId: lead.id,
+              platform: approvedRow.platform || lead.platform || null,
+              keepIds: [approvedRow.id],
+            });
+          }
+          db.prepare(
+            `UPDATE messages
+             SET status = 'skipped'
+             WHERE lead_id = ?
+               AND COALESCE(platform, '') = COALESCE(?, '')
+               AND COALESCE(is_follow_up, 0) = 0
+               AND id != ?
+               AND status = 'approved'`,
+          ).run(lead.id, approvedRow.platform || lead.platform || null, approvedRow.id);
+        }
+
         db.prepare(
           "UPDATE leads SET status = 'message_approved', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'qualified'",
         ).run(lead.id);
@@ -148,6 +195,7 @@ async function runMessageStage(jobId, emit, platforms = []) {
           leadId: lead.id,
           name: lead.name,
           autoApproved: variant,
+          generatedBy: result.generatedBy || approvedRow?.generated_by || null,
           variantA: result.variantA.body.slice(0, 60),
           variantB: result.variantB.body.slice(0, 60),
         });

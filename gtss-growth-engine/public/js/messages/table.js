@@ -35,6 +35,12 @@ async function loadMessages() {
     renderTable(data.messages);
     renderPagination();
     totalBadge.textContent = `${data.total} messages`;
+    // Keep Retry badge in sync with the Template / Template fallback
+    // rows the operator can actually see (fixes count=0 / button-disabled
+    // while the table still shows those badges).
+    if (typeof updateRetryFallbacksButton === "function") {
+      updateRetryFallbacksButton(null, null, { fromTable: true });
+    }
   } catch (err) {
     showToast(err.message, "error");
   }
@@ -54,12 +60,18 @@ function renderTable(messages) {
       const preview = escapeHtml(truncate(msg.body, 60));
       const generated = relativeTime(msg.generated_at);
       const statusCls = `status-${msg.status || "pending"}`;
+      const sourceBadge = sourceBadgeHtml(msg.generated_by);
 
       return `<tr data-msg-id="${msg.id}">
         <td>${escapeHtml(msg.lead_name || "—")}</td>
         <td><span class="platform-badge ${platformClass(msg.platform)}">${platformLabel(msg.platform)}</span></td>
         <td>${escapeHtml(msg.lead_company || "—")}</td>
-        <td><span class="msg-preview">${preview}</span></td>
+        <td>
+          <div class="msg-cell">
+            <span class="msg-preview">${preview}</span>
+            ${sourceBadge}
+          </div>
+        </td>
         <td><span class="variant-badge variant-${(msg.variant || "a").toLowerCase()}">${msg.variant || "—"}</span></td>
         <td><span class="status-pill ${statusCls}">${msg.status || "pending"}</span></td>
         <td style="color:var(--gtss-muted);">${generated}</td>
