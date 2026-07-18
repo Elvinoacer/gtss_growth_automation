@@ -73,14 +73,30 @@ function createMockXPage({ url, bodyText = "", visibleSelectors = [] }) {
 }
 
 test("browser locks block concurrent use of the same profile", () => {
-  const lock = acquireBrowserLock("linkedin", "persistent", "/tmp/profile-a");
+  // Same-PID re-acquisition is intentionally allowed (recovery / re-entrant
+  // path). Mutual exclusion is enforced against a *different live* PID.
+  // PID 1 (init/systemd) is always running on Linux and is never us.
+  fs.mkdirSync(process.env.AUTOMATION_LOCKS_DIR, { recursive: true });
+  const lockFile = path.join(
+    process.env.AUTOMATION_LOCKS_DIR,
+    "linkedin-persistent-tmp-profile-a.lock",
+  );
+  fs.writeFileSync(
+    lockFile,
+    JSON.stringify({
+      pid: 1,
+      platform: "linkedin",
+      mode: "persistent",
+      target: "/tmp/profile-a",
+    }),
+  );
 
   assert.throws(
     () => acquireBrowserLock("linkedin", "persistent", "/tmp/profile-a"),
     /already in use/,
   );
 
-  releaseBrowserLock(lock);
+  fs.unlinkSync(lockFile);
   const nextLock = acquireBrowserLock(
     "linkedin",
     "persistent",

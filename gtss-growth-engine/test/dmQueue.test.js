@@ -20,7 +20,7 @@ async function runDmQueueTests() {
   db.prepare("DELETE FROM connection_jobs WHERE campaign_id IN (9999, 10001, 10003)").run();
   db.prepare("DELETE FROM dm_jobs WHERE campaign_id IN (9999, 10001, 10003)").run();
   db.prepare("DELETE FROM touchpoints WHERE lead_id IN (9999, 10001, 10002, 10003, 10004)").run();
-  db.prepare("DELETE FROM messages WHERE id IN (10001, 10003, 10004)").run();
+  db.prepare("DELETE FROM messages WHERE id IN (9999, 10001, 10003, 10004)").run();
   db.prepare("DELETE FROM campaigns WHERE id IN (9999, 10001, 10003)").run();
   db.prepare("DELETE FROM daily_actions WHERE campaign_id IN (9999, 10001, 10003)").run();
   db.prepare("DELETE FROM leads WHERE id IN (9999, 10001, 10002, 10003, 10004)").run();
@@ -44,6 +44,13 @@ async function runDmQueueTests() {
   db.prepare(`
     INSERT INTO dm_jobs (campaign_id, lead_id, status)
     VALUES (9999, 9999, 'pending')
+  `).run();
+
+  // DM queue refuses to send without a sendable approved message (Gemini or
+  // founder-approved). Seed one for the success / retry paths below.
+  db.prepare(`
+    INSERT INTO messages (id, lead_id, platform, body, status, generated_by, approved_at)
+    VALUES (9999, 9999, 'linkedin', 'Hi Test DM Lead, looking forward to connecting.', 'approved', 'ai', datetime('now'))
   `).run();
 
   db.pragma("foreign_keys = ON");
@@ -128,8 +135,22 @@ async function runDmQueueTests() {
   console.log("Testing T4 — Temporary Failures & Retry scheduling...");
 
   db.prepare("DELETE FROM touchpoints WHERE lead_id IN (9999, 10001, 10002, 10003, 10004)").run();
-  db.prepare("DELETE FROM messages WHERE id IN (10001, 10003, 10004)").run();
-  db.prepare("UPDATE dm_jobs SET status = 'pending', retry_count = 0, error_message = NULL, scheduled_at = datetime('now', '-10 seconds') WHERE campaign_id = 9999").run();
+  db.prepare("DELETE FROM messages WHERE id IN (9999, 10001, 10003, 10004)").run();
+  // T2 marks the approved message as status='sent'. Re-seed a fresh approved
+  // body so the queue can attempt the browser send (and hit our mocked failure).
+  db.prepare(`
+    INSERT INTO messages (id, lead_id, platform, body, status, generated_by, approved_at)
+    VALUES (9999, 9999, 'linkedin', 'Hi Test DM Lead, retry body.', 'approved', 'ai', datetime('now'))
+  `).run();
+  db.prepare(`
+    UPDATE dm_jobs
+    SET status = 'pending',
+        retry_count = 0,
+        error_message = NULL,
+        message_id = 9999,
+        scheduled_at = datetime('now', '-10 seconds')
+    WHERE campaign_id = 9999
+  `).run();
 
   platformPolicies.linkedin.activeWindow = null;
   platformAdapter.runDmAction = async () => {
@@ -230,7 +251,7 @@ async function runDmQueueTests() {
   db.prepare("DELETE FROM connection_jobs WHERE campaign_id IN (9999, 10001, 10003)").run();
   db.prepare("DELETE FROM dm_jobs WHERE campaign_id IN (9999, 10001, 10003)").run();
   db.prepare("DELETE FROM touchpoints WHERE lead_id IN (9999, 10001, 10002, 10003, 10004)").run();
-  db.prepare("DELETE FROM messages WHERE id IN (10001, 10003, 10004)").run();
+  db.prepare("DELETE FROM messages WHERE id IN (9999, 10001, 10003, 10004)").run();
   db.prepare("DELETE FROM campaigns WHERE id IN (9999, 10001, 10003)").run();
   db.prepare("DELETE FROM daily_actions WHERE campaign_id IN (9999, 10001, 10003)").run();
   db.prepare("DELETE FROM leads WHERE id IN (9999, 10001, 10002, 10003, 10004)").run();

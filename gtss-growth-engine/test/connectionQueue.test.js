@@ -46,6 +46,11 @@ async function runConnectionQueueTests() {
   db.pragma("foreign_keys = ON");
   const mockPage = {};
 
+  // Disable active-window gating for success/failure paths so these tests are
+  // hermetic regardless of wall-clock hour. T3 re-enables a closed window.
+  const originalActiveWindow = platformPolicies.instagram.activeWindow;
+  platformPolicies.instagram.activeWindow = null;
+
   // ───────────────────────────────────────────────────────────────────────────
   // TEST 1: Connection Action Success & DM Job Promotion
   // ───────────────────────────────────────────────────────────────────────────
@@ -109,11 +114,14 @@ async function runConnectionQueueTests() {
 
   db.prepare("UPDATE connection_jobs SET status = 'pending', next_retry_at = NULL WHERE campaign_id = 9999").run();
 
-  const originalActiveWindow = platformPolicies.instagram.activeWindow;
-  // Set operational window to be completely closed
+  // Set operational window to be completely closed relative to "now".
+  // Use a 1-hour window that starts one hour after the current hour so
+  // the test is hermetic at any wall-clock time (including 23:00).
+  const closedStart = (new Date().getHours() + 1) % 24;
+  const closedEnd = (closedStart + 1) % 24;
   platformPolicies.instagram.activeWindow = {
-    startHour: 23,
-    endHour: 24,
+    startHour: closedStart,
+    endHour: closedEnd === 0 ? 24 : closedEnd,
     timezone: "local"
   };
 
@@ -160,8 +168,9 @@ async function runConnectionQueueTests() {
   db.prepare("DELETE FROM leads WHERE id = 9999").run();
   db.pragma("foreign_keys = ON");
 
-  // Restore adapter behaviors
+  // Restore adapter behaviors and policies
   platformAdapter.runConnectionAction = originalRunConnectionAction;
+  platformPolicies.instagram.activeWindow = originalActiveWindow;
 
   console.log("🎉 ALL CONNECTION QUEUE TESTS PASSED SUCCESSFULLY!\n");
 }

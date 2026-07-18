@@ -70,10 +70,28 @@ async function ensureSharedCdpChrome(endpoint) {
   const port = getPortFromEndpoint(endpoint);
   if (await isPortOpen(port)) return;
 
+  // Optional skip for CI / machines without Chrome or Playwright browsers.
+  if (
+    process.env.TEST_NO_BROWSER_LAUNCH === "true" ||
+    process.env.SKIP_CDP_CHROME === "true"
+  ) {
+    throw new Error(
+      `Shared CDP Chrome is not listening on ${endpoint} and TEST_NO_BROWSER_LAUNCH/SKIP_CDP_CHROME is set. ` +
+        `Start Chrome with --remote-debugging-port=${port}, or run: bash scripts/launch-chrome.sh`,
+    );
+  }
+
   console.log(
     `[cdp] Shared Chrome is not listening on ${endpoint}; starting the shared CDP launcher once...`,
   );
   const launcher = path.resolve(__dirname, "..", "launch-chrome.sh");
+  if (!require("fs").existsSync(launcher)) {
+    throw new Error(
+      `Shared CDP Chrome did not become ready at ${endpoint}: launcher missing at ${launcher}. ` +
+        `Install Google Chrome and run: bash scripts/launch-chrome.sh`,
+    );
+  }
+
   const child = spawn("bash", [launcher], {
     detached: true,
     stdio: "ignore",
@@ -81,12 +99,16 @@ async function ensureSharedCdpChrome(endpoint) {
   });
   child.unref();
 
-  for (let i = 0; i < 20; i += 1) {
+  for (let i = 0; i < 40; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 500));
     if (await isPortOpen(port)) return;
   }
 
-  throw new Error(`Shared CDP Chrome did not become ready at ${endpoint}`);
+  throw new Error(
+    `Shared CDP Chrome did not become ready at ${endpoint}. ` +
+      `Ensure Google Chrome is installed, then run: bash scripts/launch-chrome.sh\n` +
+      `(Playwright's bundled Chromium is not used for CDP — this app attaches to real Chrome.)`,
+  );
 }
 
 // Cleanup helper

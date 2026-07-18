@@ -42,15 +42,25 @@ async function closeBrowser(browser, platform, context, options = {}) {
     }
 
     if (context && options.mode === "ephemeral") {
-      const cookies = await context.cookies();
-      saveSession(platform, cookies);
-      logger.info(
-        "BROWSER",
-        `Saved updated session cookies for ${platform} on close`,
-      );
+      if (typeof context.cookies === "function") {
+        const cookies = await context.cookies();
+        saveSession(platform, cookies);
+        logger.info(
+          "BROWSER",
+          `Saved updated session cookies for ${platform} on close`,
+        );
+      } else {
+        logger.warn(
+          "BROWSER",
+          `Skipping cookie save for ${platform}: context.cookies is not a function`,
+        );
+      }
     } else if (context) {
       const mode = options.mode || "persistent";
-      const hasAuthCookie = await hasPlatformAuthCookie(context, platform);
+      const hasAuthCookie =
+        typeof context.cookies === "function"
+          ? await hasPlatformAuthCookie(context, platform)
+          : false;
       if (INVALIDATED_PLATFORMS.has(platform)) {
         logger.warn(
           "BROWSER",
@@ -144,10 +154,17 @@ async function closeBrowser(browser, platform, context, options = {}) {
         });
       }
     } else if (options.shouldCloseBrowser !== false) {
+      // Defensive: callers sometimes pass a BrowserContext as `browser`, a
+      // mock object, or a CDP wrapper that only exposes context.close().
+      // Never assume .close exists — check before calling.
       if (context && options.mode === "persistent") {
-        await context.close();
-      } else if (browser) {
+        if (typeof context.close === "function") {
+          await context.close();
+        }
+      } else if (browser && typeof browser.close === "function") {
         await browser.close();
+      } else if (context && typeof context.close === "function") {
+        await context.close();
       }
       // [FIX 2d] Same differentiation for the full-browser-close path.
       const success = options.success === true;

@@ -109,7 +109,9 @@ async function classifyXSession(page) {
 }
 
 async function hasPlatformAuthCookie(context, platform) {
-  if (!context) return false;
+  if (!context || typeof context.cookies !== "function") {
+    return false;
+  }
 
   try {
     const cookies = await context.cookies();

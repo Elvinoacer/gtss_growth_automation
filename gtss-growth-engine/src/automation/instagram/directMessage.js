@@ -27,6 +27,15 @@ const {
 } = require("./dmEditor");
 
 async function sendDM(page, { username, message }, emitter) {
+  // Precondition checks first so unit tests and callers get precise errors
+  // (empty/long message) even when cold-DM outreach is disabled.
+  if (!message || message.trim() === "") {
+    return { success: false, error: "empty_message" };
+  }
+  if (message.length > 1000) {
+    return { success: false, error: "message_too_long" };
+  }
+
   // Cold-DM gate: off by default until re-enabled in Settings.
   try {
     const { isIgDmOutreachEnabled } = require("../../config/pipelineConfig");
@@ -39,14 +48,6 @@ async function sendDM(page, { username, message }, emitter) {
   } catch (_) {
     // If config cannot load, fail closed for cold DM automation.
     return { success: false, error: "ig_dm_outreach_disabled" };
-  }
-
-  // Precondition checks
-  if (!message || message.trim() === "") {
-    return { success: false, error: "empty_message" };
-  }
-  if (message.length > 1000) {
-    return { success: false, error: "message_too_long" };
   }
 
   const resolvedUsername = normalizeInstagramUsername(username);

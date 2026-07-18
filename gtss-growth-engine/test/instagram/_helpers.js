@@ -20,9 +20,26 @@ const path = require("node:path");
 // Force test database environment
 process.env.DB_PATH = "./data/test_instagram.db";
 process.env.TEST_SPEEDUP = "true";
+// sendDM / platformAdapter cold-DM gate is off by default; unit tests that
+// exercise the DM state machine need the feature enabled. pipelineConfig
+// prefers the settings table over env, so we also write the setting below.
+process.env.IG_DM_OUTREACH_ENABLED = "true";
 
 const { getDb } = require("../../src/db/database");
 const instagram = require("../../src/automation/instagram");
+
+// Ensure IG cold-DM is enabled for this test DB (settings override env).
+try {
+  getDb()
+    .prepare(
+      `INSERT INTO settings (key, value)
+       VALUES ('ig_dm_outreach_enabled', 'true')
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    )
+    .run();
+} catch (_) {
+  // Schema may not exist yet in some isolated harnesses; env still set.
+}
 
 function createMockPage({
   url,

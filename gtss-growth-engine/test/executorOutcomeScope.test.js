@@ -136,19 +136,17 @@ test('recordOutcome handles null/undefined outcomeObj without throwing', () => {
 test('platformAdapter runConnectionAction / runDmAction return a value for unhandled outcomes', async () => {
   // Regression: X and Facebook branches used to fall through to `undefined`
   // for outcomes not in their explicit if/else chain. The fix adds a trailing
-  // fallback return. We verify by inspecting the source of platformAdapter
-  // to confirm each platform branch has a trailing fallback return that
-  // mentions "unhandled outcome".
+  // fallback return. platformAdapter was split into a directory module; scan
+  // the connection + DM action sources for the trailing fallbacks.
   const fs = require('node:fs');
   const path = require('node:path');
-  const src = fs.readFileSync(
-    path.join(__dirname, '../src/campaign/platformAdapter.js'),
-    'utf8',
-  );
+  const adapterDir = path.join(__dirname, '../src/campaign/platformAdapter');
+  const src = ['runConnectionAction.js', 'runDmAction.js']
+    .map((file) => fs.readFileSync(path.join(adapterDir, file), 'utf8'))
+    .join('\n');
 
-  // The fix added comments containing "unhandled outcome" before each
-  // trailing fallback return. Count them — there should be 4 (x/fb ×
-  // connection/dm).
+  // Trailing fallback returns mention "unhandled outcome" (X/FB/TikTok ×
+  // connection/dm — at least 4 for the original X/FB pair).
   const fallbackCount = (src.match(/unhandled outcome/g) || []).length;
   assert.ok(
     fallbackCount >= 4,
