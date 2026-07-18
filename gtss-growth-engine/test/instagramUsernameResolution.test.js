@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
+const { getDb } = require("../src/db/database");
 const { resolveInstagramUsername } = require("../src/utils/instagramUsername");
 const platformAdapter = require("../src/campaign/platformAdapter");
 const instagram = require("../src/automation/instagram");
@@ -37,6 +38,14 @@ test("Instagram username resolver prefers ig_username, then profile_url, then x_
 test("Instagram follow and DM flows receive the resolved Instagram username", async () => {
   const originalFollowAccount = instagram.followAccount;
   const originalSendDM = instagram.sendDM;
+  const db = getDb();
+  const originalIgSettingRow = db
+    .prepare("SELECT value FROM settings WHERE key = ?")
+    .get("ig_dm_outreach_enabled");
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ).run("ig_dm_outreach_enabled", "true");
 
   const seen = { follow: null, dm: null };
   instagram.followAccount = async (_page, params) => {
@@ -76,6 +85,14 @@ test("Instagram follow and DM flows receive the resolved Instagram username", as
     assert.equal(resultDm.outcome, "sent");
     assert.equal(seen.dm, "correct_instagram");
   } finally {
+    if (originalIgSettingRow?.value == null) {
+      db.prepare("DELETE FROM settings WHERE key = ?").run("ig_dm_outreach_enabled");
+    } else {
+      db.prepare("UPDATE settings SET value = ? WHERE key = ?").run(
+        originalIgSettingRow.value,
+        "ig_dm_outreach_enabled",
+      );
+    }
     instagram.followAccount = originalFollowAccount;
     instagram.sendDM = originalSendDM;
   }

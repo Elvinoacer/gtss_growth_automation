@@ -58,6 +58,7 @@ const BASE_URL = `http://localhost:${TEST_PORT}`;
 const platformAdapter = require("../src/campaign/platformAdapter");
 const connectionQueue = require("../src/campaign/connectionQueue");
 const dmQueue = require("../src/campaign/dmQueue");
+const platformPolicies = require("../src/config/platformPolicies");
 
 async function runObservabilityTests() {
   console.log("=== RUNNING CAMPAIGN OBSERVABILITY LAYER INTEGRATION TESTS ===");
@@ -208,6 +209,7 @@ async function runObservabilityTests() {
   // Mock platformAdapter connections and DM returns
   const originalRunConnectionAction = platformAdapter.runConnectionAction;
   const originalRunDmAction = platformAdapter.runDmAction;
+  const originalLinkedinWindow = { ...platformPolicies.linkedin.activeWindow };
 
   platformAdapter.runConnectionAction = async () => {
     return { outcome: "session_required", error: "Session token expired." };
@@ -215,6 +217,11 @@ async function runObservabilityTests() {
 
   platformAdapter.runDmAction = async () => {
     return { outcome: "session_required", error: "Session cookie invalidated." };
+  };
+  platformPolicies.linkedin.activeWindow = {
+    ...platformPolicies.linkedin.activeWindow,
+    startHour: 0,
+    endHour: 24,
   };
 
   // Enqueue a connection job and a DM job
@@ -226,6 +233,10 @@ async function runObservabilityTests() {
   db.prepare(`
     INSERT INTO dm_jobs (id, campaign_id, lead_id, status, retry_count, next_retry_at)
     VALUES (9990, 9990, 9990, 'pending', 0, CURRENT_TIMESTAMP)
+  `).run();
+  db.prepare(`
+    INSERT INTO messages (lead_id, platform, body, status, generated_by, approved_by, approved_at, is_follow_up)
+    VALUES (9990, 'linkedin', 'Hi Jane, this is a session expiry test message.', 'approved', 'ai', 'system', CURRENT_TIMESTAMP, 0)
   `).run();
 
   // Reset notification mock
@@ -251,6 +262,7 @@ async function runObservabilityTests() {
   // Restore original functions
   platformAdapter.runConnectionAction = originalRunConnectionAction;
   platformAdapter.runDmAction = originalRunDmAction;
+  platformPolicies.linkedin.activeWindow = originalLinkedinWindow;
 
   console.log("✅ T5 Session Expiry Notifications — PASS");
 
