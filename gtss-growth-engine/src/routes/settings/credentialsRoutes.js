@@ -31,6 +31,7 @@ function registerCredentialsRoutes(router) {
       return res.status(400).json({ error: "Gemini API key is required" });
     }
 
+    upsertEnvValue("GEMINI_API_KEY", apiKey);
     upsertSetting("gemini_api_key", apiKey);
     process.env.GEMINI_API_KEY = apiKey;
     return res.json({ success: true });
@@ -84,6 +85,8 @@ function registerCredentialsRoutes(router) {
         .json({ error: "Gmail address and app password are required" });
     }
 
+    upsertEnvValue("GMAIL_USER", email);
+    upsertEnvValue("GMAIL_APP_PASSWORD", appPassword);
     upsertSetting("gmail_user", email);
     upsertSetting("gmail_app_password", appPassword);
     process.env.GMAIL_USER = email;

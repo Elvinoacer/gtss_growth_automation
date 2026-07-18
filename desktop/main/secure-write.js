@@ -22,11 +22,27 @@ const { execFileSync } = require("child_process");
 function secureWriteSync(filePath, data, opts = {}) {
   const mode = opts.mode !== undefined ? opts.mode : 0o600;
   const dir = path.dirname(filePath);
+  const existedBefore = fs.existsSync(filePath);
+  
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  fs.writeFileSync(filePath, data, { mode });
+  let attempts = 0;
+  while (true) {
+    try {
+      fs.writeFileSync(filePath, data, { mode });
+      break;
+    } catch (err) {
+      if ((err.code === "EPERM" || err.code === "EBUSY") && attempts < 5) {
+        attempts++;
+        const start = Date.now();
+        while (Date.now() - start < 100) {} // 100ms sync sleep
+      } else {
+        throw err;
+      }
+    }
+  }
 
   try {
     fs.chmodSync(filePath, mode);
@@ -34,7 +50,7 @@ function secureWriteSync(filePath, data, opts = {}) {
     // Windows / some FS types ignore POSIX modes.
   }
 
-  if (process.platform === "win32") {
+  if (!existedBefore && process.platform === "win32") {
     restrictWindowsAcl(filePath);
   }
 }
