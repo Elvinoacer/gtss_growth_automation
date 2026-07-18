@@ -29,6 +29,17 @@ const backgroundJobs = require("../src/jobs/backgroundJobs");
 // Store original adapter layers to restore post-testing
 const originalRunConnectionAction = platformAdapter.runConnectionAction;
 const originalRunDmAction = platformAdapter.runDmAction;
+// Disable LinkedIn's active-window gate for the duration of this test
+// suite. Multiple sub-tests (T3, T4, T5) drive `processConnectionQueue`
+// with a mocked adapter and assert the resulting job status. Without
+// neutralizing the gate, `isWithinActiveWindow(policy)` would snooze any
+// job whose wall-clock hour falls outside LinkedIn's 9–18 local window
+// (the Linux CI runner is UTC, and `npm test` can fire at any hour —
+// the failing CI run landed at 07:33 UTC). The active window is a
+// runtime policy, not the system under test here, so we null it out
+// for the suite and restore it in the cleanup block.
+const originalLinkedInActiveWindow = platformPolicies.linkedin.activeWindow;
+platformPolicies.linkedin.activeWindow = null;
 
 async function runCampaignIntegrityTests() {
   console.log("=== RUNNING CAMPAIGN INTEGRITY & RELIABILITY INTEGRATION TESTS ===");
@@ -263,6 +274,8 @@ async function runCampaignIntegrityTests() {
   // ───────────────────────────────────────────────────────────────────────────
   platformAdapter.runConnectionAction = originalRunConnectionAction;
   platformAdapter.runDmAction = originalRunDmAction;
+  // Restore the LinkedIn active-window policy we neutralized at suite start.
+  platformPolicies.linkedin.activeWindow = originalLinkedInActiveWindow;
   cleanup();
   
   db.pragma("foreign_keys = ON");

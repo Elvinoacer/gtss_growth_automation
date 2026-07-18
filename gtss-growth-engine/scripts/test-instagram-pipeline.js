@@ -19,6 +19,35 @@
  * original ~627-line monolith was split for maintainability.
  */
 
+// ── CI skip guard ───────────────────────────────────────────────────────────
+// This script is a manual integration test that requires a real Chrome
+// browser listening on the CDP port (9222). The CI workflow and `npm test`
+// both set TEST_NO_BROWSER_LAUNCH=true (and DISABLE_CDP_AUTO_LAUNCH=true)
+// precisely so that no Chrome is launched during the `node --test` sweep.
+//
+// However, `node --test` auto-discovers this file because its name matches
+// the `test-*` glob. Without the guard below, the require chain would
+// pull in `_setup.js` → `phase8-cdpContext.js` → `ensureSharedCdpChrome()`,
+// which throws when TEST_NO_BROWSER_LAUNCH=true and there is no Chrome
+// listening — turning every CI test run red.
+//
+// When the env var is set, we print a TAP-friendly skip message and exit 0
+// so `node --test` records this file as a passing (skipped) test instead of
+// a failure. Run the suite for real via `npm run test:instagram` after
+// starting Chrome with `bash scripts/launch-chrome.sh`.
+if (
+  process.env.TEST_NO_BROWSER_LAUNCH === "true" ||
+  process.env.SKIP_CDP_CHROME === "true"
+) {
+  console.log(
+    "ok 1 - scripts/test-instagram-pipeline.js # SKIP TEST_NO_BROWSER_LAUNCH=true (Chrome CDP integration suite — run via `npm run test:instagram`)",
+  );
+  console.log("---");
+  console.log("duration_ms: 0.001");
+  console.log("...");
+  process.exit(0);
+}
+
 const { getDb, server, cleanupDb } = require("./test-instagram-pipeline/_setup");
 const { runPhase1 } = require("./test-instagram-pipeline/phase1-migration");
 const { runPhase2 } = require("./test-instagram-pipeline/phase2-discovery");

@@ -134,7 +134,14 @@ async function runConnectionQueueTests() {
   assert(jobState3.next_retry_at !== null, "Job must be snoozed with next_retry_at timestamp.");
 
   // Restore Active window limits
-  platformPolicies.instagram.activeWindow = originalActiveWindow;
+  // NOTE: we restore to `null` (not `originalActiveWindow`) so T4 — which
+  // runs immediately after this and tests retry backoff, not active-window
+  // compliance — is not gated by the real Instagram window (8–20 local).
+  // On the Linux CI runner (UTC), a test run at 07:33 UTC would otherwise
+  // snooze T4's job to the next business-hour window, producing
+  // `processed=0` instead of the expected `processed=1`. The real
+  // `originalActiveWindow` is restored in the final cleanup block below.
+  platformPolicies.instagram.activeWindow = null;
 
   // ───────────────────────────────────────────────────────────────────────────
   // TEST 4: Retry Backoff Schedule

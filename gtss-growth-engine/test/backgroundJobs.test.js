@@ -3,8 +3,20 @@ const assert = require("assert");
 const { getDb } = require("../src/db/database");
 const instagram = require("../src/automation/instagram");
 const backgroundJobs = require("../src/jobs/backgroundJobs");
+const platformPolicies = require("../src/config/platformPolicies");
 
 const originalFollowAccount = instagram.followAccount;
+// Disable Instagram's active-window gate for the duration of this test
+// suite. The pre-flight T2 assertion expects `instagram.followAccount` to
+// be invoked synchronously by the queue runner — but `processConnectionQueue`
+// snoozes any job whose wall-clock hour falls outside
+// `platformPolicies.instagram.activeWindow` (8–20 local). On the Linux CI
+// runner (UTC), a test run at 7:33 UTC would otherwise postpone the job
+// to the next business-hour window and the assertion fails. The active
+// window is a runtime policy, not the system under test here, so we
+// neutralize it for the suite and restore it in the cleanup block.
+const originalInstagramActiveWindow = platformPolicies.instagram.activeWindow;
+platformPolicies.instagram.activeWindow = null;
 
 async function runBackgroundJobsQueueTests() {
   console.log("=== RUNNING BACKGROUND JOBS CAMPAIGN QUEUE INTEGRATION TESTS ===");
@@ -126,6 +138,9 @@ async function runBackgroundJobsQueueTests() {
   db.prepare("DELETE FROM campaigns WHERE id = 9999").run();
   db.prepare("DELETE FROM leads WHERE id = 9999").run();
   db.pragma("foreign_keys = ON");
+
+  // Restore the Instagram active-window policy we neutralized at suite start.
+  platformPolicies.instagram.activeWindow = originalInstagramActiveWindow;
 
   console.log("🎉 ALL BACKGROUND JOBS QUEUE TESTS PASSED SUCCESSFULLY!\n");
 }
