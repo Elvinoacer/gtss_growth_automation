@@ -1,6 +1,6 @@
 {
   "name": "gtss-growth-engine",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Growth automation engine for GTSS.",
   "main": "src/server.js",
   "scripts": {

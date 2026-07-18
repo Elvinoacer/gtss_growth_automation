@@ -117,7 +117,14 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   allowElevation: true
-  runAfterFinish: true
+  # CRITICAL: Do NOT launch the app from the installer.
+  # The NSIS installer runs elevated (Administrator). If it launches the app,
+  # the app's first-run code creates directories and files in the user's
+  # AppData under the Administrator security context. When the user later
+  # launches the app normally (non-elevated), those files are owned by Admin
+  # and the normal user gets EPERM trying to write to them.
+  # The user should launch from their desktop/start-menu shortcut instead.
+  runAfterFinish: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: GTSS Growth Engine
