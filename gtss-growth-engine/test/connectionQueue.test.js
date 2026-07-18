@@ -1,4 +1,12 @@
 process.env.DB_PATH = "./data/test_connection_queue.db";
+
+// Mock local hour to 12 (noon) so that regardless of CI timezone/time,
+// the tests naturally fall into the default 8–20 active window.
+const originalGetHours = Date.prototype.getHours;
+Date.prototype.getHours = function () {
+  return 12;
+};
+
 const assert = require("assert");
 const { getDb } = require("../src/db/database");
 const platformAdapter = require("../src/campaign/platformAdapter");

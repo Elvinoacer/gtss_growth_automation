@@ -23,6 +23,7 @@ async function runCampaignsRoutesTests() {
   db.prepare("DELETE FROM daily_actions WHERE campaign_id >= 9000").run();
   db.prepare("DELETE FROM campaigns WHERE id >= 9000").run();
   db.prepare("DELETE FROM leads WHERE id >= 9000").run();
+  db.prepare("INSERT INTO settings (key, value) VALUES ('campaign_queue_lock', 'false') ON CONFLICT(key) DO UPDATE SET value = 'false'").run();
   db.pragma("foreign_keys = ON");
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -212,8 +213,23 @@ async function runCampaignsRoutesTests() {
     // It can be 202 or 409 depending on whether connection queue finished executing instantly. Let's assert status is valid:
     assert([202, 409].includes(resConflictRun.status), "Manual queue run should return either 202 or 409 Conflict.");
 
+    // Abort the sleep in the background queue so it finishes quickly
+    await fetch(`${BASE_URL}/api/campaigns/stop-queue`, { method: "POST" });
+
+    // Wait for the async queue triggers to finish before moving to the next test
+    let isBusy = true;
+    for (let i = 0; i < 40; i++) {
+      const resLock = await fetch(`${BASE_URL}/api/campaigns/queue-status/lock`);
+      const bodyLock = await resLock.json();
+      if (!bodyLock.busy) {
+        isBusy = false;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.strictEqual(isBusy, false, "Queue should eventually finish");
   } finally {
-    // Restore browserBase original functions
+    // Restore original functions
     browserBase.createInstagramBrowser = originalCreateInstagramBrowser;
     browserBase.createBrowser = originalCreateBrowser;
   }

@@ -7,6 +7,7 @@ const test = require("node:test");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "gtss-message-test-"));
 process.env.DB_PATH = path.join(root, "gtss.db");
 process.env.ENCRYPTION_KEY = "test-key";
+process.env.MESSAGE_GENERATION_SOURCE = "template";
 
 const { getDb } = require("../src/db/database");
 const { generateMessages, getCharLimit } = require("../src/services/messageService");

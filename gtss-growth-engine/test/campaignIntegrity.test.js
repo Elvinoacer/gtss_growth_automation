@@ -1,5 +1,13 @@
 process.env.DB_PATH = "./data/test_campaign_integrity.db";
 require("dotenv").config();
+
+// Mock local hour to 12 (noon) so that regardless of CI timezone/time,
+// the tests naturally fall into the default 8–20 active window.
+const originalGetHours = Date.prototype.getHours;
+Date.prototype.getHours = function () {
+  return 12;
+};
+
 const assert = require("assert");
 
 // Mock session notification service cache to capture and verify triggers

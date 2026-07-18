@@ -20,7 +20,6 @@
  * `npx playwright install chromium` first.
  */
 
-const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
@@ -30,6 +29,7 @@ const path = require('path');
 // (PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 in CI) — skip the test cleanly.
 function playwrightBrowserAvailable() {
   try {
+    const { chromium } = require('playwright');
     const browsers = chromium.executablePath;
     // chromium.executablePath is a getter in modern playwright; resolve it.
     const exe = typeof browsers === 'function' ? browsers() : browsers;
@@ -52,6 +52,7 @@ function playwrightBrowserAvailable() {
     return;
   }
 
+  const { chromium } = require('playwright');
   const browser = await chromium.launch();
   const page = await browser.newPage();
   page.on('console', msg => console.log('BROWSER LOG:', msg.text()));
