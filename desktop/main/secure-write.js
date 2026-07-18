@@ -49,32 +49,6 @@ function secureWriteSync(filePath, data, opts = {}) {
   } catch (_) {
     // Windows / some FS types ignore POSIX modes.
   }
-
-  if (!existedBefore && process.platform === "win32") {
-    restrictWindowsAcl(filePath);
-  }
 }
 
-/**
- * Strip inherited ACLs and grant only the current user full control.
- * Best-effort: if icacls is missing or fails, the write still succeeded
- * with whatever default NTFS ACL Windows applied.
- */
-function restrictWindowsAcl(filePath) {
-  try {
-    // /inheritance:r  — remove inherited ACEs
-    // /grant:r USER:F — replace explicit ACEs with Full control for current user
-    // %USERNAME% is expanded by cmd; we pass the env var value ourselves.
-    const user = process.env.USERNAME || process.env.USER || "";
-    if (!user) return;
-    execFileSync(
-      "icacls",
-      [filePath, "/inheritance:r", "/grant:r", `${user}:F`],
-      { stdio: "ignore", windowsHide: true },
-    );
-  } catch (_) {
-    // Non-fatal — file was still written.
-  }
-}
-
-module.exports = { secureWriteSync, restrictWindowsAcl };
+module.exports = { secureWriteSync };

@@ -78,14 +78,9 @@ extraResources:
       - "!node_modules/playwright-core/.local-browsers/**"
       - "!node_modules/playwright/.local-browsers/**"
       # ─── Sharp prebuilt libvips for OTHER platforms (cross-build hygiene) ─
-      - "!node_modules/@img/sharp-win32-ia32/**"
-      - "!node_modules/@img/sharp-win32-x64/**"
-      - "!node_modules/@img/sharp-darwin-x64/**"
-      - "!node_modules/@img/sharp-darwin-arm64/**"
-      - "!node_modules/@img/sharp-linux-arm/**"
-      - "!node_modules/@img/sharp-linux-arm64/**"
-      - "!node_modules/@img/sharp-libvips-linux-arm/**"
-      - "!node_modules/@img/sharp-libvips-linux-arm64/**"
+      # We removed the global exclusions for @img/sharp-* because applying them
+      # globally caused the required binaries for the target platform to be excluded
+      # as well, crashing the server. All sharp binaries are now bundled.
       # ─── Dev-only node_modules subtrees ──────────────────────────────────
       - "!node_modules/@playwright/test/**"
       - "!node_modules/madge/**"
