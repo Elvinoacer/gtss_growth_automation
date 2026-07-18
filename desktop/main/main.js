@@ -12,7 +12,7 @@
  * process. We never spawn terminals — everything is orchestration in-process.
  */
 
-const { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
 
@@ -51,6 +51,56 @@ let envBootstrap = null;
 let firstRun = null;
 let updater = null;
 let bridgeServer = null;
+let trayAvailable = false;
+
+// ─── Global Crash Reporting ───────────────────────────────────────────────
+
+function writeCrashLog(context, err) {
+  try {
+    const crashPath = path.join(app.getPath("userData"), "launcher-crash.log");
+    const timestamp = new Date().toISOString();
+    const stack = err && err.stack ? err.stack : String(err);
+    fs.appendFileSync(crashPath, `\n[${timestamp}] [${context}]\n${stack}\n`);
+    return crashPath;
+  } catch (logErr) {
+    console.error("Failed to write crash log:", logErr);
+    return null;
+  }
+}
+
+function reportFatalError(context, err) {
+  const crashPath = writeCrashLog(context, err);
+  const msg = err && err.message ? err.message : String(err);
+  let detail = `A fatal error occurred during: ${context}\n\n${msg}`;
+  if (crashPath) {
+    detail += `\n\nA full crash log has been written to:\n${crashPath}`;
+  }
+  
+  if (app.isReady()) {
+    dialog.showErrorBox("Startup Failed", detail);
+  } else {
+    // If not ready, dialog.showErrorBox works on Windows/Mac, but might fail on Linux.
+    // It is best-effort.
+    try {
+      dialog.showErrorBox("Startup Failed", detail);
+    } catch (_) {
+      console.error(detail);
+    }
+  }
+
+  if (!mainWindow) {
+    app.exit(1);
+  }
+}
+
+process.on("uncaughtException", (err) => {
+  reportFatalError("uncaughtException", err);
+});
+
+process.on("unhandledRejection", (err) => {
+  reportFatalError("unhandledRejection", err);
+});
+
 
 // Single-instance lock — prevent two copies of the app from running.
 const gotLock = app.requestSingleInstanceLock();
@@ -69,7 +119,11 @@ app.on("second-instance", () => {
 app.on("window-all-closed", (event) => {
   // On all platforms, keep the tray alive when the window is closed.
   // The user explicitly quits via tray menu or app menu.
-  event.preventDefault();
+  if (trayAvailable) {
+    event.preventDefault();
+  } else {
+    app.quit();
+  }
 });
 
 app.on("before-quit", async (event) => {
@@ -218,6 +272,8 @@ app.whenReady().then(async () => {
 
   // 6. Kick off auto-update check in the background (silent).
   updater.checkSilently();
+}).catch((err) => {
+  reportFatalError("app.whenReady() startup sequence", err);
 });
 
 // ─── Window creation ────────────────────────────────────────────────────────
@@ -266,8 +322,13 @@ async function createMainWindow() {
   mainWindow.on("close", (e) => {
     // Hide instead of destroy so the tray keeps the app alive.
     if (!app.isQuitting) {
-      e.preventDefault();
-      mainWindow.hide();
+      if (trayAvailable) {
+        e.preventDefault();
+        mainWindow.hide();
+      } else {
+        // No tray available: closing the window should quit the app
+        app.quit();
+      }
     }
   });
 }
@@ -298,48 +359,54 @@ async function createOnboardingWindow() {
 // ─── Tray ───────────────────────────────────────────────────────────────────
 
 function createTray() {
-  // Use a tiny 16x16 transparent PNG if no icon is bundled.
-  const iconPath = path.join(__dirname, "..", "build", "tray-icon.png");
-  const image = fs.existsSync(iconPath)
-    ? nativeImage.createFromPath(iconPath)
-    : nativeImage.createEmpty();
-  tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image);
+  try {
+    // Use a tiny 16x16 transparent PNG if no icon is bundled.
+    const iconPath = path.join(__dirname, "..", "build", "tray-icon.png");
+    const image = fs.existsSync(iconPath)
+      ? nativeImage.createFromPath(iconPath)
+      : nativeImage.createEmpty();
+    tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image);
 
-  const menu = Menu.buildFromTemplate([
-    { label: "Open GTSS Growth Engine", click: () => mainWindow && mainWindow.show() },
-    { type: "separator" },
-    {
-      label: "Quick Start",
-      click: async () => {
-        if (lifecycle && !lifecycle.isRunning()) {
-          // User-initiated (tray menu) → visible Chrome + open web app.
-          // lifecycle.startAll() defaults to visible: true, openBrowser: true.
-          await lifecycle.startAll();
-        }
-        if (mainWindow) mainWindow.show();
+    const menu = Menu.buildFromTemplate([
+      { label: "Open GTSS Growth Engine", click: () => mainWindow && mainWindow.show() },
+      { type: "separator" },
+      {
+        label: "Quick Start",
+        click: async () => {
+          if (lifecycle && !lifecycle.isRunning()) {
+            // User-initiated (tray menu) → visible Chrome + open web app.
+            // lifecycle.startAll() defaults to visible: true, openBrowser: true.
+            await lifecycle.startAll();
+          }
+          if (mainWindow) mainWindow.show();
+        },
       },
-    },
-    {
-      label: "Stop",
-      click: async () => {
-        if (lifecycle && lifecycle.isRunning()) {
-          await lifecycle.stopAll("tray-stop");
-        }
+      {
+        label: "Stop",
+        click: async () => {
+          if (lifecycle && lifecycle.isRunning()) {
+            await lifecycle.stopAll("tray-stop");
+          }
+        },
       },
-    },
-    { type: "separator" },
-    {
-      label: "Quit",
-      click: () => {
-        app.isQuitting = true;
-        app.quit();
+      { type: "separator" },
+      {
+        label: "Quit",
+        click: () => {
+          app.isQuitting = true;
+          app.quit();
+        },
       },
-    },
-  ]);
+    ]);
 
-  tray.setToolTip("GTSS Growth Engine");
-  tray.setContextMenu(menu);
-  tray.on("click", () => mainWindow && mainWindow.show());
+    tray.setToolTip("GTSS Growth Engine");
+    tray.setContextMenu(menu);
+    tray.on("click", () => mainWindow && mainWindow.show());
+    trayAvailable = true;
+  } catch (err) {
+    console.error("Failed to create tray icon:", err);
+    trayAvailable = false;
+  }
 }
 
 // Expose for tray / lifecycle hooks.

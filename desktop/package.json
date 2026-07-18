@@ -1,6 +1,6 @@
 {
   "name": "gtss-growth-desktop",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "GTSS Growth Engine — desktop launcher and control center.",
   "main": "main/main.js",
   "author": {

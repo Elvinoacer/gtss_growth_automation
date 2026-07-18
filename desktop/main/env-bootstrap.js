@@ -79,11 +79,25 @@ class EnvBootstrap {
   }
 
   async ensure() {
-    if (!fs.existsSync(this.dataRoot)) {
-      fs.mkdirSync(this.dataRoot, { recursive: true });
+    try {
+      if (!fs.existsSync(this.dataRoot)) {
+        fs.mkdirSync(this.dataRoot, { recursive: true });
+      }
+    } catch (err) {
+      const e = new Error(`Failed to create data root directory at ${this.dataRoot}: ${err.message}`);
+      e.code = err.code;
+      throw e;
     }
+
     for (const dir of REQUIRED_DIRS) {
-      fs.mkdirSync(path.join(this.dataRoot, dir), { recursive: true });
+      const targetPath = path.join(this.dataRoot, dir);
+      try {
+        fs.mkdirSync(targetPath, { recursive: true });
+      } catch (err) {
+        const e = new Error(`Failed to create required directory at ${targetPath}: ${err.message}`);
+        e.code = err.code;
+        throw e;
+      }
     }
 
     if (!fs.existsSync(this.envPath)) {
