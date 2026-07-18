@@ -14,16 +14,33 @@ const originalFollowAccount = instagram.followAccount;
 const originalSendDM = instagram.sendDM;
 
 const adapter = require("../src/campaign/platformAdapter");
+const { getDb } = require("../src/db/database");
 
 async function runPlatformAdapterTest() {
   console.log("=== RUNNING PLATFORM ADAPTER TESTS ===");
+  const db = getDb();
+  const originalXSettingRow = db
+    .prepare("SELECT value FROM settings WHERE key = ?")
+    .get("x_dm_outreach_enabled");
+  const originalIgSettingRow = db
+    .prepare("SELECT value FROM settings WHERE key = ?")
+    .get("ig_dm_outreach_enabled");
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ).run("x_dm_outreach_enabled", "true");
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ).run("ig_dm_outreach_enabled", "true");
 
-  const mockLead = {
-    id: 101,
-    profile_url: "https://linkedin.com/in/test-lead",
-    name: "John Doe",
-    x_handle: "johndoe123"
-  };
+  try {
+    const mockLead = {
+      id: 101,
+      profile_url: "https://linkedin.com/in/test-lead",
+      name: "John Doe",
+      x_handle: "johndoe123"
+    };
 
   const mockPage = {}; // Mock Playwright page context
   const mockEmitter = () => {};
@@ -101,15 +118,33 @@ async function runPlatformAdapterTest() {
   assert(res.error.includes("Unsupported platform"));
   assert.strictEqual(res.retryable, false);
 
-  // Restore original behaviors to prevent leaking side-effects
-  linkedin.sendConnectionRequest = originalSendConnectionRequest;
-  linkedin.sendDirectMessage = originalSendDirectMessage;
-  x.followUser = originalFollowUser;
-  x.sendDirectMessage = originalSendDirectMessageX;
-  instagram.followAccount = originalFollowAccount;
-  instagram.sendDM = originalSendDM;
+    // Restore original behaviors to prevent leaking side-effects
+    linkedin.sendConnectionRequest = originalSendConnectionRequest;
+    linkedin.sendDirectMessage = originalSendDirectMessage;
+    x.followUser = originalFollowUser;
+    x.sendDirectMessage = originalSendDirectMessageX;
+    instagram.followAccount = originalFollowAccount;
+    instagram.sendDM = originalSendDM;
 
-  console.log("🎉 ALL PLATFORM ADAPTER TESTS PASSED SUCCESSFULLY!\n");
+    console.log("🎉 ALL PLATFORM ADAPTER TESTS PASSED SUCCESSFULLY!\n");
+  } finally {
+    if (originalXSettingRow?.value == null) {
+      db.prepare("DELETE FROM settings WHERE key = ?").run("x_dm_outreach_enabled");
+    } else {
+      db.prepare("UPDATE settings SET value = ? WHERE key = ?").run(
+        originalXSettingRow.value,
+        "x_dm_outreach_enabled",
+      );
+    }
+    if (originalIgSettingRow?.value == null) {
+      db.prepare("DELETE FROM settings WHERE key = ?").run("ig_dm_outreach_enabled");
+    } else {
+      db.prepare("UPDATE settings SET value = ? WHERE key = ?").run(
+        originalIgSettingRow.value,
+        "ig_dm_outreach_enabled",
+      );
+    }
+  }
 }
 
 runPlatformAdapterTest().catch(err => {

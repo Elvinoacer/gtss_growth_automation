@@ -351,6 +351,13 @@ function setupMocks(db) {
   const pathsToClear = [
     path.join(rootDir, 'src', 'db', 'database.js'),
     path.join(rootDir, 'src', 'services', 'pipelineStateService.js'),
+    path.join(rootDir, 'src', 'services', 'pipelineStateService', 'index.js'),
+    path.join(rootDir, 'src', 'services', 'pipelineStateService', 'shared.js'),
+    path.join(rootDir, 'src', 'services', 'pipelineStateService', 'executions.js'),
+    path.join(rootDir, 'src', 'services', 'pipelineStateService', 'pauseResumeStop.js'),
+    path.join(rootDir, 'src', 'services', 'pipelineStateService', 'forceClearExecution.js'),
+    path.join(rootDir, 'src', 'services', 'pipelineStateService', 'abortFlags.js'),
+    path.join(rootDir, 'src', 'services', 'pipelineStateService', 'recovery.js'),
     path.join(rootDir, 'src', 'services', 'socketService.js'),
     path.join(rootDir, 'src', 'services', 'pipelineLogger.js'),
     path.join(rootDir, 'src', 'services', 'pipelineHealthService.js'),

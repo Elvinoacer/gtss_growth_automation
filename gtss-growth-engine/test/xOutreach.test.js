@@ -11,7 +11,7 @@ process.env.X_OUTREACH_MODE = "follow_first";
 
 const { getDb } = require("../src/db/database");
 const { determineActionType, getXOutreachMode } = require("../src/automation/executor");
-const xModule = require("../src/automation/x.js");
+const xModule = require("../src/automation/x");
 
 test("X (Twitter) outreach module exports all required interface functions", () => {
   assert.equal(typeof xModule.sendConnectionRequest, "function", "sendConnectionRequest must be a function");
